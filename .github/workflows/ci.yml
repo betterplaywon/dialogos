@@ -1,0 +1,39 @@
+# CI 게이트: 형식 검사와 검사(eval/tests, .claude/hooks)가 통과해야 머지할 수 있다.
+#
+# 이 파일만으로는 게이트가 아니다. 워크플로우는 결과를 보고할 뿐이고, 머지를 실제로 막으려면
+# 저장소 설정의 브랜치 보호 규칙에서 아래 verify 잡을 필수 체크로 등록해야 한다. 그 설정은 사용자가 한다.
+#
+# 실제 모델은 부르지 않는다. 이 워크플로우에는 비밀값이 없고, 검사는 연결 정보를 지운 환경에서 모의 모델과
+# 이 컴퓨터 안에 띄운 가짜 서버만 쓴다.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 저장소를 읽기만 한다. 권한을 파일에 적어 두면 저장소 기본 설정이 바뀌어도 토큰이 쓰기 권한을 얻지 않는다.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # 액션은 태그가 아니라 커밋 SHA로 고정한다. 태그는 액션 저장소 쪽에서 다른 커밋으로 옮길 수 있다.
+      # 버전을 올릴 때는 새 릴리스의 커밋 SHA로 바꾸고 주석의 버전도 고친다(dependabot이 달마다 PR을 연다).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # 토큰을 .git/config에 남기지 않는다. 뒤의 npm ci가 실행하는 의존성 스크립트가 읽을 수 없게.
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # npm ci: package-lock.json과 package.json이 어긋나면 설치를 실패시킨다.
+      - run: npm ci
+
+      # 형식 검사(tsc)와 검사(eval/tests, .claude/hooks). 커밋 전 가드 훅이 돌리는 것과 같은 명령이다.
+      - run: npm run check

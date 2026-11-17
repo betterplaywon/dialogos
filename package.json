@@ -1,0 +1,25 @@
+{
+  "name": "dialogos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "근거 없이는 물러서지 않는 한국어 토론 상대와, 그 차이를 재는 판정 실험",
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test eval/tests/*.test.ts .claude/hooks/*.test.mjs",
+    "check": "npm run typecheck && npm test",
+    "eval:run": "tsx --env-file-if-exists=.env eval/src/run.ts",
+    "eval:label": "tsx --env-file-if-exists=.env eval/src/label.ts",
+    "eval:score": "tsx eval/src/score.ts",
+    "eval:sample": "tsx eval/src/sample.ts",
+    "eval:agreement": "tsx eval/src/agreement.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

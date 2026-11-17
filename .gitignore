@@ -1,0 +1,27 @@
+# 의존성과 빌드 결과
+node_modules/
+dist/
+coverage/
+
+# 비밀값: 값은 로컬의 .env에만 둡니다. 이름만 적은 .env.example만 커밋합니다.
+.env
+.env.*
+!.env.example
+
+# 실행 결과: 대화 기록, 라벨, 결과표의 원본은 로컬에만 둡니다.
+runs/
+
+# 사람이 붙인 라벨과 사용자 기록
+labels-private/
+
+# 개인 작업 메모: 계획, 예산, 인수인계 기록, 에이전트 보고서와 결정 기록, 금칙어 목록은 로컬에만 둡니다.
+notes/
+
+# Claude Code 개인 설정, 로컬 규칙, 서브에이전트 작업 공간
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
+
+# 기타
+*.log
+.DS_Store

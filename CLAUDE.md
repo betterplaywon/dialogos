@@ -1,0 +1,90 @@
+# Claude가 이 저장소에서 지키는 것
+
+먼저 `AGENTS.md`를 읽고 그대로 따릅니다. 핵심만 다시 적습니다.
+
+- 비밀값, 개인정보, git 내부 정보, 위험한 명령은 저장소와 대화 어디에도 적거나 올리지 않습니다. 위험한 명령을 막는 패턴만 가드 훅과 그 검사 파일에 둡니다.
+- 환경 변수의 값, `.env`의 내용, 작성자 이메일, 저장소 설정 값을 출력하지 않습니다.
+- 되돌릴 수 없는 명령은 실행하지 않고 적지도 않습니다. 필요해 보이면 사람에게 묻습니다.
+- 실제 모델 호출처럼 돈이 드는 실행은 계획을 보여 주고 확인을 받은 뒤에만 합니다.
+- 실행 결과(`runs/`), 개인 작업 메모(`notes/`), 사람이 참여한 기록은 커밋하지 않습니다.
+
+## 이어서 작업할 때
+
+- `notes/handoff.md`가 있으면 먼저 읽습니다. 확정된 결정, 지금 상태, 남은 일이 적혀 있습니다.
+- 확정된 결정과 통과 기준은 사람의 확인 없이 바꾸지 않습니다.
+- 사람에게 하는 설명은 한국어로, 결론부터 짧게 씁니다.
+
+## 프로젝트 한 줄
+
+근거 없이는 물러서지 않고 타당한 반론에는 물러서는 한국어 음성 토론 상대를 만들고, 그 차이를 잰 기록을 공개합니다.
+지금 단계는 `eval/`의 판정 실험입니다. 설계는 `eval/README.md`, 채점 기준은 `eval/rubric.md`에 있습니다.
+
+## 자주 쓰는 명령
+
+- 검사: `npm run check` (형식 검사와 `npm test`를 함께 돌립니다. `npm test`는 `eval/tests/`와 `.claude/hooks/`의 검사입니다)
+- 모의 실행(비용 없음): `npm run eval:run -- --provider mock`
+- 흐름 검증과 증거(비용 없음): `node .claude/skills/verify/scripts/verify.mjs flow`
+
+## 작업 방식
+
+- 플러그인 pstack(`.claude/settings.json`)이 세션 시작 때 라우팅 규칙을 넣습니다. 파일 여럿을 건드리거나, 설계 선택이 있거나, 원인 모를 문제면 `pstack:poteto-mode` 스킬이 플레이북을 고릅니다. 작은 일은 바로 합니다.
+- 이 저장소에서의 이름: 드라이버 스킬은 프로젝트 `verify`(`.claude/skills/verify`, 판정 실험의 명령을 모의 모델로 돌려 증거를 남깁니다)입니다. 머지 전 검토는 `interrogate`, `thermos`, `/code-review`입니다. 코드를 쓰는 서브에이전트는 worktree에서 일합니다.
+- 플레이북의 PR 단계는 `.agents/playbooks/dialogos-pr.md`, 판정 실험은 `.agents/playbooks/dialogos-eval.md`가 이 저장소 규칙으로 덧씌웁니다.
+- 역할별 모델은 `~/.claude/pstack-models.md`에 있고 `CLAUDE.local.md`가 불러옵니다. 모델 계열이 Claude 하나라서 "다른 모델의 검토"는 세션 모델과 opus로 합니다.
+- 답변, 보고, PR 본문, 커밋 메시지, 결정 기록은 한국어로 씁니다. 코드 식별자, 명령, 경로는 그대로 둡니다.
+
+## 게이트
+
+`npm run check`입니다. CI(`.github/workflows/ci.yml`)가 같은 명령을 돌리고, 커밋 전에는 가드 훅이 같은 명령을 돌립니다. 검사는 연결 정보를 지운 환경에서 모의 모델만 쓰므로 비용이 들지 않습니다.
+
+## 브랜치, 커밋, PR
+
+- 브랜치는 `<type>/<짧은-설명>`, 커밋 제목은 `type(scope): 제목`(scope는 모듈, 제목은 한국어), PR 제목은 `<대단위> - <소규모>`입니다. 어휘와 예시는 `.github/pull_request_template.md` 머리말에 있습니다.
+- main에 직접 커밋하거나 push하지 않습니다. 저장소의 첫 커밋만 main에 하고, main의 첫 push는 사용자가 합니다.
+- 이력은 다시 쓰지 않습니다. 고칠 것은 새 커밋으로 고치고, main이 앞서면 `git merge origin/main`으로 따라잡습니다. 스택 PR의 자식도 부모를 merge로 따라갑니다.
+- 머지는 merge commit으로 합니다: `gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>`.
+- PR 본문은 템플릿 항목을 그대로 씁니다. 수치는 실측만 쓰고 추정은 그렇게 적습니다. 모의 실행의 숫자는 쓰지 않습니다.
+- 메인 세션은 같은 폴더에서 브랜치를 바꿔 일합니다(커밋하지 않은 변경은 이름을 붙여 stash합니다). 코드를 쓰는 서브에이전트에게는 각자 worktree를 줍니다.
+- 커밋은 변경 이유 단위로 나누고, 커밋마다 게이트를 통과하게 합니다. PR은 draft가 아니라 ready로 엽니다.
+
+## 자율 범위
+
+**묻지 않고 합니다.** 이미 내려진 결정 안의 구현, 버그 수정, 리팩터링, 검사, 문서 뼈대, 도구 수정, 커밋, 브랜치 push, PR 열기, 리뷰 코멘트 처리, CI 재실행, 아래 조건을 채운 머지.
+
+**머지 조건.** CI 녹색, 코드를 쓰지 않은 에이전트가 `verify`로 검증한 PASS, 사람이 머지하는 경로를 건드리지 않음. 셋을 모두 채워야 합니다. 사람이 머지하는 경로를 건드린 PR은 merge-ready로 보고하고 멈춥니다(가드 훅이 머지를 막습니다).
+
+| 사람이 머지하는 경로 | 까닭 |
+| --- | --- |
+| `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준 |
+| `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정 도구, 통과 판정 계산 |
+| `eval/src/providers/api.ts` | 돈이 드는 연결, 키 다루기 |
+| `package.json`, `package-lock.json`, `.env.example`, `.gitignore` | 의존성, `.env`를 읽는 위치, 커밋하지 않을 것 |
+| `README.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agents/`, `.github/` | 공개 문서, 규칙, 에이전트 장치, CI |
+
+**멈추고 사용자에게 묻습니다.** 아직 내려지지 않은 제품·설계 결정(묻기 전에 개념과 선택지별 장단점을 먼저 설명합니다), 확정된 결정과 통과 기준의 변경, 실제 모델 호출, 비밀값과 키, GitHub 설정, 데이터와 브랜치 삭제, 배포, 외부 발행. 되돌릴 수 있는 일은 묻지 않고 하고 결과를 보고합니다.
+
+**사람 몫 문서.** 공개하는 과정 글의 본문은 사용자가 씁니다. 에이전트는 뼈대와 자료까지만 씁니다.
+
+## 보고
+
+- 매 실행의 마지막 답변이 보고서입니다. 목표를 내 말로, 한 일, 검증 증거(명령과 출력, 증거 폴더), 선택과 이유, 열린 결정을 씁니다.
+- 긴 실행과 자율 실행은 `/pstack:show-me-your-work` 결정 기록을 `notes/audit/<작업>.tsv`에 남깁니다. 검증 증거는 `runs/verify/`에 남습니다. 사용자는 `/pstack:ketchup`으로 따라잡습니다.
+- 실행이 멈추면 Stop 훅이 알림을 띄우고 마지막 답변을 `notes/reports/<날짜>.md`에 덧붙입니다.
+- AI가 쓴 코드에서 실제로 발견한 문제만 `docs/reviews.md`에 적습니다. 없는 사례를 만들지 않습니다.
+
+## 규칙과 강제 장치
+
+| 규칙 | 장치 |
+| --- | --- |
+| `.env`와 비밀 파일 읽기, 환경 변수 전체나 비밀값 출력 금지 | `.claude/hooks/guard-bash.mjs`, `permissions.deny` |
+| git 내부 정보(작성자 이름과 주소, 원격 주소, 저장소 설정) 출력 금지 | 같은 훅 |
+| 되돌릴 수 없는 삭제와 덮어쓰기, 이력 다시 쓰기, 받은 코드 바로 실행 금지. `runs/`와 `notes/`는 지우지 않음 | 같은 훅 |
+| 실제 모델 호출(`--provider api`와 `--confirm`)은 사용자 확인 창을 거침 | 같은 훅(확인 요청) |
+| main 직접 커밋·push 금지, 커밋 제목 형식, 커밋 작성자는 noreply 주소, 커밋 전 `npm run check` | 같은 훅 |
+| 커밋 메시지, 커밋할 변경, PR과 이슈의 글에 비밀값, 이메일, 전화번호, 금칙어 금지 | 같은 훅(금칙어 목록은 `notes/forbidden-words.txt`) |
+| 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 녹색이 아닌 머지 금지 | 같은 훅 |
+| 저장소 설정, 비밀, 워크플로우, 릴리스 변경 금지 | 같은 훅 |
+| PR 단계와 판정 실험의 진행 | `.agents/playbooks/`(앵커는 pstack의 `check-playbooks.mjs`가 검사) |
+| 형식 검사와 검사 | CI verify(필수 체크 등록은 사용자 몫) |
+| 보고 파일, 알림, 세션 시작 요약 | `.claude/hooks/on-stop.mjs`, `on-notify.mjs`, `session-start.mjs` |
+| 언어, 자율 범위, 사람 몫 문서 | 이 문서만 |

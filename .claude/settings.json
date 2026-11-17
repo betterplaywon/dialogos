@@ -1,0 +1,120 @@
+{
+  "enabledPlugins": {
+    "pstack@pstack-claude": true
+  },
+  "extraKnownMarketplaces": {
+    "pstack-claude": {
+      "source": {
+        "source": "github",
+        "repo": "michael-denyer/pstack-claude"
+      }
+    }
+  },
+  "env": {
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run check)",
+      "Bash(npm test)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run eval:score *)",
+      "Bash(npm run eval:sample *)",
+      "Bash(npm run eval:agreement *)",
+      "Bash(node .claude/skills/verify/scripts/verify.mjs *)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(cut *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(wc *)",
+      "Bash(tr *)",
+      "Bash(diff *)",
+      "Bash(jq *)",
+      "Bash(column *)",
+      "Bash(stat *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(test *)",
+      "Bash(which *)",
+      "Bash(date *)",
+      "Bash(pwd)",
+      "Bash(true)"
+    ],
+    "deny": [
+      "Bash(sudo *)",
+      "Bash(printenv*)",
+      "Read(./.env)",
+      "Read(./**/.env)",
+      "Read(./**/.env.local)",
+      "Read(./.git/config)",
+      "Read(./notes/forbidden-words.txt)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gh/**)",
+      "Edit(./**/.env)",
+      "Write(./**/.env)",
+      "Edit(./notes/forbidden-words.txt)",
+      "Write(./notes/forbidden-words.txt)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-bash.mjs\"",
+            "timeout": 240
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/on-stop.mjs\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/on-notify.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.mjs\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
