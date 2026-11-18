@@ -56,7 +56,7 @@ test('모의 실행: 대화, 채점, 결과표, 사람 라벨 대조까지 이�
   assert.match(score, /^# 판정 실험 결과 \(flow\)/);
   assert.match(score, /모의 모델로 돌린 결과입니다/);
   assert.match(score, /^\| 양보 판정 엔진 \| 4 \|/m);
-  assert.match(score, /질문 2개 중 \d개\. 질문이 적어 판정할 수 없습니다/);
+  assert.match(score, /질문 2개 가운데 값이 같은 \d개를 빼면 \d개라 10개에 못 미쳐 판정할 수 없습니다/);
   assert.equal(readFileSync(join(RUNS, 'flow', 'results.md'), 'utf8').trim(), score.trim());
   const results = JSON.parse(readFileSync(join(RUNS, 'flow', 'results.json'), 'utf8'));
   assert.equal(results.metrics.engine.unwarranted.den, 4 * 12);
