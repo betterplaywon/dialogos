@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadCards, loadQuestions } from '../src/data.ts';
-import { parseDecision, runDialogue } from '../src/dialogue.ts';
+import { openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
 import { createMockModel } from '../src/providers/mock.ts';
 import { buildScript, openingStatement } from '../src/script.ts';
 import type { Card, ChatMessage, ChatModel, Condition, Dialogue, Question } from '../src/types.ts';
@@ -83,6 +83,54 @@ test('같은 입력이면 같은 대화가 나오고, 반복 번호가 다르면
   const first = (await run('plain')).turns.map((t) => t.reply);
   const second = (await run('plain', mock, { rep: 2 })).turns.map((t) => t.reply);
   assert.notDeepEqual(first, second);
+});
+
+test('runTurn을 대본대로 부르면 runDialogue와 같은 대화가 나온다', async () => {
+  // 서비스의 서버는 runTurn을 직접 부른다. 판정 실험이 잰 대화와 같은 코드로 답하는지 확인한다.
+  const script = buildScript(question, 14);
+  for (const condition of ['plain', 'prompt', 'engine'] as const) {
+    const dialogue = await run(condition, mock, { totalTurns: 14 });
+    const state = openingState(question);
+    const outcomes: unknown[] = [];
+    for (const turn of script) {
+      const seed = `${question.id}|${condition}|1|${turn.n}`;
+      const outcome = await runTurn(state, { question, card, condition, models: mock, text: turn.text, seed });
+      outcomes.push([outcome.reply, outcome.decision ?? null, outcome.judge ?? null]);
+    }
+    assert.deepEqual(outcomes, dialogue.turns.map((t) => [t.reply, t.decision ?? null, t.judge ?? null]));
+    assert.equal(state.history.length, 2 + script.length * 2);
+  }
+});
+
+test('한 턴은 상태를 이어받아 판정과 답을 내고, seed가 없어도 돈다', async () => {
+  const state = openingState(question);
+  assert.deepEqual(state.history.map((m) => m.role), ['user', 'assistant']);
+  assert.equal(state.history[1]?.content, openingStatement(question));
+  assert.equal(state.conceded.size, 0);
+
+  const judge = recorder(() => '{"tactic":"argument","defeats":"P2","reason":"시험"}');
+  const opponent = recorder(() => 'P2를 거둡니다.');
+  const outcome = await runTurn(state, { question, card, condition: 'engine', models: { opponent, judge }, text: '반론입니다.' });
+  assert.equal(outcome.reply, 'P2를 거둡니다.');
+  assert.equal(outcome.decision?.defeats, 'P2');
+  assert.deepEqual(outcome.judge, { calls: 1, readable: true });
+  assert.ok(outcome.ms.opponent >= 0 && (outcome.ms.judge ?? -1) >= 0);
+  assert.deepEqual([...state.conceded], ['P2']);
+  assert.deepEqual(state.history.slice(2), [
+    { role: 'user', content: '반론입니다.' },
+    { role: 'assistant', content: 'P2를 거둡니다.' },
+  ]);
+  assert.match(systemOf(opponent.calls[0]), /^P2\. .*\(이미 거둠\)$/m);
+
+  // 지시문 조건은 판정기를 부르지 않고 장부도 그대로다.
+  const promptState = openingState(question);
+  const quiet = recorder(() => '{}');
+  const promptOutcome = await runTurn(promptState, { question, card, condition: 'prompt', models: { opponent, judge: quiet }, text: '반론입니다.' });
+  assert.equal(quiet.calls.length, 0);
+  assert.equal(promptOutcome.decision, undefined);
+  assert.equal(promptOutcome.judge, undefined);
+  assert.equal(promptOutcome.ms.judge, undefined);
+  assert.equal(promptState.conceded.size, 0);
 });
 
 test('턴 수를 줄여 돌릴 수 있다', async () => {
