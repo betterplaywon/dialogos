@@ -77,6 +77,17 @@ export function median(values: number[]): number {
   return sorted.length % 2 === 1 ? (sorted[middle] as number) : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
 }
 
+/** q(0~1) 분위수. 두 값 사이는 직선으로 잇는다. q가 0.5이면 median과 같다. */
+export function quantile(values: number[], q: number): number {
+  if (values.length === 0) return NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * Math.min(1, Math.max(0, q));
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  const low = sorted[lower] as number;
+  return low + ((sorted[upper] as number) - low) * (position - lower);
+}
+
 /** 모델의 답에서 첫 번째 JSON 객체를 꺼낸다. 앞뒤에 다른 글이나 코드 울타리가 있어도 된다. */
 export function extractJson(text: string): unknown {
   const start = text.indexOf('{');

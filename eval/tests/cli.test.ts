@@ -41,6 +41,7 @@ test('모의 실행: 대화, 채점, 결과표, 사람 라벨 대조까지 이�
   const run = ok('run', '--provider', 'mock', '--run', 'flow', '--questions', 'q01,q02', '--turns', '14');
   assert.match(run, /질문 2개 × 조건 3개 × 2번 = 대화 12회, 대화마다 14턴/);
   assert.match(run, /상대 모델 호출 168회, 판정기 호출 56회 \(판정을 읽지 못한 턴은 다시 불러 최대 112회\)/);
+  assert.match(run, /^판정기: 부른 턴 \d+, 끝내 읽지 못한 판정 0, 읽지 못해 다시 부른 호출 0$/m);
   const dialogues = lines<Dialogue>('flow', 'transcripts.jsonl');
   assert.equal(dialogues.length, 12);
   assert.ok(dialogues.every((d) => d.turns.length === 14 && d.runId === 'flow'));
@@ -59,6 +60,12 @@ test('모의 실행: 대화, 채점, 결과표, 사람 라벨 대조까지 이�
   assert.equal(readFileSync(join(RUNS, 'flow', 'results.md'), 'utf8').trim(), score.trim());
   const results = JSON.parse(readFileSync(join(RUNS, 'flow', 'results.json'), 'utf8'));
   assert.equal(results.metrics.engine.unwarranted.den, 4 * 12);
+  // 결과표 끝에 통과 기준에 쓰지 않는 점검 절이 붙는다. 모의 모델은 토큰을 기록하지 않는다.
+  assert.match(score, /^## 점검$/m);
+  assert.match(score, /토큰은 실제 모델로 돌린 실행에만 기록됩니다/);
+  assert.equal(results.checks.judge.dialogues, 4);
+  assert.equal(results.checks.follow.turns, 4 * 14);
+  assert.deepEqual(results.checks.usage, { roles: {} });
 
   assert.match(ok('sample', '--run', 'flow', '--n', '30'), /표본 30개/);
   const csvPath = join(RUNS, 'flow', 'sample.csv');

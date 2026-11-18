@@ -6,6 +6,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { computeJudgeChecks, judgeSummary } from './checks.ts';
 import { loadCards, loadQuestions } from './data.ts';
 import { JUDGE_ATTEMPTS, runDialogue } from './dialogue.ts';
 import {
@@ -169,8 +170,11 @@ async function main(): Promise<void> {
       console.log(`${role === 'opponent' ? '상대 모델' : '판정기'} 사용량: 호출 ${used.calls}회, 입력 토큰 ${used.promptTokens}, 출력 토큰 ${used.completionTokens}`);
     }
   }
-  if (provider === 'api' && existsSync(transcriptsPath)) {
-    const lines = latencyLines(readJsonl<Dialogue>(transcriptsPath));
+  if (existsSync(transcriptsPath)) {
+    const recorded = readJsonl<Dialogue>(transcriptsPath, true);
+    const summary = judgeSummary(computeJudgeChecks(recorded));
+    if (summary) console.log(summary);
+    const lines = provider === 'api' ? latencyLines(recorded) : [];
     if (lines.length > 0) console.log(['한 턴의 답이 나오기까지 걸린 시간(중앙값):', ...lines].join('\n'));
   }
 
