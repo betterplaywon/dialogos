@@ -32,10 +32,14 @@ const server = createServer((req, res) => {
     const sent = String(req.headers.authorization ?? '').replace('Bearer ', '');
     if (sent !== FAKE_KEY) return json(401, { error: { message: `Incorrect API key provided: ${sent}` } });
     const payload = JSON.parse(body) as { model: string; messages: ChatMessage[] };
+    // 앞으로의 Gemini처럼 temperature를 보내면 거절한다. 기본 설정은 보내지 않아야 한다.
+    if ('temperature' in payload) return json(400, { error: { message: 'temperature is not supported' } });
     const role = payload.model.replace('fake-', '') as MockRole;
+    // 생각 토큰을 출력에 넣지 않고 따로 알려 주는 응답(전체 = 입력 + 출력 + 생각).
+    const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 130, completion_tokens_details: { reasoning_tokens: 20 } };
     createMockModel(role)
       .complete(payload.messages)
-      .then((content) => json(200, { choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 100, completion_tokens: 10 } }));
+      .then((content) => json(200, { choices: [{ message: { role: 'assistant', content } }], usage }));
   });
 });
 
@@ -101,23 +105,26 @@ test('실제 모델 경로: 대화, 채점, 결과표가 이어지고 쓴 양이
   const run = await cli(FAKE_KEY, 'run', '--provider', 'api', '--run', 'http', ...SMALL, '--confirm');
   assert.equal(run.code, 0, run.err);
   assert.equal(lineCount('http', 'transcripts.jsonl'), 3);
-  assert.match(run.out, /상대 모델 사용량: 호출 18회, 입력 토큰 1800, 출력 토큰 180/);
+  assert.match(run.out, /상대 모델 사용량: 호출 18회, 입력 토큰 1800, 출력 토큰 180, 생각 토큰 360\(따로 알려 준 값\), 전체 토큰 2340/);
   assert.match(run.out, /판정기 사용량: 호출 \d+회/);
   assert.match(run.out, /한 턴의 답이 나오기까지 걸린 시간\(중앙값\):\n {2}plain: \d+ms\n {2}prompt: \d+ms\n {2}engine: \d+ms/);
   assert.deepEqual(meta('http').models, { opponent: 'fake-opponent', judge: 'fake-judge' });
-  assert.deepEqual(meta('http').usage.opponent, { calls: 18, promptTokens: 1800, completionTokens: 180 });
+  const used = { calls: 18, promptTokens: 1800, completionTokens: 180, totalTokens: 2340, reasoningTokens: 360 };
+  assert.deepEqual(meta('http').usage.opponent, used);
 
   const label = await cli(FAKE_KEY, 'label', '--provider', 'api', '--run', 'http', '--confirm');
   assert.equal(label.code, 0, label.err);
   assert.equal(lineCount('http', 'labels.jsonl'), 18);
-  assert.match(label.out, /채점기 사용량: 호출 18회, 입력 토큰 1800, 출력 토큰 180/);
+  assert.match(label.out, /채점기 사용량: 호출 18회, 입력 토큰 1800, 출력 토큰 180, 생각 토큰 360\(따로 알려 준 값\), 전체 토큰 2340/);
   assert.deepEqual(meta('http').scorer, { provider: 'api', model: 'fake-scorer' });
-  assert.deepEqual(meta('http').usage.scorer, { calls: 18, promptTokens: 1800, completionTokens: 180 });
-  assert.deepEqual(meta('http').usage.opponent, { calls: 18, promptTokens: 1800, completionTokens: 180 });
+  assert.deepEqual(meta('http').usage.scorer, used);
+  assert.deepEqual(meta('http').usage.opponent, used);
 
   const score = await cli(FAKE_KEY, 'score', '--run', 'http');
   assert.equal(score.code, 0, score.err);
   assert.match(score.out, /http: 상대 모델 fake-opponent, 판정기 fake-judge, 채점기 fake-scorer/);
+  // 과금 기준의 출력(생각 포함)은 전체에서 입력을 뺀 값이다: 2340 - 1800 = 540. 대화 3회로 나누면 입력 600, 출력 180.
+  assert.match(score.out, /^\| 상대 모델 \(대화 3회\) \| 18 \| 1800 \| 540 \| 360 \| 600 \| 180 \|$/m);
   assert.doesNotMatch(score.out, /모의 모델로 돌린 결과/);
 
   // 어느 출력에도 키와 서버 주소가 나오지 않아야 한다.

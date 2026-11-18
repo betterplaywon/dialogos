@@ -206,18 +206,24 @@ test('역할별 사용량을 더하고 대화 1회 평균을 낼 대화 수를 �
     meta('mock'),
   ];
   const usage = computeUsageChecks(metas, [prompt, engine], labels);
+  const none = { totalTokens: 0, reasoningTokens: 0 };
   assert.deepEqual(usage, {
     roles: {
-      opponent: { calls: 94, promptTokens: 101000, completionTokens: 5100, dialogues: 2 },
-      judge: { calls: 30, promptTokens: 20000, completionTokens: 1000, dialogues: 1 },
-      scorer: { calls: 90, promptTokens: 50000, completionTokens: 2000, dialogues: 2 },
+      opponent: { calls: 94, promptTokens: 101000, completionTokens: 5100, ...none, dialogues: 2, outputTokens: 5100 },
+      judge: { calls: 30, promptTokens: 20000, completionTokens: 1000, ...none, dialogues: 1, outputTokens: 1000 },
+      scorer: { calls: 90, promptTokens: 50000, completionTokens: 2000, ...none, dialogues: 2, outputTokens: 2000 },
     },
     scorerRetries: 90 - labels.length,
   });
   const text = renderChecks({ ...computeChecks([prompt, engine], labels, metas), usage });
-  assert.match(text, /^\| 상대 모델 \(대화 2회\) \| 94 \| 101000 \| 5100 \| 50500 \| 2550 \|$/m);
-  assert.match(text, /^\| 판정기 \(엔진 대화 1회\) \| 30 \| 20000 \| 1000 \| 20000 \| 1000 \|$/m);
+  assert.match(text, /^\| 상대 모델 \(대화 2회\) \| 94 \| 101000 \| 5100 \| - \| 50500 \| 2550 \|$/m);
+  assert.match(text, /^\| 판정기 \(엔진 대화 1회\) \| 30 \| 20000 \| 1000 \| - \| 20000 \| 1000 \|$/m);
   assert.match(text, /다시 부른 채점기 호출\(추정\): 79회/);
+
+  // 전체 토큰을 알려 줬으면 과금 기준의 출력(생각 포함)은 전체에서 입력을 뺀 값이다.
+  const thinking = computeUsageChecks([meta('api', { judge: { calls: 2, promptTokens: 54, completionTokens: 90, totalTokens: 1152, reasoningTokens: 1008 } })], [engine], labels);
+  assert.equal(thinking.roles.judge?.outputTokens, 1152 - 54);
+  assert.match(renderChecks({ ...computeChecks([engine], labels, []), usage: thinking }), /^\| 판정기 \(엔진 대화 1회\) \| 2 \| 54 \| 1098 \| 1008 \| 54 \| 1098 \|$/m);
 
   assert.deepEqual(computeUsageChecks([meta('mock')], [engine], labels), { roles: {} });
   assert.match(renderChecks(computeChecks([engine], labels, [meta('mock')])), /토큰은 실제 모델로 돌린 실행에만 기록됩니다/);

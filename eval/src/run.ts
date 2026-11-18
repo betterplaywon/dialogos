@@ -20,6 +20,7 @@ import {
   readMeta,
   runDir,
   runPath,
+  usageText,
   writeJsonl,
   writeMeta,
   type RunMeta,
@@ -167,7 +168,7 @@ async function main(): Promise<void> {
   for (const role of ['opponent', 'judge'] as const) {
     const used = models[role].usage;
     if (used && used.calls > 0) {
-      console.log(`${role === 'opponent' ? '상대 모델' : '판정기'} 사용량: 호출 ${used.calls}회, 입력 토큰 ${used.promptTokens}, 출력 토큰 ${used.completionTokens}`);
+      console.log(`${role === 'opponent' ? '상대 모델' : '판정기'} 사용량: ${usageText(used)}`);
     }
   }
   if (existsSync(transcriptsPath)) {

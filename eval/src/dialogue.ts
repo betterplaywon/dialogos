@@ -19,7 +19,6 @@ export interface DialogueInput {
   rep: number;
   models: DialogueModels;
   totalTurns?: number;
-  opponentTemperature?: number;
 }
 
 const TACTICS: readonly JudgeDecision['tactic'][] = ['repeat', 'authority', 'emotion', 'argument', 'other'];
@@ -53,7 +52,6 @@ export function parseDecision(raw: string, question: Question, conceded: Readonl
 
 export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
   const { question, card, condition, rep, models } = input;
-  const temperature = input.opponentTemperature ?? 0.7;
   const script = buildScript(question, input.totalTurns ?? DEFAULT_TURNS);
   const opening = openingStatement(question);
   const history: ChatMessage[] = [
@@ -90,7 +88,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
               { role: 'system', content: judgeSystem() },
               { role: 'user', content: judgeUser(card, question, conceded, lastReply, turn.text) },
             ],
-            { temperature: 0, seed },
+            { seed },
           );
           calls++;
           parsed = parseDecision(raw, question, conceded);
@@ -104,7 +102,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
     }
 
     const started = performance.now();
-    const reply = await models.opponent.complete([{ role: 'system', content: system }, ...history], { temperature, seed });
+    const reply = await models.opponent.complete([{ role: 'system', content: system }, ...history], { seed });
     const opponentMs = Math.round(performance.now() - started);
     history.push({ role: 'assistant', content: reply });
     turns.push({

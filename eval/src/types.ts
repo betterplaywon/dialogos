@@ -53,8 +53,11 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * 호출마다 넘기는 선택 값. temperature는 여기 두지 않는다. 실제 모델에 보낼지와 값은 역할별 연결 설정
+ * (providers/api.ts의 ApiConfig, 환경 변수 <역할>_TEMPERATURE)이 정한다.
+ */
 export interface CompleteOptions {
-  temperature?: number;
   /** 모의 모델이 반복 실행마다 다른 답을 내도록 하는 값. 실제 모델에는 보내지 않는다. */
   seed?: string;
 }
@@ -64,6 +67,10 @@ export interface Usage {
   calls: number;
   promptTokens: number;
   completionTokens: number;
+  /** 응답이 알려 준 전체 토큰(total_tokens)의 합. 출력에 빠진 생각(thinking) 토큰도 여기에는 들어간다. 알려 주지 않으면 0. */
+  totalTokens?: number;
+  /** 응답이 따로 알려 준 생각 토큰(completion_tokens_details.reasoning_tokens)의 합. 참고 값. */
+  reasoningTokens?: number;
 }
 
 export interface ChatModel {

@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCards, loadQuestions } from './data.ts';
 import { labelDialogue, SCORER_ATTEMPTS } from './labeler.ts';
-import { addUsage, appendJsonl, createModel, dialogueKey, parseProvider, readJsonl, readMeta, runDir, writeJsonl, writeMeta } from './runio.ts';
+import { addUsage, appendJsonl, createModel, dialogueKey, parseProvider, readJsonl, readMeta, runDir, usageText, writeJsonl, writeMeta } from './runio.ts';
 import type { Dialogue, LabeledTurn } from './types.ts';
 import { argCount, argString, mapLimit, parseArgs } from './util.ts';
 
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
   console.log(`\n이번에 채점한 대화 ${finished}회. 라벨: runs/${runId}/labels.jsonl`);
   if (scorer.usage && scorer.usage.calls > 0) {
-    console.log(`채점기 사용량: 호출 ${scorer.usage.calls}회, 입력 토큰 ${scorer.usage.promptTokens}, 출력 토큰 ${scorer.usage.completionTokens}`);
+    console.log(`채점기 사용량: ${usageText(scorer.usage)}`);
   }
   if (failures.length > 0) {
     console.error(`\n실패한 대화가 있어 멈췄습니다 (남은 대화 ${todo.length - finished}회).`);
