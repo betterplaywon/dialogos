@@ -199,13 +199,15 @@ function checkSecretFiles(words) {
   return null;
 }
 
+const ENV_DUMP_REASON = '환경 변수 출력 금지(비밀값이 섞인다). 특정 변수가 있는지만 볼 때는 `test -n "${이름+x}"`를 쓴다.';
+
 function checkEnvDump(words) {
   const [first, second] = words;
   const dumps =
     first === 'printenv' ||
     (first === 'env' && words.slice(1).every((w) => w.startsWith('-'))) ||
     (['set', 'export', 'declare', 'typeset'].includes(first) && (words.length === 1 || ['-p', '-x', '-px'].includes(second)));
-  return dumps ? '환경 변수 출력 금지(비밀값이 섞인다). 특정 변수가 있는지만 볼 때는 `test -n "${이름+x}"`를 쓴다.' : null;
+  return dumps ? ENV_DUMP_REASON : null;
 }
 
 // git 내부 정보(작성자 이름과 주소, 원격 주소, 저장소 설정)를 화면에 내지 않는다(AGENTS.md 3번).
@@ -411,7 +413,16 @@ function runCommitGate(top) {
   return null;
 }
 
-function checkCommit(seg, words) {
+/** 커밋 명령 자체에 붙인 작성자·커미터 주소(앞의 환경 변수, git -c)도 noreply여야 한다. 주소는 내지 않는다. */
+function overrideIdentityProblem(words, assigns) {
+  const values = ['GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_EMAIL', 'EMAIL'].filter((name) => Object.hasOwn(assigns, name)).map((name) => assigns[name]);
+  words.forEach((w, i) => {
+    if (words[i - 1] === '-c' && /^(user|author|committer)\.email=/i.test(w)) values.push(w.slice(w.indexOf('=') + 1));
+  });
+  return values.some((v) => !/noreply/i.test(v)) ? '커밋 명령에 붙인 작성자 주소가 noreply 주소가 아니다(AGENTS.md 3번). 주소는 출력하지 않는다.' : null;
+}
+
+function checkCommit(seg, words, assigns = {}) {
   if (words.includes('--no-verify') || words.includes('-n')) return '--no-verify 금지.';
   // 메시지는 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체에서 찾는다.
   const message = commitMessage(command);
@@ -422,6 +433,8 @@ function checkCommit(seg, words) {
     const bad = publicTextProblem(message);
     if (bad) return bad;
   }
+  const override = overrideIdentityProblem(words, assigns);
+  if (override) return override;
   const top = toplevel();
   if (!top) return null;
   const hasCommit = git(['rev-parse', '--verify', '--quiet', 'HEAD'], cwd) !== null;
@@ -448,14 +461,14 @@ function checkPush(words) {
   return outgoing ? publicTextProblem(outgoing) : null;
 }
 
-function checkSegment(seg, words) {
+function checkSegment(seg, words, assigns) {
   const [first, second, third] = words;
   if (first === 'git') {
     const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
     const sub = at === -1 ? undefined : words[at];
     const args = at === -1 ? [] : words.slice(at + 1);
     if (sub === 'push') return checkPush(words);
-    if (sub === 'commit') return checkCommit(seg, words);
+    if (sub === 'commit') return checkCommit(seg, words, assigns);
     if (sub === 'tag') return publicTextProblem(command);
     return checkGitRead(sub, args, seg);
   }
@@ -470,12 +483,100 @@ function checkSegment(seg, words) {
   return null;
 }
 
-function check(cmd) {
+// 명령 앞에 붙어 뒤의 명령을 그대로 실행하는 것들. 걷어 낸 뒤 실제 명령의 첫 단어로 검사한다.
+// withValue는 값을 하나 더 받는 옵션, positional은 옵션 뒤에 오는 자리 인자의 수(timeout의 시간)다.
+const WRAPPERS = new Map([
+  ['env', { withValue: ['-u', '--unset', '-C', '--chdir', '-S', '--split-string'] }],
+  ['command', { withValue: [] }],
+  ['builtin', { withValue: [] }],
+  ['exec', { withValue: ['-a'] }],
+  ['nohup', { withValue: [] }],
+  ['time', { withValue: [] }],
+  ['nice', { withValue: ['-n', '--adjustment'] }],
+  ['timeout', { withValue: ['-s', '--signal', '-k', '--kill-after'], positional: 1 }],
+  ['stdbuf', { withValue: ['-i', '-o', '-e'] }],
+  ['caffeinate', { withValue: ['-t', '-w'] }],
+  ['xargs', { withValue: ['-I', '-n', '-P', '-L', '-s', '-E', '-d', '-a'] }],
+]);
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// 한 겹짜리 명령 치환. 안쪽에 괄호가 있는 것(커밋 메시지의 heredoc 등)은 줄마다 조각으로 이미 검사된다.
+const SUBSTITUTION = /\$\(([^()]*)\)/g;
+
+/**
+ * 앞에 붙은 환경 변수 지정, 감싸는 실행기, 묶음 기호를 걷어 내고 실제로 실행되는 명령의 단어를 낸다.
+ * 경로를 붙여 부른 명령(/usr/bin/git)은 이름만 남기고, 묶음을 닫는 기호와 짝이 안 맞는 따옴표는 마지막 단어에서 뗀다.
+ * 실행하지 않는 형태(command -v)는 null. env 뒤에 명령이 없으면 환경 변수를 모두 출력하므로 dumpsEnv가 켜진다.
+ */
+function unwrap(words) {
+  let rest = words;
+  const assigns = Object.create(null);
+  let wrapper = null;
+  for (let round = 0; round < 32 && rest.length > 0; round += 1) {
+    const head = rest[0].replace(/^[({!\\]+/, '');
+    if (head !== rest[0]) {
+      rest = head ? [head, ...rest.slice(1)] : rest.slice(1);
+      continue;
+    }
+    if (ASSIGNMENT.test(head)) {
+      const at = head.indexOf('=');
+      assigns[head.slice(0, at)] = head.slice(at + 1);
+      rest = rest.slice(1);
+      continue;
+    }
+    const name = path.basename(head);
+    const spec = WRAPPERS.get(name);
+    if (!spec) {
+      rest = [name, ...rest.slice(1)];
+      wrapper = null;
+      break;
+    }
+    let i = 1;
+    while (i < rest.length && rest[i].startsWith('-') && rest[i] !== '--') {
+      if (name === 'command' && /^-[a-zA-Z]*[vV]/.test(rest[i])) return null;
+      if (spec.withValue.includes(rest[i])) i += 1;
+      i += 1;
+    }
+    if (rest[i] === '--') i += 1;
+    rest = rest.slice(i + (spec.positional ?? 0));
+    wrapper = name;
+  }
+  if (rest.length > 0) {
+    const last = rest[rest.length - 1].replace(/["')}]+$/, '');
+    rest = last ? [...rest.slice(0, -1), last] : rest.slice(0, -1);
+  }
+  return { words: rest, assigns, dumpsEnv: rest.length === 0 && wrapper === 'env' };
+}
+
+/** sh -c와 eval이 실행하는 명령도 같은 규칙으로 본다. */
+function checkShell(words, depth) {
+  const [first] = words;
+  if (first === 'eval') return check(words.slice(1).join(' '), depth + 1);
+  if (!SHELLS.has(first)) return null;
+  const at = words.findIndex((w, i) => i > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
+  if (at === -1) return null;
+  return check(words.slice(at + 1).join(' ').replace(/^["']|["']$/g, ''), depth + 1);
+}
+
+function check(cmd, depth = 0) {
+  if (depth > 4) return null;
   for (const [re, reason] of WHOLE_COMMAND_RULES) if (re.test(cmd)) return reason;
+  for (const match of cmd.matchAll(SUBSTITUTION)) {
+    const reason = check(match[1], depth + 1);
+    if (reason) return reason;
+  }
   for (const seg of segments(cmd)) {
-    const words = tokens(seg);
-    if (words.length === 0) continue;
-    const reason = checkSecretFiles(words) ?? checkEnvDump(words) ?? checkSegment(seg, words);
+    const raw = tokens(seg);
+    if (raw.length === 0) continue;
+    const run = unwrap(raw);
+    if (!run) continue;
+    const { words, assigns, dumpsEnv } = run;
+    const assigned = Object.entries(assigns).map(([name, value]) => `${name}=${value}`);
+    const reason =
+      (dumpsEnv ? ENV_DUMP_REASON : null) ??
+      checkSecretFiles(raw) ??
+      checkSecretFiles([...words, ...assigned]) ??
+      (words.length > 0 ? (checkEnvDump(words) ?? checkShell(words, depth) ?? checkSegment(seg, words, assigns)) : null);
     if (reason) return reason;
   }
   return null;
