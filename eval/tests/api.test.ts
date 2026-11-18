@@ -20,7 +20,7 @@ function fakeFetch(steps: Step[]) {
   return { impl, calls };
 }
 
-function ok(content: unknown, usage?: { prompt_tokens: number; completion_tokens: number }): Step {
+function ok(content: unknown, usage?: Record<string, unknown>): Step {
   return () => new Response(JSON.stringify({ choices: [{ message: { content } }], ...(usage ? { usage } : {}) }), { status: 200 });
 }
 
@@ -49,33 +49,61 @@ test('빠진 변수는 이름만 알려 주고 값은 내보내지 않는다', (
   );
 });
 
-test('요청은 chat completions 주소로 가고, 본문에는 모델과 대화와 온도만 든다', async () => {
+test('요청은 chat completions 주소로 가고, 본문에는 모델과 대화만 든다', async () => {
   const { impl, calls } = fakeFetch([ok('답입니다.')]);
   const model = createApiModel(config, impl, fast);
   const messages = [
     { role: 'system' as const, content: '지시문' },
     { role: 'user' as const, content: '질문' },
   ];
-  assert.equal(await model.complete(messages, { temperature: 0.7, seed: 'q01|engine|1|3' }), '답입니다.');
+  assert.equal(await model.complete(messages, { seed: 'q01|engine|1|3' }), '답입니다.');
   assert.equal(model.name, 'test-model');
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, 'https://llm.test/v1/chat/completions');
   assert.equal(calls[0]?.init.method, 'POST');
   assert.deepEqual(calls[0]?.init.headers, { 'content-type': 'application/json', authorization: `Bearer ${FAKE_KEY}` });
-  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { model: 'test-model', messages, temperature: 0.7 });
+  // temperature는 Gemini 3.6 이후 모델이 무시하고 앞으로는 오류를 낸다고 예고했으므로 기본으로 보내지 않는다. seed도 보내지 않는다.
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { model: 'test-model', messages });
 });
 
-test('온도를 주지 않으면 0으로 보낸다', async () => {
+test('온도와 생각 수준은 설정에 적었을 때만 보낸다', async () => {
   const { impl, calls } = fakeFetch([ok('답')]);
-  await createApiModel(config, impl, fast).complete([{ role: 'user', content: '질문' }]);
-  assert.equal(JSON.parse(String(calls[0]?.init.body)).temperature, 0);
+  await createApiModel({ ...config, temperature: 0, reasoningEffort: 'low' }, impl, fast).complete([{ role: 'user', content: '질문' }]);
+  const body = JSON.parse(String(calls[0]?.init.body));
+  assert.equal(body.temperature, 0);
+  assert.equal(body.reasoning_effort, 'low');
 });
 
 test('쓴 토큰을 호출마다 더해 둔다', async () => {
   const { impl } = fakeFetch([ok('하나', { prompt_tokens: 100, completion_tokens: 20 }), ok('둘', { prompt_tokens: 150, completion_tokens: 30 }), ok('셋')]);
   const model = createApiModel(config, impl, fast);
   for (let i = 0; i < 3; i++) await model.complete([{ role: 'user', content: '질문' }]);
-  assert.deepEqual(model.usage, { calls: 3, promptTokens: 250, completionTokens: 50 });
+  assert.deepEqual(model.usage, { calls: 3, promptTokens: 250, completionTokens: 50, totalTokens: 0, reasoningTokens: 0 });
+});
+
+test('응답이 알려 주면 전체 토큰과 생각 토큰도 더해 둔다', async () => {
+  // 생각 토큰을 출력에 넣지 않고 따로 알려 주는 응답(전체 = 입력 + 출력 + 생각).
+  const thinking = { prompt_tokens: 27, completion_tokens: 45, total_tokens: 576, completion_tokens_details: { reasoning_tokens: 504 } };
+  const { impl } = fakeFetch([ok('하나', thinking), ok('둘', { prompt_tokens: 10, completion_tokens: 5, total_tokens: '깨진 값' })]);
+  const model = createApiModel(config, impl, fast);
+  for (let i = 0; i < 2; i++) await model.complete([{ role: 'user', content: '질문' }]);
+  assert.deepEqual(model.usage, { calls: 2, promptTokens: 37, completionTokens: 50, totalTokens: 576, reasoningTokens: 504 });
+});
+
+test('역할별 온도와 생각 수준을 환경 변수에서 읽고, 잘못된 값은 이유를 알린다', () => {
+  const env = { LLM_BASE_URL: 'https://common.test/v1', LLM_API_KEY: FAKE_KEY, JUDGE_MODEL: 'm-judge' };
+  assert.deepEqual(apiConfigFromEnv('judge', { ...env, JUDGE_TEMPERATURE: '0', JUDGE_REASONING_EFFORT: 'low' }), {
+    baseUrl: 'https://common.test/v1',
+    apiKey: FAKE_KEY,
+    model: 'm-judge',
+    temperature: 0,
+    reasoningEffort: 'low',
+  });
+  // 비워 두면 보내지 않는다.
+  assert.deepEqual(Object.keys(apiConfigFromEnv('judge', { ...env, JUDGE_TEMPERATURE: ' ', JUDGE_REASONING_EFFORT: '' })).sort(), ['apiKey', 'baseUrl', 'model']);
+  assert.throws(() => apiConfigFromEnv('judge', { ...env, JUDGE_TEMPERATURE: '뜨겁게' }), /JUDGE_TEMPERATURE에는 0에서 2 사이의 숫자/);
+  assert.throws(() => apiConfigFromEnv('judge', { ...env, JUDGE_TEMPERATURE: '3' }), /JUDGE_TEMPERATURE/);
+  assert.throws(() => apiConfigFromEnv('judge', { ...env, JUDGE_REASONING_EFFORT: 'LOW; x' }), /JUDGE_REASONING_EFFORT에는/);
 });
 
 test('잠깐의 오류(429, 5xx, 연결 실패, 빈 답, 깨진 답)는 다시 시도한다', async () => {

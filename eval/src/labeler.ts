@@ -31,13 +31,10 @@ export async function labelDialogue(dialogue: Dialogue, question: Question, scor
     let label: ReplyLabel | undefined;
     let lastError = '';
     for (let attempt = 0; attempt < maxAttempts && !label; attempt++) {
-      const raw = await scorer.complete(
-        [
-          { role: 'system', content: scorerSystem() },
-          { role: 'user', content: scorerUser(question, conceded, turn.user, turn.reply) },
-        ],
-        { temperature: 0 },
-      );
+      const raw = await scorer.complete([
+        { role: 'system', content: scorerSystem() },
+        { role: 'user', content: scorerUser(question, conceded, turn.user, turn.reply) },
+      ]);
       try {
         label = parseLabel(raw, question, conceded);
       } catch (error) {

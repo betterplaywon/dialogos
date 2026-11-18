@@ -97,7 +97,17 @@ export function addUsage(before: Usage | undefined, now: Usage | undefined): Usa
     calls: (before?.calls ?? 0) + now.calls,
     promptTokens: (before?.promptTokens ?? 0) + now.promptTokens,
     completionTokens: (before?.completionTokens ?? 0) + now.completionTokens,
+    totalTokens: (before?.totalTokens ?? 0) + (now.totalTokens ?? 0),
+    reasoningTokens: (before?.reasoningTokens ?? 0) + (now.reasoningTokens ?? 0),
   };
+}
+
+/** 사용량을 한 줄로 쓴다. 생각 토큰과 전체 토큰은 응답이 알려 준 경우에만 붙인다. */
+export function usageText(used: Usage): string {
+  const parts = [`호출 ${used.calls}회`, `입력 토큰 ${used.promptTokens}`, `출력 토큰 ${used.completionTokens}`];
+  if (used.reasoningTokens) parts.push(`생각 토큰 ${used.reasoningTokens}(따로 알려 준 값)`);
+  if (used.totalTokens) parts.push(`전체 토큰 ${used.totalTokens}`);
+  return parts.join(', ');
 }
 
 export function parseProvider(value: string | undefined): Provider {

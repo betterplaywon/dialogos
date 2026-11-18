@@ -43,9 +43,14 @@ export interface FollowChecks {
 
 export type UsageRole = 'opponent' | 'judge' | 'scorer';
 
-export interface RoleUsage extends Usage {
+export interface RoleUsage extends Required<Usage> {
   /** 평균을 낼 대화 수. 상대 모델은 모든 대화, 판정기는 엔진 대화, 채점기는 채점한 대화. */
   dialogues: number;
+  /**
+   * 과금 기준의 출력 토큰(생각 포함). 응답이 전체 토큰을 알려 줬으면 전체에서 입력을 뺀 값, 아니면 출력 토큰.
+   * 생각 토큰을 출력에 넣어 알려 주는 곳과 따로 알려 주는 곳이 있어서, 전체 토큰을 기준으로 삼는다.
+   */
+  outputTokens: number;
 }
 
 export interface UsageChecks {
@@ -170,15 +175,17 @@ export function computeFollowChecks(dialogues: Dialogue[], labels: LabeledTurn[]
 }
 
 export function computeUsageChecks(metas: RunMeta[], dialogues: Dialogue[], labels: LabeledTurn[]): UsageChecks {
-  const totals: Partial<Record<UsageRole, Usage>> = {};
+  const totals: Partial<Record<UsageRole, Required<Usage>>> = {};
   for (const meta of metas) {
     for (const role of ['opponent', 'judge', 'scorer'] as const) {
       const used = meta.usage?.[role];
       if (!used || used.calls === 0) continue;
-      const total = (totals[role] ??= { calls: 0, promptTokens: 0, completionTokens: 0 });
+      const total = (totals[role] ??= { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, reasoningTokens: 0 });
       total.calls += used.calls;
       total.promptTokens += used.promptTokens;
       total.completionTokens += used.completionTokens;
+      total.totalTokens += used.totalTokens ?? 0;
+      total.reasoningTokens += used.reasoningTokens ?? 0;
     }
   }
   const counts: Record<UsageRole, number> = {
@@ -189,7 +196,10 @@ export function computeUsageChecks(metas: RunMeta[], dialogues: Dialogue[], labe
   const out: UsageChecks = { roles: {} };
   for (const role of ['opponent', 'judge', 'scorer'] as const) {
     const total = totals[role];
-    if (total) out.roles[role] = { ...total, dialogues: counts[role] };
+    if (total) {
+      const outputTokens = total.totalTokens > 0 ? Math.max(0, total.totalTokens - total.promptTokens) : total.completionTokens;
+      out.roles[role] = { ...total, dialogues: counts[role], outputTokens };
+    }
   }
   if (totals.scorer) out.scorerRetries = Math.max(0, totals.scorer.calls - labels.length);
   return out;
@@ -307,16 +317,21 @@ export function renderChecks(checks: Checks): string {
   if (roles.length === 0) {
     lines.push('토큰은 실제 모델로 돌린 실행에만 기록됩니다.');
   } else {
-    lines.push('| 역할 | 호출 | 입력 토큰 | 출력 토큰 | 대화 1회 평균 입력 | 대화 1회 평균 출력 |', '| --- | --- | --- | --- | --- | --- |');
+    lines.push(
+      '| 역할 | 호출 | 입력 토큰 | 출력 토큰(생각 포함) | 생각 토큰(따로 알려 준 값) | 대화 1회 평균 입력 | 대화 1회 평균 출력(생각 포함) |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+    );
     for (const role of roles) {
       const used = usage.roles[role] as RoleUsage;
       lines.push(
-        `| ${ROLE_NAMES[role]} (${DIALOGUE_NAMES[role]} ${used.dialogues}회) | ${used.calls} | ${used.promptTokens} | ${used.completionTokens} | ${average(used.promptTokens, used.dialogues)} | ${average(used.completionTokens, used.dialogues)} |`,
+        `| ${ROLE_NAMES[role]} (${DIALOGUE_NAMES[role]} ${used.dialogues}회) | ${used.calls} | ${used.promptTokens} | ${used.outputTokens} | ${used.reasoningTokens || '-'} | ${average(used.promptTokens, used.dialogues)} | ${average(used.outputTokens, used.dialogues)} |`,
       );
     }
     lines.push('');
     if (usage.scorerRetries !== undefined) lines.push(`다시 부른 채점기 호출(추정): ${usage.scorerRetries}회. 호출 수에서 라벨 수를 뺀 값입니다.`, '');
     lines.push(
+      "'출력 토큰(생각 포함)'은 응답이 알려 준 전체 토큰에서 입력 토큰을 뺀 값입니다. 전체 토큰을 알려 주지 않았으면 출력 토큰 그대로입니다. 입력과 출력에 각각 단가를 곱하면 비용입니다.",
+      '',
       '상대 모델의 평균은 세 조건을 합친 값입니다. 지시문과 엔진 조건은 지시문이 길어 입력 토큰이 더 많습니다. 도중에 실패한 대화의 호출도 합계에 들어갑니다.',
     );
   }
