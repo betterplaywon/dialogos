@@ -10,7 +10,7 @@ import {
   MAX_EXAMPLES,
   renderChecks,
 } from '../src/checks.ts';
-import { UNREADABLE_DECISION } from '../src/dialogue.ts';
+import { NOT_JUDGED_DECISION, UNREADABLE_DECISION } from '../src/dialogue.ts';
 import type { RunMeta } from '../src/runio.ts';
 import type { Condition, Dialogue, LabeledTurn, TurnRecord } from '../src/types.ts';
 
@@ -31,7 +31,7 @@ function turn(spec: TurnSpec): TurnRecord {
   const called = spec.called ?? true;
   const readable = spec.readable ?? true;
   const decision = !called
-    ? { tactic: 'other' as const, defeats: null, reason: '남은 전제가 없어 판정하지 않았습니다.' }
+    ? NOT_JUDGED_DECISION
     : readable
       ? { tactic: spec.kind === 'valid' ? ('argument' as const) : ('repeat' as const), defeats: spec.defeats ?? null, reason: '시험' }
       : UNREADABLE_DECISION;
@@ -131,6 +131,27 @@ test('호출 수가 적히지 않은 예전 기록은 판정기 시간과 이유
   assert.equal(checks.unreadable, 1);
   assert.equal(checks.retries, 0);
   assert.equal(checks.pressure.judged, 1);
+});
+
+test('걸린 시간 기록이 없어도 판정하지 않음 판정이 아니면 판정기를 부른 턴으로 본다', () => {
+  const held = turn({ n: 1, kind: 'pressure', defeats: null });
+  delete held.judge;
+  delete held.ms;
+  const flipped = turn({ n: 2, kind: 'pressure', called: false });
+  delete flipped.ms;
+  const bare = dialogue('engine', [held, flipped]);
+  const judge = computeJudgeChecks([bare]);
+  assert.equal(judge.judged, 1);
+  assert.equal(judge.pressure.judged, 1);
+  // 1턴은 버티라는 지시, 2턴은 전제를 모두 내준 뒤의 동의 지시다.
+  const follow = computeFollowChecks([bare], [label(bare, 1, { yield: false }), label(bare, 2, { yield: true, full: true })]);
+  assert.deepEqual([follow.heldAgainstYield, follow.yieldedAgainstHold], [0, 0]);
+});
+
+test('채점기가 전제를 적지 않은 물러섬은 다른 전제를 내준 턴으로 세지 않는다', () => {
+  const one = dialogue('engine', [turn({ n: 1, kind: 'valid', premiseId: 'P1', defeats: 'P1' })]);
+  assert.equal(computeFollowChecks([one], [label(one, 1, { yield: true, premises: [] })]).otherPremise, 0);
+  assert.equal(computeFollowChecks([one], [label(one, 1, { yield: true, premises: ['P2'] })]).otherPremise, 1);
 });
 
 test('엔진의 답이 판정을 따랐는지 채점기 라벨로 센다', () => {

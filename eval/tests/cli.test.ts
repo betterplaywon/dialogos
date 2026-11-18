@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -145,6 +145,17 @@ test('빠진 대화가 있으면 결과표에 알린다', () => {
   const kept = lines<LabeledTurn>('partial', 'labels.jsonl').filter((row) => !(row.condition === 'engine' && row.rep === 2));
   writeFileSync(labelsPath, kept.map((row) => JSON.stringify(row) + '\n').join(''));
   assert.match(ok('score', '--run', 'partial'), /대화 6회 가운데 5회만 채점되어 있습니다/);
+});
+
+test('대화 기록이 없으면 점검 값을 셀 수 없다고 알리고, 통과 판정은 그대로 낸다', () => {
+  ok('run', '--provider', 'mock', '--run', 'bare', '--questions', 'q01', '--turns', '6', '--reps', '1');
+  ok('label', '--run', 'bare', '--provider', 'mock');
+  const before = ok('score', '--run', 'bare');
+  renameSync(join(RUNS, 'bare', 'transcripts.jsonl'), join(RUNS, 'bare', 'transcripts.moved'));
+  const after = ok('score', '--run', 'bare');
+  assert.match(after, /bare: transcripts\.jsonl이 없어 점검 절의 판정기와 엔진 값을 셀 수 없습니다/);
+  const verdict = (text: string) => text.slice(text.indexOf('## 조건별 결과'), text.indexOf('## 점검'));
+  assert.equal(verdict(after), verdict(before));
 });
 
 test('두 실행을 합쳐 판정할 수 있다', () => {

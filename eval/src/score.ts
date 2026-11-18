@@ -29,6 +29,7 @@ function main(): void {
     // 점검 값에만 쓴다. 쓰다가 끊긴 줄은 건너뛴다.
     const transcriptsPath = join(dir, 'transcripts.jsonl');
     if (existsSync(transcriptsPath)) dialogues.push(...readJsonl<Dialogue>(transcriptsPath, true));
+    else notes.push(`${runId}: transcripts.jsonl이 없어 점검 절의 판정기와 엔진 값을 셀 수 없습니다.`);
 
     const meta = readMeta(dir);
     if (!meta) continue;

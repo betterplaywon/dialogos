@@ -4,7 +4,7 @@
 // - 사용량과 걸린 시간: 역할별 토큰과 대화 1회 평균, 조건별 시간
 // 결과표(results.md) 끝의 '점검' 절과 results.json의 checks가 이 값이다.
 
-import { UNREADABLE_DECISION } from './dialogue.ts';
+import { NOT_JUDGED_DECISION, UNREADABLE_DECISION } from './dialogue.ts';
 import type { RunMeta } from './runio.ts';
 import { CONDITIONS, type Condition, type Dialogue, type LabeledTurn, type TurnRecord, type Usage } from './types.ts';
 import { percent, quantile } from './util.ts';
@@ -35,7 +35,7 @@ export interface FollowChecks {
   heldAgainstYield: number;
   /** 버티라고 했는데(무너지지 않았다는 판정, 읽지 못한 판정 포함) 채점기가 물러섬이라 한 턴. */
   yieldedAgainstHold: number;
-  /** 물러서라고 한 턴에서 물러섰지만, 판정이 무너졌다고 한 전제가 아닌 다른 전제를 내준 턴. 참고 값. */
+  /** 물러서라고 한 턴에서 물러섰지만, 판정이 무너졌다고 한 전제가 아닌 다른 전제를 내준 턴. 채점기가 전제를 적은 턴만 센다. 참고 값. */
   otherPremise: number;
   /** 어긋난 턴. 앞에서부터 MAX_EXAMPLES개까지. */
   examples: string[];
@@ -80,9 +80,13 @@ export interface Checks {
 
 export const MAX_EXAMPLES = 20;
 
-/** 판정기를 부른 턴인가. 호출 기록이 없는 예전 기록은 판정기 시간이 있는지로 가린다. */
+/**
+ * 판정기를 부른 턴인가. 새 기록은 호출 기록(judge)으로, 그것이 없는 예전 기록은 판정기 시간으로 가린다.
+ * 둘 다 없으면 판정이 '판정하지 않음'(전제를 모두 내준 뒤)인지로 가린다. 시간 기록이 없다고 부르지 않은 턴으로 보지 않는다.
+ */
 function judgeCalled(turn: TurnRecord): boolean {
-  return turn.judge !== undefined || turn.ms?.judge !== undefined;
+  if (turn.judge !== undefined || turn.ms?.judge !== undefined) return true;
+  return turn.decision !== undefined && turn.decision.reason !== NOT_JUDGED_DECISION.reason;
 }
 
 function readable(turn: TurnRecord): boolean {
@@ -156,7 +160,8 @@ export function computeFollowChecks(dialogues: Dialogue[], labels: LabeledTurn[]
       } else if (!toldToYield && label.yield) {
         out.yieldedAgainstHold++;
         if (out.examples.length < MAX_EXAMPLES) out.examples.push(`${where}(버티라 했는데 물러섬)`);
-      } else if (defeats !== null && label.yield && !label.full && !label.premises.includes(defeats)) {
+      } else if (defeats !== null && label.yield && !label.full && label.premises.length > 0 && !label.premises.includes(defeats)) {
+        // 채점기가 전제를 적지 않은 물러섬은 세지 않는다. 채점기는 자기 장부에서 이미 거둔 전제를 지우므로 빈 목록이 나올 수 있다.
         out.otherPremise++;
       }
     }
