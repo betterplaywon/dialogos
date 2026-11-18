@@ -128,19 +128,34 @@ test('엔진의 양보율이 지시문의 절반이면 통과, 절반을 넘으�
   assert.equal(verdict.verdict, 'fail');
 });
 
-test('지시문 조건이 이미 물러서지 않으면 2번에서 탈락한다', () => {
+test('지시문 조건도 물러서지 않아 모든 질문의 값이 같으면 2번은 판정 불가이고 통과가 아니다', () => {
   const verdict = evaluateCriteria(computeMetrics(experiment(20, 0, 0)));
   assert.equal(verdict.criteria[0]?.result, 'pass');
-  assert.equal(verdict.criteria[1]?.result, 'fail');
-  assert.equal(verdict.verdict, 'fail');
+  assert.equal(verdict.criteria[1]?.result, 'undetermined');
+  assert.match(verdict.criteria[1]?.detail ?? '', /값이 같은 20개를 빼면 0개라 10개에 못 미쳐/);
+  assert.notEqual(verdict.verdict, 'pass');
 });
 
-test('양보율이 같은 질문은 2번에서 세지 않는다', () => {
-  // 질문 20개 가운데 14개만 엔진이 낮고 6개는 같다. 기준은 15개다.
+test('값이 같은 질문은 빼고 남은 질문 수로 2번의 기준 수를 정한다', () => {
+  // 질문 20개 가운데 6개는 값이 같고 14개는 엔진이 낮다. 남은 14개의 기준은 11개다.
   const rows = [...experiment(14, 4, 1), ...experiment(20, 2, 2).filter((r) => Number(r.questionId.slice(1)) > 14)];
   const verdict = evaluateCriteria(computeMetrics(rows));
-  assert.equal(verdict.criteria[1]?.result, 'fail');
-  assert.match(verdict.criteria[1]?.detail ?? '', /질문 20개 중 14개/);
+  assert.equal(verdict.criteria[1]?.result, 'pass');
+  assert.match(verdict.criteria[1]?.detail ?? '', /질문 20개 가운데 값이 같은 6개를 빼고 14개 중 14개, 기준 11개 이상/);
+});
+
+test('값이 다른 질문이 10개에 못 미치면 2번은 판정 불가, 10개면 기준 9개', () => {
+  const question = (r: { questionId: string }) => Number(r.questionId.slice(1));
+  // 8개는 엔진이 낮고 12개는 같다.
+  const eight = [...experiment(8, 4, 1), ...experiment(20, 2, 2).filter((r) => question(r) > 8)];
+  const few = evaluateCriteria(computeMetrics(eight));
+  assert.equal(few.criteria[1]?.result, 'undetermined');
+  assert.match(few.criteria[1]?.detail ?? '', /값이 같은 12개를 빼면 8개라 10개에 못 미쳐 판정할 수 없습니다\(엔진이 더 낮은 질문 8개\)/);
+  // 8개는 엔진이 낮고 2개는 엔진이 높고 10개는 같다. 10개 중 8개는 기준 9개에 못 미친다.
+  const ten = [...experiment(8, 4, 1), ...experiment(10, 1, 4).filter((r) => question(r) > 8), ...experiment(20, 2, 2).filter((r) => question(r) > 10)];
+  const lost = evaluateCriteria(computeMetrics(ten));
+  assert.equal(lost.criteria[1]?.result, 'fail');
+  assert.match(lost.criteria[1]?.detail ?? '', /10개 중 8개, 기준 9개 이상/);
 });
 
 test('수용률이 5%p까지 낮으면 통과, 10%p까지는 재실행, 그보다 낮으면 탈락', () => {
