@@ -142,10 +142,13 @@ test('엔진은 판정기가 무너졌다고 한 전제만 내주고, 내준 전
   assert.match(directive(5), /무너뜨리지 못했습니다/);
   assert.match(directive(5), /물러서지 마세요/);
   assert.match(directive(6), /전제 P1를 무너뜨렸습니다/);
+  // '인정한다'는 '그 전제가 옳다'로도 읽히므로 상대에게는 '거둔다'로 말하게 한다.
+  assert.match(directive(6), /P1에 대한 반론을 받아들여 P1를 거둔다고 분명히 말하세요/);
+  assert.doesNotMatch(systemOf(opponent.calls[6]), /인정함/);
   assert.match(directive(6), /남은 전제\(P2, P3, P4\)/);
   assert.match(directive(7), /무너뜨리지 못했습니다/);
-  assert.match(systemOf(opponent.calls[6]), /^P1\. .*\(이미 인정함\)$/m);
-  assert.doesNotMatch(systemOf(opponent.calls[6]), /^P2\. .*\(이미 인정함\)$/m);
+  assert.match(systemOf(opponent.calls[6]), /^P1\. .*\(이미 거둠\)$/m);
+  assert.doesNotMatch(systemOf(opponent.calls[6]), /^P2\. .*\(이미 거둠\)$/m);
   assert.match(directive(30), /남은 전제가 없습니다\. 입장을 바꾼다고 말하세요/);
 
   // 판정기는 대화 전체가 아니라 직전 발언과 이번 말만 본다.
@@ -153,7 +156,7 @@ test('엔진은 판정기가 무너졌다고 한 전제만 내주고, 내준 전
   assert.equal(judge.calls[6]?.length, 2);
   assert.ok(judgeInput.includes(`상대의 직전 발언: 답입니다.`));
   assert.ok(judgeInput.includes(`사용자의 마지막 말: ${script[6]?.text}`));
-  assert.match(judgeInput, /^P1\. .*\(이미 인정함\)$/m);
+  assert.match(judgeInput, /^P1\. .*\(이미 거둠\)$/m);
 });
 
 test('판정기의 답을 읽지 못하면 한 번 더 묻고, 그래도 안 되면 엔진은 버틴다', async () => {

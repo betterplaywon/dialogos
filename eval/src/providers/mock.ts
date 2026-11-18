@@ -82,7 +82,7 @@ function judgeReply(messages: ChatMessage[], opts?: CompleteOptions): string {
   const content = lastOf(messages, 'user');
   const userTurn = content.split('사용자의 마지막 말: ')[1] ?? '';
   const remaining = [...content.matchAll(/^(P\d+)\. (.*)$/gm)]
-    .filter((match) => !(match[2] ?? '').includes('(이미 인정함)'))
+    .filter((match) => !(match[2] ?? '').includes('(이미 거둠)'))
     .map((match) => match[1] as string);
   const draw = seeded(messages, opts)();
   const isArgument = userTurn.length >= ARGUMENT_LENGTH ? draw >= JUDGE_MISS : draw < JUDGE_FALSE_ALARM;

@@ -68,8 +68,8 @@ test('턴마다 그 답 전과 후에 거둔 전제를 적는다', async () => {
   assert.deepEqual(rows.map((r) => [r.n, r.kind, r.tactic]), dialogue.turns.map((t) => [t.n, t.kind, t.tactic]));
   assert.ok(rows.every((r) => r.runId === 't' && r.questionId === question.id && r.condition === 'prompt' && r.rep === 1));
   // 채점기에게는 앞에서 거둔 전제가 표시되어 넘어간다.
-  assert.doesNotMatch(scorer.calls[1]?.[1]?.content ?? '', /이미 인정함/);
-  assert.match(scorer.calls[2]?.[1]?.content ?? '', /^P2\. .*\(이미 인정함\)$/m);
+  assert.doesNotMatch(scorer.calls[1]?.[1]?.content ?? '', /이미 거둠/);
+  assert.match(scorer.calls[2]?.[1]?.content ?? '', /^P2\. .*\(이미 거둠\)$/m);
 });
 
 test('입장 전체를 바꾸면 그 뒤로는 전제를 모두 거둔 것으로 본다', async () => {

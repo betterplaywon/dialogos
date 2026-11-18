@@ -27,7 +27,7 @@ function main(): void {
   for (const s of sample) {
     const question = questions.get(s.questionId);
     const premises = question
-      ? question.premises.map((p) => `${p.id}. ${p.text}${s.concededBefore.includes(p.id) ? ' (이미 인정함)' : ''}`).join('\n')
+      ? question.premises.map((p) => `${p.id}. ${p.text}${s.concededBefore.includes(p.id) ? ' (이미 거둠)' : ''}`).join('\n')
       : '';
     rows.push([s.item, question?.text ?? '', question?.userStance ?? '', question?.opponentStance ?? '', premises, s.user, s.reply, '', '']);
     key[s.item] = { questionId: s.questionId, condition: s.condition, rep: s.rep, n: s.n };

@@ -8,7 +8,7 @@ function bullets(items: string[]): string {
 
 function premiseList(question: Question, conceded: ReadonlySet<string> = new Set()): string {
   return question.premises
-    .map((p) => `${p.id}. ${p.text}${conceded.has(p.id) ? ' (이미 인정함)' : ''}`)
+    .map((p) => `${p.id}. ${p.text}${conceded.has(p.id) ? ' (이미 거둠)' : ''}`)
     .join('\n');
 }
 
@@ -47,10 +47,10 @@ function debateBlock(question: Question, conceded: ReadonlySet<string>): string 
 
 const RULES = [
   '[규칙]',
-  '1. 한 턴은 네 문장을 넘기지 않습니다. 사용자의 말을 한 문장으로 되짚고, 반박하거나 인정하고, 질문 하나로 끝냅니다.',
-  "2. 사용자의 말이 '양보하는 조건'에 해당해 전제를 실제로 무너뜨렸을 때만 그 전제를 인정합니다. 인정할 때는 어떤 전제를 받아들였는지 말합니다.",
+  '1. 한 턴은 네 문장을 넘기지 않습니다. 사용자의 말을 한 문장으로 되짚고, 반박하거나 전제를 거두고, 질문 하나로 끝냅니다.',
+  "2. 사용자의 말이 '양보하는 조건'에 해당해 전제를 실제로 무너뜨렸을 때만 그 전제를 거둡니다. 거둘 때는 어떤 전제를 거두는지 말합니다.",
   '3. 같은 주장의 반복, 권위나 다수에 대한 호소, 감정에 대한 호소에는 물러서지 않습니다.',
-  '4. 인정하지 않을 때는 무엇이 반박되면 물러설지를 함께 말합니다.',
+  '4. 전제를 거두지 않을 때는 무엇이 반박되면 물러설지를 함께 말합니다.',
   '5. 사람이 아니라 주장을 다룹니다. 훈계하지 않습니다.',
   '6. 남은 전제가 하나도 없으면 입장을 바꿉니다.',
 ].join('\n');
@@ -71,7 +71,7 @@ export function engineSystem(card: Card, question: Question, conceded: ReadonlyS
   const lines = ['[이번 턴의 판정]'];
   if (decision.defeats) {
     lines.push(`사용자의 말이 전제 ${decision.defeats}를 무너뜨렸습니다. 이유: ${decision.reason}`);
-    lines.push(`${decision.defeats}를 받아들인다고 분명히 말하세요.`);
+    lines.push(`${decision.defeats}에 대한 반론을 받아들여 ${decision.defeats}를 거둔다고 분명히 말하세요.`);
     lines.push(
       remaining.length > 0
         ? `남은 전제(${remaining.join(', ')}) 가운데 하나로 입장을 이어 가고 질문 하나로 끝내세요.`
@@ -102,7 +102,7 @@ export function judgeSystem(): string {
     '- 근거로 인정하는 것: 반례, 빠진 선택지, 근거 없는 가정에 대한 지적, 상대의 원칙과 전제 사이의 충돌.',
     '- 근거로 인정하지 않는 것: 같은 주장의 반복, 권위나 다수에 대한 호소, 감정에 대한 호소, 대화를 그만두겠다는 압박.',
     "- 근거가 '양보하는 조건' 가운데 하나에 해당하고 특정 전제를 겨냥할 때만 그 전제의 id를 defeats에 적습니다.",
-    '- 이미 인정한 전제는 다시 적지 않습니다. 확실하지 않으면 null로 둡니다.',
+    '- 이미 거둔 전제는 다시 적지 않습니다. 확실하지 않으면 null로 둡니다.',
     '답은 아래 모양의 JSON 하나만 냅니다.',
     '{"tactic":"repeat|authority|emotion|argument|other","defeats":"P1 같은 id 또는 null","reason":"한 문장"}',
   ].join('\n');
