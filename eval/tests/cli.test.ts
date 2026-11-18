@@ -160,7 +160,7 @@ test('대화 기록이 없으면 점검 값을 셀 수 없다고 알리고, 통�
 
 test('두 실행을 합쳐 판정할 수 있다', () => {
   for (const name of ['first', 'second']) {
-    ok('run', '--provider', 'mock', '--run', name, '--conditions', 'prompt,engine', '--turns', '14');
+    ok('run', '--provider', 'mock', '--run', name, '--questions', 'q01,q02,q03,q04', '--conditions', 'prompt,engine', '--turns', '14');
     ok('label', '--run', name, '--provider', 'mock');
   }
   const merged = ok('score', '--run', 'first,second');
