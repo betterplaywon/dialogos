@@ -79,9 +79,10 @@ export async function run(h) {
     assert.match(r.out, new RegExp(`^# 판정 실험 결과 \\(${h.runId}\\)`));
     assert.match(r.out, /모의 모델로 돌린 결과입니다/);
     assert.equal(h.read('results.md').trim(), r.out.trim(), 'results.md = 출력');
+    assert.match(r.out, /^## 점검$/m, '결과표 끝의 점검 절');
     const results = h.json('results.json');
-    assert.ok(results.verdict && results.metrics, 'results.json에 판정과 지표');
-    return `results.md·results.json, 모의 모델 안내 있음 (${r.log})`;
+    assert.ok(results.verdict && results.metrics && results.checks, 'results.json에 판정, 지표, 점검 값');
+    return `results.md·results.json, 모의 모델 안내와 점검 절 있음 (${r.log})`;
   });
 
   await h.step('sample', '사람 라벨 표본을 뽑는다(eval:sample). 조건과 턴 종류, 채점기 라벨은 숨긴다', async () => {
@@ -129,10 +130,11 @@ export async function run(h) {
       written.push(h.save(`dialogue-${d.questionId}-${d.condition}-${d.rep}.md`, renderDialogue(d, mine, questionOf.get(d.questionId))));
     }
     assert.ok(written.length > 0, '대화록이 없다');
-    // 엔진의 답이 판정을 따랐는가: 판정기가 무너졌다고 본 턴과 채점기가 물러섬이라 한 턴이 어긋난 수.
-    const labelOf = new Map(labels.map((l) => [`${l.questionId}|${l.condition}|${l.rep}|${l.n}`, l]));
-    const judged = dialogues.filter((d) => d.condition === 'engine').flatMap((d) => d.turns.map((t) => ({ d, t })));
-    const differ = judged.filter(({ d, t }) => Boolean(t.decision?.defeats) !== labelOf.get(`${d.questionId}|${d.condition}|${d.rep}|${t.n}`)?.yield);
-    return `${written.join(', ')}. 엔진 턴 ${judged.length}개 중 판정과 채점이 어긋난 턴 ${differ.length}개(모의 모델이라 결과 아님)`;
+    // 엔진의 답이 판정을 따랐는가: 결과표 점검 절(eval/src/checks.ts)이 센 값을 옮긴다. 같은 증거 폴더에서 숫자가 갈리지 않게
+    // 따로 세지 않는다. 전제를 모두 내준 뒤의 동의 지시도 '물러서라'로 센다.
+    const follow = h.json('results.json').checks?.follow;
+    assert.ok(follow, 'results.json에 checks.follow가 없다');
+    const differ = follow.heldAgainstYield + follow.yieldedAgainstHold;
+    return `${written.join(', ')}. 엔진 턴 ${follow.turns}개 중 판정과 채점이 어긋난 턴 ${differ}개(점검 절과 같은 정의, 모의 모델이라 결과 아님)`;
   });
 }

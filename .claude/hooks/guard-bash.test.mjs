@@ -264,3 +264,69 @@ test('PR 제목 형식과 gh의 사람 몫 명령', () => {
   }
   assert.equal(verdict('gh api -H "Accept: application/vnd.github+json" repos/o/r/pulls'), 'allow');
 });
+
+test('명령 앞에 환경 변수를 붙이거나 다른 실행기로 감싸도 같은 규칙을 적용한다', () => {
+  for (const command of [
+    'FOO=1 git push origin main',
+    'env git push origin main',
+    'env -u FOO BAR=1 git push origin main',
+    'command git config --list',
+    'nohup git push origin main',
+    'nice -n 5 git push --force origin feat/x',
+    'timeout 30 git push origin main',
+    'echo main | xargs -n 1 git push origin main',
+    '/usr/bin/git config --list',
+    '\\git config --list',
+    'env gh pr merge 3 --squash',
+    'GH_PAGER=cat gh api user',
+    'env FOO=1',
+    'env -i',
+  ]) {
+    assert.equal(verdict(command), 'block', command);
+  }
+});
+
+test('묶음, sh -c, eval, 명령 치환 안의 명령도 같은 규칙을 적용한다', () => {
+  for (const command of [
+    '(git config --list)',
+    '(cd eval && git push origin main)',
+    '{ git push origin main; }',
+    'bash -c "git config --list"',
+    "sh -c 'cd eval && git push origin main'",
+    'bash -lc "git push origin main"',
+    'eval git config --list',
+    'echo "$(git var GIT_AUTHOR_IDENT)"',
+    'echo "작성자: $(git log -1 --format=%ae)"',
+  ]) {
+    assert.equal(verdict(command), 'block', command);
+  }
+});
+
+test('감싸기를 걷어 내도 허용하던 명령은 그대로 허용한다', () => {
+  for (const command of [
+    'command -v git',
+    'FOO=1 npm test',
+    'time npm run check',
+    'env NODE_OPTIONS=--max-old-space-size=4096 npm test',
+    '(cd eval && npm test)',
+    'bash -c "npm run check"',
+    'test "$(git rev-parse --short HEAD)" = "abc1234"',
+    'timeout 30 git push -u origin feat/x',
+  ]) {
+    assert.equal(verdict(command), 'allow', command);
+  }
+});
+
+test('커밋 명령에 붙인 작성자 주소도 noreply여야 한다', (t) => {
+  const { dir } = gitRepo(t);
+  for (const command of [
+    `GIT_AUTHOR_EMAIL=${PERSONAL_EMAIL} git commit -m "fix(hooks): 제목"`,
+    `env GIT_COMMITTER_EMAIL=${PERSONAL_EMAIL} git commit -m "fix(hooks): 제목"`,
+    `git -c user.email=${PERSONAL_EMAIL} commit -m "fix(hooks): 제목"`,
+  ]) {
+    const { verdict: v, reason } = guard(command, { cwd: dir });
+    assert.equal(v, 'block', command);
+    assert.ok(!reason.includes(PERSONAL_EMAIL), '주소는 안내에 옮기지 않는다');
+  }
+  assert.equal(verdict(`GIT_AUTHOR_EMAIL=${NOREPLY} git commit -m "fix(hooks): 제목"`, { cwd: dir }), 'allow');
+});
