@@ -67,6 +67,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
 
     let decision: JudgeDecision | undefined;
     let judgeMs: number | undefined;
+    let judgeRecord: TurnRecord['judge'];
     let system: string;
     if (condition === 'plain') {
       system = plainSystem();
@@ -79,7 +80,8 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
       } else {
         const started = performance.now();
         let parsed: JudgeDecision | null = null;
-        for (let attempt = 0; attempt < JUDGE_ATTEMPTS && !parsed; attempt++) {
+        let calls = 0;
+        while (calls < JUDGE_ATTEMPTS && !parsed) {
           const raw = await models.judge.complete(
             [
               { role: 'system', content: judgeSystem() },
@@ -87,9 +89,11 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
             ],
             { temperature: 0, seed },
           );
+          calls++;
           parsed = parseDecision(raw, question, conceded);
         }
         judgeMs = Math.round(performance.now() - started);
+        judgeRecord = { calls, readable: parsed !== null };
         decision = parsed ?? UNREADABLE_DECISION;
         if (decision.defeats) conceded.add(decision.defeats);
       }
@@ -108,6 +112,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
       user: turn.text,
       reply,
       ...(decision ? { decision } : {}),
+      ...(judgeRecord ? { judge: judgeRecord } : {}),
       ms: { ...(judgeMs !== undefined ? { judge: judgeMs } : {}), opponent: opponentMs },
     });
   }

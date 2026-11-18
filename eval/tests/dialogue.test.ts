@@ -70,6 +70,9 @@ test('세 조건 모두 대본 그대로 30턴을 돌고, 엔진 조건에만 �
     );
     assert.ok(dialogue.turns.every((t) => t.reply.length > 0 && (t.ms?.opponent ?? -1) >= 0));
     assert.equal(dialogue.turns.every((t) => t.decision !== undefined), condition === 'engine');
+    // 판정기를 부른 턴에만 호출 기록이 남는다.
+    assert.ok(dialogue.turns.every((t) => (t.judge !== undefined) === (t.ms?.judge !== undefined)));
+    assert.equal(dialogue.turns.some((t) => t.judge !== undefined), condition === 'engine');
   }
 });
 
@@ -127,6 +130,7 @@ test('엔진은 판정기가 무너졌다고 한 전제만 내주고, 내준 전
   const dialogue = await run('engine', { opponent, judge });
 
   assert.equal(judge.calls.length, 30);
+  assert.ok(dialogue.turns.every((t) => t.judge?.calls === 1 && t.judge.readable));
   assert.deepEqual(dialogue.turns.filter((t) => t.decision?.defeats).map((t) => [t.n, t.decision?.defeats]), [
     [6, 'P1'],
     [14, 'P2'],
@@ -158,6 +162,7 @@ test('판정기의 답을 읽지 못하면 한 번 더 묻고, 그래도 안 되
   const dialogue = await run('engine', { opponent, judge }, { totalTurns: 6 });
   assert.equal(judge.calls.length, 12);
   assert.ok(dialogue.turns.every((t) => t.decision?.defeats === null && t.decision.reason === '판정기의 답을 읽지 못했습니다.'));
+  assert.ok(dialogue.turns.every((t) => t.judge?.calls === 2 && !t.judge.readable));
   assert.ok(opponent.calls.every((messages) => systemOf(messages).includes('물러서지 마세요')));
 
   // 두 번째에 읽을 수 있는 답이 오면 그 판정을 쓴다.
@@ -165,6 +170,7 @@ test('판정기의 답을 읽지 못하면 한 번 더 묻고, 그래도 안 되
   const recovered = await run('engine', { opponent: recorder(() => '답입니다.'), judge: flaky }, { totalTurns: 1 });
   assert.equal(flaky.calls.length, 2);
   assert.equal(recovered.turns[0]?.decision?.defeats, 'P1');
+  assert.deepEqual(recovered.turns[0]?.judge, { calls: 2, readable: true });
 });
 
 test('전제를 모두 내준 뒤에는 판정기를 부르지 않고 바꾼 입장을 유지한다', async () => {
@@ -181,5 +187,7 @@ test('전제를 모두 내준 뒤에는 판정기를 부르지 않고 바꾼 입
   }
   assert.equal(dialogue.turns[4]?.decision?.defeats, null);
   assert.equal(dialogue.turns[4]?.ms?.judge, undefined);
+  assert.equal(dialogue.turns[4]?.judge, undefined);
   assert.ok((dialogue.turns[3]?.ms?.judge ?? -1) >= 0);
+  assert.deepEqual(dialogue.turns[3]?.judge, { calls: 1, readable: true });
 });

@@ -87,6 +87,8 @@ export interface TurnRecord {
   user: string;
   reply: string;
   decision?: JudgeDecision;
+  /** 판정기를 부른 턴에만 있다. 읽지 못해 다시 부른 것까지 센 호출 수와, 끝내 판정을 읽었는지. */
+  judge?: { calls: number; readable: boolean };
   /** 답이 나오기까지 걸린 시간(밀리초). 판정기는 엔진 조건에서 부른 턴에만 있다. */
   ms?: { judge?: number; opponent: number };
 }
