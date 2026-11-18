@@ -21,7 +21,7 @@ dialogos의 실행 표면은 지금 판정 실험(`eval/`)의 명령 다섯 개�
 | --- | --- | --- |
 | `eval:run` | 질문 × 조건 × 반복의 대화를 대본대로 돌린다. 끝난 대화부터 덧붙이고, 다시 실행하면 빠진 것만 돈다. `--provider api`는 `--confirm` 없이는 계획만 출력한다 | `transcripts.jsonl`, `meta.json` |
 | `eval:label` | 답마다 채점기 라벨을 붙인다 | `labels.jsonl`, `meta.json`의 `scorer` |
-| `eval:score` | 양보율, 수용률, 통과 기준 판정, 결과표 | `results.md`, `results.json` |
+| `eval:score` | 양보율, 수용률, 통과 기준 판정, 결과표. 결과표 끝에 통과 기준에 쓰지 않는 점검 절(판정기, 엔진의 답, 사용량, 걸린 시간) | `results.md`, `results.json`(`checks` 포함) |
 | `eval:sample` | 사람이 라벨을 붙일 표본. 조건, 턴 종류, 채점기 라벨은 숨긴다 | `sample.csv`, `sample.key.json` |
 | `eval:agreement` | 사람 라벨과 채점기 라벨의 일치율 | 출력만 |
 
