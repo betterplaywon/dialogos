@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { argCount, argList, argNumber, argString, extractJson, hash, mapLimit, median, parseArgs, parseCsv, percent, rng, toCsv } from '../src/util.ts';
+import { argCount, argList, argNumber, argString, extractJson, hash, mapLimit, median, parseArgs, parseCsv, percent, quantile, rng, toCsv } from '../src/util.ts';
 
 test('hash와 rng는 같은 입력에 같은 값을 낸다', () => {
   assert.equal(hash('q01'), hash('q01'));
@@ -81,4 +81,13 @@ test('중앙값과 백분율 표시', () => {
   assert.ok(Number.isNaN(median([])));
   assert.equal(percent(0.125), '12.5%');
   assert.equal(percent(NaN), '-');
+});
+
+test('분위수는 두 값 사이를 직선으로 잇고, 0.5이면 중앙값과 같다', () => {
+  for (const values of [[3, 1, 2], [4, 1, 3, 2], [7]]) assert.equal(quantile(values, 0.5), median(values));
+  assert.ok(Math.abs(quantile([1000, 3000, 2000], 0.9) - 2800) < 1e-9);
+  assert.equal(quantile([1, 2, 3], 0), 1);
+  assert.equal(quantile([1, 2, 3], 1), 3);
+  assert.equal(quantile([1, 2], 1.5), 2);
+  assert.ok(Number.isNaN(quantile([], 0.9)));
 });

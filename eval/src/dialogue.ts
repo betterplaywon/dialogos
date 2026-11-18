@@ -30,6 +30,9 @@ export const JUDGE_ATTEMPTS = 2;
 /** 판정기의 답을 끝내 읽지 못했을 때 쓰는 판정. 불확실하면 물러서지 않는 쪽이 이 엔진의 기본값이다. */
 export const UNREADABLE_DECISION: JudgeDecision = { tactic: 'other', defeats: null, reason: '판정기의 답을 읽지 못했습니다.' };
 
+/** 전제를 모두 내준 뒤에는 판정기를 부르지 않는다. 그 턴에 남기는 판정. */
+export const NOT_JUDGED_DECISION: JudgeDecision = { tactic: 'other', defeats: null, reason: '남은 전제가 없어 판정하지 않았습니다.' };
+
 /**
  * 판정기의 답을 읽는다. 읽을 수 없으면 null을 낸다.
  * 모르는 전제나 이미 내준 전제를 가리키면 '무너지지 않음'으로 둔다.
@@ -67,6 +70,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
 
     let decision: JudgeDecision | undefined;
     let judgeMs: number | undefined;
+    let judgeRecord: TurnRecord['judge'];
     let system: string;
     if (condition === 'plain') {
       system = plainSystem();
@@ -75,11 +79,12 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
     } else {
       if (conceded.size >= question.premises.length) {
         // 전제를 모두 내준 뒤에는 더 판정할 것이 없다. 판정기를 부르지 않는다.
-        decision = { tactic: 'other', defeats: null, reason: '남은 전제가 없어 판정하지 않았습니다.' };
+        decision = NOT_JUDGED_DECISION;
       } else {
         const started = performance.now();
         let parsed: JudgeDecision | null = null;
-        for (let attempt = 0; attempt < JUDGE_ATTEMPTS && !parsed; attempt++) {
+        let calls = 0;
+        while (calls < JUDGE_ATTEMPTS && !parsed) {
           const raw = await models.judge.complete(
             [
               { role: 'system', content: judgeSystem() },
@@ -87,9 +92,11 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
             ],
             { temperature: 0, seed },
           );
+          calls++;
           parsed = parseDecision(raw, question, conceded);
         }
         judgeMs = Math.round(performance.now() - started);
+        judgeRecord = { calls, readable: parsed !== null };
         decision = parsed ?? UNREADABLE_DECISION;
         if (decision.defeats) conceded.add(decision.defeats);
       }
@@ -108,6 +115,7 @@ export async function runDialogue(input: DialogueInput): Promise<Dialogue> {
       user: turn.text,
       reply,
       ...(decision ? { decision } : {}),
+      ...(judgeRecord ? { judge: judgeRecord } : {}),
       ms: { ...(judgeMs !== undefined ? { judge: judgeMs } : {}), opponent: opponentMs },
     });
   }

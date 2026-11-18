@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -41,6 +41,7 @@ test('모의 실행: 대화, 채점, 결과표, 사람 라벨 대조까지 이�
   const run = ok('run', '--provider', 'mock', '--run', 'flow', '--questions', 'q01,q02', '--turns', '14');
   assert.match(run, /질문 2개 × 조건 3개 × 2번 = 대화 12회, 대화마다 14턴/);
   assert.match(run, /상대 모델 호출 168회, 판정기 호출 56회 \(판정을 읽지 못한 턴은 다시 불러 최대 112회\)/);
+  assert.match(run, /^판정기: 부른 턴 \d+, 끝내 읽지 못한 판정 0, 읽지 못해 다시 부른 호출 0$/m);
   const dialogues = lines<Dialogue>('flow', 'transcripts.jsonl');
   assert.equal(dialogues.length, 12);
   assert.ok(dialogues.every((d) => d.turns.length === 14 && d.runId === 'flow'));
@@ -59,6 +60,12 @@ test('모의 실행: 대화, 채점, 결과표, 사람 라벨 대조까지 이�
   assert.equal(readFileSync(join(RUNS, 'flow', 'results.md'), 'utf8').trim(), score.trim());
   const results = JSON.parse(readFileSync(join(RUNS, 'flow', 'results.json'), 'utf8'));
   assert.equal(results.metrics.engine.unwarranted.den, 4 * 12);
+  // 결과표 끝에 통과 기준에 쓰지 않는 점검 절이 붙는다. 모의 모델은 토큰을 기록하지 않는다.
+  assert.match(score, /^## 점검$/m);
+  assert.match(score, /토큰은 실제 모델로 돌린 실행에만 기록됩니다/);
+  assert.equal(results.checks.judge.dialogues, 4);
+  assert.equal(results.checks.follow.turns, 4 * 14);
+  assert.deepEqual(results.checks.usage, { roles: {} });
 
   assert.match(ok('sample', '--run', 'flow', '--n', '30'), /표본 30개/);
   const csvPath = join(RUNS, 'flow', 'sample.csv');
@@ -138,6 +145,17 @@ test('빠진 대화가 있으면 결과표에 알린다', () => {
   const kept = lines<LabeledTurn>('partial', 'labels.jsonl').filter((row) => !(row.condition === 'engine' && row.rep === 2));
   writeFileSync(labelsPath, kept.map((row) => JSON.stringify(row) + '\n').join(''));
   assert.match(ok('score', '--run', 'partial'), /대화 6회 가운데 5회만 채점되어 있습니다/);
+});
+
+test('대화 기록이 없으면 점검 값을 셀 수 없다고 알리고, 통과 판정은 그대로 낸다', () => {
+  ok('run', '--provider', 'mock', '--run', 'bare', '--questions', 'q01', '--turns', '6', '--reps', '1');
+  ok('label', '--run', 'bare', '--provider', 'mock');
+  const before = ok('score', '--run', 'bare');
+  renameSync(join(RUNS, 'bare', 'transcripts.jsonl'), join(RUNS, 'bare', 'transcripts.moved'));
+  const after = ok('score', '--run', 'bare');
+  assert.match(after, /bare: transcripts\.jsonl이 없어 점검 절의 판정기와 엔진 값을 셀 수 없습니다/);
+  const verdict = (text: string) => text.slice(text.indexOf('## 조건별 결과'), text.indexOf('## 점검'));
+  assert.equal(verdict(after), verdict(before));
 });
 
 test('두 실행을 합쳐 판정할 수 있다', () => {

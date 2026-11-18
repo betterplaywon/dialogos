@@ -1,13 +1,15 @@
 // 라벨에서 결과표를 만든다. runs/<실행 이름>/results.md와 results.json을 쓴다.
+// 결과표 끝에는 통과 기준에 쓰지 않는 점검 값(판정기, 엔진의 답, 사용량, 걸린 시간)을 붙인다. checks.ts를 보라.
 //
 // 사용법: npm run eval:score -- --run 이름
 //         npm run eval:score -- --run 첫실행,재실행   (3번 기준의 재실행을 합쳐 판정할 때)
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { computeChecks, renderChecks } from './checks.ts';
 import { computeMetrics, evaluateCriteria, renderMarkdown } from './metrics.ts';
-import { dialogueKey, readJsonl, readMeta, runDir } from './runio.ts';
-import type { LabeledTurn } from './types.ts';
+import { dialogueKey, readJsonl, readMeta, runDir, type RunMeta } from './runio.ts';
+import type { Dialogue, LabeledTurn } from './types.ts';
 import { argList, parseArgs } from './util.ts';
 
 function main(): void {
@@ -17,14 +19,21 @@ function main(): void {
   if (new Set(runIds).size !== runIds.length) throw new Error('같은 실행 이름을 두 번 적었습니다.');
 
   const labels: LabeledTurn[] = [];
+  const dialogues: Dialogue[] = [];
+  const metas: RunMeta[] = [];
   const notes: string[] = [];
   for (const runId of runIds) {
     const dir = runDir(runId);
     const rows = readJsonl<LabeledTurn>(join(dir, 'labels.jsonl'));
     labels.push(...rows);
+    // 점검 값에만 쓴다. 쓰다가 끊긴 줄은 건너뛴다.
+    const transcriptsPath = join(dir, 'transcripts.jsonl');
+    if (existsSync(transcriptsPath)) dialogues.push(...readJsonl<Dialogue>(transcriptsPath, true));
+    else notes.push(`${runId}: transcripts.jsonl이 없어 점검 절의 판정기와 엔진 값을 셀 수 없습니다.`);
 
     const meta = readMeta(dir);
     if (!meta) continue;
+    metas.push(meta);
     if (meta.provider === 'mock') {
       notes.push(`${runId}: 모의 모델로 돌린 결과입니다. 흐름을 확인하는 용도이고 실험 결과가 아닙니다.`);
     } else {
@@ -40,12 +49,13 @@ function main(): void {
   const merged = runIds.length > 1;
   const metrics = computeMetrics(labels);
   const verdict = evaluateCriteria(metrics, { merged });
-  const markdown = renderMarkdown(metrics, verdict, `판정 실험 결과 (${runIds.join(' + ')})`, notes);
+  const checks = computeChecks(dialogues, labels, metas);
+  const markdown = `${renderMarkdown(metrics, verdict, `판정 실험 결과 (${runIds.join(' + ')})`, notes)}\n${renderChecks(checks)}`;
 
   const dir = runDir(runIds[0] as string);
   const name = merged ? 'results-merged' : 'results';
   writeFileSync(join(dir, `${name}.md`), markdown);
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ runIds, metrics, verdict, notes }, null, 2) + '\n');
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ runIds, metrics, verdict, checks, notes }, null, 2) + '\n');
   console.log(markdown);
 }
 
