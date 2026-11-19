@@ -162,6 +162,78 @@ test('커밋할 변경에 금칙어나 비밀값이 있으면 막는다', (t) =>
   assert.equal(verdict('git commit -m "docs: 추가"', { cwd: dir }), 'allow');
 });
 
+test('사람이 머지하는 경로(주제 카드의 글 포함)를 건드린 PR의 머지는 막는다', (t) => {
+  // gh 대신 정해 둔 PR 정보를 내는 가짜 gh를 PATH 앞에 둔다. 실제 GitHub에는 묻지 않는다.
+  const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-gh-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\ncat "$FAKE_GH_JSON"\n', { mode: 0o755 });
+  const merge = (changed) => {
+    const json = path.join(dir, `${changed.replace(/\W/g, '_')}.json`);
+    const checks = [{ name: 'verify', conclusion: 'SUCCESS' }];
+    writeFileSync(json, JSON.stringify({ files: [{ path: changed }], isDraft: false, state: 'OPEN', statusCheckRollup: checks }));
+    return guard('gh pr merge 7 --merge', { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
+  };
+  for (const changed of ['app/topics/s01.json', 'eval/questions/q01.json', '.claude/hooks/guard-bash.mjs', 'CLAUDE.md']) {
+    const result = merge(changed);
+    assert.equal(result.verdict, 'block', changed);
+    assert.match(result.reason, /사람이 머지하는 경로/, changed);
+  }
+  for (const changed of ['app/topics/README.md', 'app/server/topics.ts', 'app/README.md']) {
+    assert.equal(merge(changed).verdict, 'allow', changed);
+  }
+});
+
+test('한 명령 안에서 스테이지에 올리고 커밋하거나, 커밋하고 push하면 막는다', () => {
+  // 가드는 실행 전에 한 번만 보므로, 앞 조각이 올린 변경과 새 커밋은 뒤 조각을 검사할 때 아직 없다.
+  for (const command of [
+    'git add a.txt && git commit -m "docs: 추가"',
+    'git add -A; git commit -m "docs: 추가"',
+    'git rm a.txt && git commit -m "docs: 지움"',
+    'git commit -m "docs: 추가" && git push -u origin feat/x',
+    'git merge origin/main && git push',
+    'git add a.txt && git commit -F msg.txt && git push',
+  ]) {
+    assert.equal(verdict(command), 'block', command);
+  }
+  assert.match(guard('git add a.txt && git commit -m "docs: 추가"').reason, /add를 먼저 따로/);
+  assert.match(guard('git commit -m "docs: 추가" && git push').reason, /push는 따로/);
+  for (const command of ['git add a.txt && git status --short', 'git commit -m "docs: 추가" && git log --oneline -1', 'git push -u origin feat/x && git status']) {
+    assert.equal(verdict(command), 'allow', command);
+  }
+});
+
+test('-F 메시지 파일의 제목 형식과 금칙어를 검사하고, 읽지 못하면 막는다', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-msg-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'ok.txt'), 'fix(hooks): 제목\n\n본문\n');
+  writeFileSync(path.join(dir, 'word.txt'), `fix(hooks): 제목\n\n본문 ${WORD}\n`);
+  writeFileSync(path.join(dir, 'subject.txt'), '형식 없는 제목\n');
+  assert.equal(kind(`git commit -F ${path.join(dir, 'ok.txt')}`), 'allow');
+  assert.equal(kind(`git commit -F ${path.join(dir, 'word.txt')}`), 'forbidden');
+  assert.equal(kind(`git commit --file=${path.join(dir, 'word.txt')}`), 'forbidden');
+  assert.equal(kind(`git commit -F ${path.join(dir, 'subject.txt')}`), 'subject');
+  assert.match(guard(`git commit -F ${path.join(dir, 'none.txt')}`).reason, /메시지 파일을 읽지 못했다/);
+  assert.match(guard('git commit -F -').reason, /표준 입력/);
+});
+
+test('push할 커밋의 더한 줄에 금칙어가 있으면 막는다', (t) => {
+  const { dir, git } = gitRepo(t);
+  writeList(dir);
+  // origin/main은 지금 커밋에 둔다. 그 뒤의 커밋이 보낼 커밋이다.
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  writeFileSync(path.join(dir, 'a.txt'), '평범한 줄\n');
+  git('add', 'a.txt');
+  git('commit', '-m', 'docs: 평범한 줄');
+  assert.equal(verdict('git push -u origin feat/x', { cwd: dir }), 'allow');
+  writeFileSync(path.join(dir, 'b.txt'), `본문 ${WORD}\n`);
+  git('add', 'b.txt');
+  git('commit', '-m', 'docs: 다른 도구로 만든 커밋');
+  const blocked = guard('git push -u origin feat/x', { cwd: dir });
+  assert.equal(blocked.verdict, 'block');
+  assert.match(blocked.reason, /보낼 커밋의 변경\(b\.txt\)에 금칙어/);
+  assert.ok(!blocked.reason.includes(WORD), '금칙어를 안내에 옮기지 않는다');
+});
+
 test('실제 모델 호출은 --confirm이 붙을 때만 사용자 확인으로 넘긴다', () => {
   assert.equal(verdict('npm run eval:run -- --provider api --confirm'), 'ask');
   assert.equal(verdict('npm run eval:label -- --run pilot --provider=api --confirm'), 'ask');

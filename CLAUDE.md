@@ -57,6 +57,7 @@
 | 사람이 머지하는 경로 | 까닭 |
 | --- | --- |
 | `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준 |
+| `app/topics/*.json` | 서비스 주제 카드의 글(상대의 전제와 타당한 반론). 2026-11-19 사용자 결정 |
 | `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정 도구, 통과 판정 계산 |
 | `eval/src/providers/api.ts` | 돈이 드는 연결, 키 다루기 |
 | `package.json`, `package-lock.json`, `.env.example`, `.gitignore` | 의존성, `.env`를 읽는 위치, 커밋하지 않을 것 |
@@ -82,7 +83,8 @@
 | 되돌릴 수 없는 삭제와 덮어쓰기, 이력 다시 쓰기, 받은 코드 바로 실행 금지. `runs/`와 `notes/`는 지우지 않음 | 같은 훅 |
 | 실제 모델 호출(`--provider api`와 `--confirm`)은 사용자 확인 창을 거침 | 같은 훅(확인 요청) |
 | main 직접 커밋·push 금지, 커밋 제목 형식, 커밋 작성자는 noreply 주소, 커밋 전 `npm run check` | 같은 훅 |
-| 커밋 메시지, 커밋할 변경, PR과 이슈의 글에 비밀값, 이메일, 전화번호, 금칙어 금지 | 같은 훅(금칙어 목록은 `notes/forbidden-words.txt`) |
+| 커밋 메시지(`-F` 파일 포함), 커밋할 변경, push할 커밋의 변경, PR과 이슈의 글에 비밀값, 이메일, 전화번호, 금칙어 금지 | 같은 훅(금칙어 목록은 `notes/forbidden-words.txt`) |
+| 한 명령 안에서 스테이지에 올리고 커밋하기, 커밋하고 push하기 금지(가드는 실행 전에 한 번만 본다) | 같은 훅 |
 | 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 녹색이 아닌 머지 금지 | 같은 훅 |
 | 저장소 설정, 비밀, 워크플로우, 릴리스 변경 금지 | 같은 훅 |
 | PR 단계와 판정 실험의 진행 | `.agents/playbooks/`(앵커는 pstack의 `check-playbooks.mjs`가 검사) |
