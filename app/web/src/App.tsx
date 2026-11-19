@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { GameView, TopicView } from '../../server/contract.ts';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
@@ -12,6 +12,7 @@ export function App() {
   const [topics, setTopics] = useState<TopicView[] | null>(null);
   const [mock, setMock] = useState(false);
   const [game, setGame] = useState<GameView | null>(null);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -25,11 +26,15 @@ export function App() {
   }, []);
 
   async function start(topicId: string) {
+    if (starting) return;
+    setStarting(true);
     setError(null);
     try {
       setGame(await api.start(topicId));
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -49,12 +54,12 @@ export function App() {
           {error}
         </p>
       )}
-      {game ? <Game initial={game} onLeave={() => setGame(null)} /> : <TopicList topics={topics} onStart={start} />}
+      {game ? <Game initial={game} onLeave={() => setGame(null)} /> : <TopicList topics={topics} busy={starting} onStart={start} />}
     </div>
   );
 }
 
-function TopicList({ topics, onStart }: { topics: TopicView[] | null; onStart: (id: string) => void }) {
+function TopicList({ topics, busy, onStart }: { topics: TopicView[] | null; busy: boolean; onStart: (id: string) => void }) {
   if (!topics) return <p className="muted">주제를 불러오는 중입니다.</p>;
   return (
     <section className="topics" aria-labelledby="topics-title">
@@ -69,7 +74,7 @@ function TopicList({ topics, onStart }: { topics: TopicView[] | null; onStart: (
               <dt>상대</dt>
               <dd>{topic.character.name}</dd>
             </dl>
-            <button type="button" onClick={() => onStart(topic.id)}>
+            <button type="button" onClick={() => onStart(topic.id)} disabled={busy}>
               이 주제로 시작
             </button>
           </li>
@@ -83,6 +88,7 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
   const [game, setGame] = useState(initial);
   const [draft, setDraft] = useState('');
   const [waiting, setWaiting] = useState(false);
+  const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
 
@@ -92,7 +98,8 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
 
   async function send() {
     const text = draft.trim();
-    if (!text || waiting || game.ended) return;
+    if (!text || waiting || ending || game.ended) return;
+    const turnBefore = game.turn;
     setWaiting(true);
     setError(null);
     // 보낸 말을 먼저 보이고, 답이 오면 덧붙인다.
@@ -107,21 +114,33 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
         messages: [...g.messages, { speaker: 'opponent', text: result.reply }],
       }));
     } catch (e) {
-      // 실패하면 보낸 말을 입력 칸으로 되돌려 다시 보낼 수 있게 한다.
-      setGame((g) => ({ ...g, messages: g.messages.slice(0, -1) }));
-      setDraft(text);
-      setError(messageOf(e));
+      // 서버가 거절했으면(4xx) 저장된 것이 없다. 그 밖의 실패는 응답만 잃었을 수 있으므로 판을 다시 불러 맞춘다.
+      const rejected = e instanceof ApiError && e.rejected;
+      const fresh = rejected ? null : await api.get(game.id).catch(() => null);
+      if (fresh && fresh.turn > turnBefore) {
+        setGame(fresh);
+        setError('응답을 받지 못했지만 서버에 답이 저장되어 있어 불러왔습니다.');
+      } else {
+        // 저장되지 않았으면 보낸 말을 입력 칸으로 되돌려 다시 보낼 수 있게 한다.
+        setGame(fresh ?? ((g) => ({ ...g, messages: g.messages.slice(0, -1) })));
+        setDraft(text);
+        setError(messageOf(e));
+      }
     } finally {
       setWaiting(false);
     }
   }
 
   async function end() {
+    if (ending || waiting) return;
+    setEnding(true);
     setError(null);
     try {
       setGame(await api.end(game.id));
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setEnding(false);
     }
   }
 
@@ -170,15 +189,16 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
           </button>
         </div>
       ) : (
-        <form className="composer" onSubmit={onSubmit}>
+        <form className="composer" onSubmit={onSubmit} aria-busy={waiting}>
           <label htmlFor="draft">내 말</label>
+          {/* 답을 기다리는 동안 비활성(disabled)으로 두면 포커스가 빠지므로 읽기 전용으로 둔다. */}
           <textarea
             id="draft"
             rows={3}
             value={draft}
             maxLength={game.maxTextLength}
             placeholder="반론이나 질문을 적어 보내세요."
-            disabled={waiting}
+            readOnly={waiting}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
           />
@@ -186,10 +206,10 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
             <span className="muted">
               {draft.length} / {game.maxTextLength}자 · ⌘ 또는 Ctrl + Enter로 보내기
             </span>
-            <button type="button" className="secondary" onClick={() => void end()} disabled={waiting}>
+            <button type="button" className="secondary" onClick={() => void end()} disabled={waiting || ending}>
               끝내기
             </button>
-            <button type="submit" disabled={waiting || !draft.trim()}>
+            <button type="submit" disabled={waiting || ending || !draft.trim()}>
               보내기
             </button>
           </div>
