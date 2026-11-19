@@ -6,7 +6,16 @@ import { RECOVERED_MESSAGE, sendTurn, type TurnApi } from '../web/src/turn-flow.
 
 const before: GameView = {
   id: 'g1',
-  topic: { id: 'q01', question: '질문', userStance: '내 입장', character: { id: 'c', name: '상대' } },
+  topic: {
+    id: 'q01',
+    question: '질문',
+    sides: [
+      { stance: '내 입장', opponent: { id: 'c', name: '상대' } },
+      { stance: '반대 입장', opponent: null },
+    ],
+  },
+  side: 0,
+  startLean: -1,
   messages: [
     { speaker: 'user', text: '첫 말' },
     { speaker: 'opponent', text: '첫 발언' },
@@ -15,6 +24,8 @@ const before: GameView = {
   maxTurns: 30,
   maxTextLength: 1000,
   ended: false,
+  endReason: null,
+  record: null,
 };
 
 /** 서버에 저장된 판. turns개의 턴이 들어 있다. */

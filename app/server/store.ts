@@ -2,6 +2,7 @@
 // 배포처에 맞는 저장소(Turso 등)도 이 인터페이스로 붙인다.
 
 import type { ChatMessage, Condition, JudgeDecision, TurnRecord } from '../../eval/src/types.ts';
+import type { EndReason, Lean, SideIndex, Verdict } from './contract.ts';
 
 /** 상대를 만드는 방식. 판정 실험의 조건 가운데 서비스에서 쓰는 둘이다. */
 export type Mode = Extract<Condition, 'prompt' | 'engine'>;
@@ -17,13 +18,25 @@ export interface TurnLog {
   at: string;
 }
 
+/** 판이 끝난 뒤 사용자가 남긴 기록. 한 번 남기면 바꾸지 않는다. */
+export interface EndRecord {
+  lean: Lean;
+  verdict: Verdict;
+  at: string;
+}
+
 export interface GameRecord {
   id: string;
   /** 판을 한 사용자. 로그인을 붙이기 전에는 모두 같은 사용자(LOCAL_USER)다. */
   userId: string;
   topicId: string;
+  /** 사용자가 지키는 입장(주제의 sides 번호). 상대는 반대쪽이다. */
+  side: SideIndex;
+  /** 상대의 입장 카드. */
   cardId: string;
   mode: Mode;
+  /** 판을 시작할 때 고른 생각. 이 기록을 받기 전(스키마 1)에 만든 판은 null이다. */
+  startLean: Lean | null;
   /** 상대 모델에게 넘기는 대화(runTurn의 상태). */
   history: ChatMessage[];
   /** 엔진이 거둔 전제. 지시문 방식이면 늘 비어 있다. */
@@ -32,16 +45,22 @@ export interface GameRecord {
   turns: TurnLog[];
   startedAt: string;
   endedAt?: string;
+  /** 끝난 방식. 스키마 1에서 끝난 판에는 없다. */
+  endReason?: EndReason;
+  record?: EndRecord;
 }
 
 /** 지난 판 목록에 쓰는 요약. */
 export interface GameSummary {
   id: string;
   topicId: string;
+  side: SideIndex;
   cardId: string;
+  startLean: Lean | null;
   turns: number;
   startedAt: string;
   endedAt?: string;
+  record?: EndRecord;
 }
 
 export interface GameStore {
@@ -56,10 +75,13 @@ export function summaryOf(game: GameRecord): GameSummary {
   return {
     id: game.id,
     topicId: game.topicId,
+    side: game.side,
     cardId: game.cardId,
+    startLean: game.startLean,
     turns: game.turns.length,
     startedAt: game.startedAt,
     ...(game.endedAt ? { endedAt: game.endedAt } : {}),
+    ...(game.record ? { record: { ...game.record } } : {}),
   };
 }
 

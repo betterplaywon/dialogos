@@ -3,13 +3,14 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type { ChatMessage, JudgeDecision } from '../../eval/src/types.ts';
-import type { GameRecord, GameStore, GameSummary, Mode, TurnLog } from './store.ts';
+import type { EndReason, Lean, SideIndex, Verdict } from './contract.ts';
+import type { EndRecord, GameRecord, GameStore, GameSummary, Mode, TurnLog } from './store.ts';
 
 /**
  * 스키마. 바꿀 때는 끝에 하나를 더하고, 이미 있는 것은 고치지 않는다.
  * 파일마다 schema_version에 적용한 개수를 적어, 다시 열 때 남은 것만 적용한다.
  */
-const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly string[] = [
   `CREATE TABLE games (
      id TEXT PRIMARY KEY,
      user_id TEXT NOT NULL,
@@ -35,6 +36,13 @@ const MIGRATIONS: readonly string[] = [
      at TEXT NOT NULL,
      PRIMARY KEY (game_id, n)
    );`,
+  // 2: 지킨 입장과 판 앞뒤의 기록. 스키마 1의 판은 판정 실험 질문의 사용자 입장(sides[0])을 지켰으므로 side는 0이다.
+  `ALTER TABLE games ADD COLUMN side INTEGER NOT NULL DEFAULT 0 CHECK (side IN (0, 1));
+   ALTER TABLE games ADD COLUMN start_lean INTEGER CHECK (start_lean BETWEEN -2 AND 2);
+   ALTER TABLE games ADD COLUMN end_reason TEXT CHECK (end_reason IN ('max-turns', 'user'));
+   ALTER TABLE games ADD COLUMN end_lean INTEGER CHECK (end_lean BETWEEN -2 AND 2);
+   ALTER TABLE games ADD COLUMN verdict TEXT CHECK (verdict IN ('debate', 'lecture'));
+   ALTER TABLE games ADD COLUMN recorded_at TEXT;`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -44,12 +52,18 @@ interface GameRow {
   id: string;
   user_id: string;
   topic_id: string;
+  side: number;
   card_id: string;
   mode: string;
   history: string;
   conceded: string;
+  start_lean: number | null;
   started_at: string;
   ended_at: string | null;
+  end_reason: string | null;
+  end_lean: number | null;
+  verdict: string | null;
+  recorded_at: string | null;
 }
 
 interface TurnRow {
@@ -67,10 +81,21 @@ interface TurnRow {
 interface SummaryRow {
   id: string;
   topic_id: string;
+  side: number;
   card_id: string;
+  start_lean: number | null;
   turns: number;
   started_at: string;
   ended_at: string | null;
+  end_lean: number | null;
+  verdict: string | null;
+  recorded_at: string | null;
+}
+
+/** 끝 기록의 세 칸은 함께 채워진다. 하나라도 비었으면 기록이 없는 것이다. */
+function recordOf(row: { end_lean: number | null; verdict: string | null; recorded_at: string | null }): EndRecord | undefined {
+  if (row.end_lean === null || row.verdict === null || row.recorded_at === null) return undefined;
+  return { lean: row.end_lean as Lean, verdict: row.verdict as Verdict, at: row.recorded_at };
 }
 
 function turnOf(row: TurnRow): TurnLog {
@@ -164,19 +189,26 @@ export class SqliteGameStore implements GameStore {
     this.#transaction(() => {
       this.#db
         .prepare(
-          `INSERT INTO games (id, user_id, topic_id, card_id, mode, history, conceded, started_at, ended_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, history, conceded, start_lean, started_at,
+                              ended_at, end_reason, end_lean, verdict, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           game.id,
           game.userId,
           game.topicId,
+          game.side,
           game.cardId,
           game.mode,
           JSON.stringify(game.history),
           JSON.stringify(game.conceded),
+          game.startLean,
           game.startedAt,
           game.endedAt ?? null,
+          game.endReason ?? null,
+          game.record?.lean ?? null,
+          game.record?.verdict ?? null,
+          game.record?.at ?? null,
         );
       this.#insertTurns(game);
     });
@@ -186,25 +218,47 @@ export class SqliteGameStore implements GameStore {
     const row = this.#db.prepare('SELECT * FROM games WHERE id = ?').get(id) as unknown as GameRow | undefined;
     if (!row) return undefined;
     const turns = this.#db.prepare('SELECT * FROM turns WHERE game_id = ? ORDER BY n').all(id) as unknown as TurnRow[];
+    const record = recordOf(row);
     return {
       id: row.id,
       userId: row.user_id,
       topicId: row.topic_id,
+      side: row.side as SideIndex,
       cardId: row.card_id,
       mode: row.mode as Mode,
+      startLean: row.start_lean as Lean | null,
       history: JSON.parse(row.history) as ChatMessage[],
       conceded: JSON.parse(row.conceded) as string[],
       turns: turns.map(turnOf),
       startedAt: row.started_at,
       ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
+      ...(row.end_reason !== null ? { endReason: row.end_reason as EndReason } : {}),
+      ...(record ? { record } : {}),
     };
   }
 
+  /** 끝난 방식과 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기). */
   async save(game: GameRecord): Promise<void> {
     this.#transaction(() => {
       const result = this.#db
-        .prepare('UPDATE games SET history = ?, conceded = ?, ended_at = ? WHERE id = ?')
-        .run(JSON.stringify(game.history), JSON.stringify(game.conceded), game.endedAt ?? null, game.id);
+        .prepare(
+          `UPDATE games SET history = ?, conceded = ?, ended_at = ?,
+                  end_reason = COALESCE(end_reason, ?),
+                  end_lean = COALESCE(end_lean, ?),
+                  verdict = COALESCE(verdict, ?),
+                  recorded_at = COALESCE(recorded_at, ?)
+           WHERE id = ?`,
+        )
+        .run(
+          JSON.stringify(game.history),
+          JSON.stringify(game.conceded),
+          game.endedAt ?? null,
+          game.endReason ?? null,
+          game.record?.lean ?? null,
+          game.record?.verdict ?? null,
+          game.record?.at ?? null,
+          game.id,
+        );
       if (Number(result.changes) === 0) throw new Error(`없는 판입니다: ${game.id}`);
       this.#insertTurns(game);
     });
@@ -213,7 +267,8 @@ export class SqliteGameStore implements GameStore {
   async list(userId: string, limit: number): Promise<GameSummary[]> {
     const rows = this.#db
       .prepare(
-        `SELECT g.id, g.topic_id, g.card_id, g.started_at, g.ended_at,
+        `SELECT g.id, g.topic_id, g.side, g.card_id, g.start_lean, g.started_at, g.ended_at,
+                g.end_lean, g.verdict, g.recorded_at,
                 (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id) AS turns
          FROM games g
          WHERE g.user_id = ?
@@ -221,13 +276,19 @@ export class SqliteGameStore implements GameStore {
          LIMIT ?`,
       )
       .all(userId, limit) as unknown as SummaryRow[];
-    return rows.map((row) => ({
-      id: row.id,
-      topicId: row.topic_id,
-      cardId: row.card_id,
-      turns: row.turns,
-      startedAt: row.started_at,
-      ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
-    }));
+    return rows.map((row) => {
+      const record = recordOf(row);
+      return {
+        id: row.id,
+        topicId: row.topic_id,
+        side: row.side as SideIndex,
+        cardId: row.card_id,
+        startLean: row.start_lean as Lean | null,
+        turns: row.turns,
+        startedAt: row.started_at,
+        ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
+        ...(record ? { record } : {}),
+      };
+    });
   }
 }
