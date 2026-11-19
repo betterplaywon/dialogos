@@ -320,6 +320,57 @@ test('남의 판은 보거나 이어 하거나 끝낼 수 없고, 목록에도 �
   assert.deepEqual([saved?.turns.length, saved?.endedAt], [0, undefined]);
 });
 
+test('남의 판이 처리 중이어도 남의 요청은 404이고, 주인의 요청을 막지 않는다', async () => {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const slow: ChatModel = {
+    name: 'slow',
+    async complete() {
+      await gate;
+      return '답입니다.';
+    },
+  };
+  const { app } = setup({
+    models: { opponent: slow, judge: recorder(() => '{}') },
+    pickMode: () => 'prompt',
+    userOf: (request) => request.headers.get('x-test-user') ?? 'local',
+  });
+  const as = (user: string, path: string, body: unknown = {}) =>
+    app.request(path, { method: 'POST', headers: { 'x-test-user': user, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const game = (await (await as('a', '/api/games', { topicId: 'q01' })).json()) as GameView;
+
+  // a의 턴이 답을 기다리는 동안 b가 같은 판에 보낸다. 판이 있는지 드러나지 않게 404여야 한다.
+  const pending = as('a', `/api/games/${game.id}/turns`, { text: 'a의 반론입니다.' });
+  await delay(20);
+  for (const path of [`/api/games/${game.id}/turns`, `/api/games/${game.id}/end`]) {
+    const response = await as('b', path, { text: 'b의 말입니다.' });
+    assert.equal(response.status, 404, path);
+    assert.deepEqual(await response.json(), { error: '없는 판입니다.' });
+  }
+  release();
+  assert.equal((await pending).status, 200);
+
+  // b의 요청과 겹친 a의 끝내기는 막히지 않는다.
+  const [byOther, byOwner] = await Promise.all([as('b', `/api/games/${game.id}/end`), as('a', `/api/games/${game.id}/end`)]);
+  assert.deepEqual([byOther.status, byOwner.status], [404, 200]);
+});
+
+test('보이지 않는 제어 문자는 지우고, 줄바꿈은 남겨 저장한다', async (t) => {
+  const store = new SqliteGameStore(':memory:');
+  t.after(() => store.close());
+  const { app } = setup({ store, pickMode: () => 'prompt' });
+  const game = await startQ01(app);
+  const sent = await call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '앞부분\u0000뒷부분\u0007은 반론입니다.\n둘째 줄' } });
+  assert.equal(sent.status, 200);
+  const saved = await store.get(game.id);
+  assert.equal(saved?.turns[0]?.user, '앞부분뒷부분은 반론입니다.\n둘째 줄');
+  assert.equal(saved?.history[2]?.content, '앞부분뒷부분은 반론입니다.\n둘째 줄');
+  // 제어 문자만 있는 말은 빈 말로 본다.
+  assert.equal((await call(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '\u0000\u0001 ' } })).status, 400);
+});
+
 test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할 수 있다', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dialogos-app-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -15,6 +15,11 @@ export const MAX_TEXT_LENGTH = 1000;
 export const RECENT_GAMES = 20;
 /** 로그인을 붙이기 전의 사용자. 3주 차에 사람마다 다른 사용자로 바꾼다. */
 export const LOCAL_USER = 'local';
+/**
+ * 받은 말에서 지우는 보이지 않는 제어 문자(줄바꿈, 탭은 남긴다).
+ * Node 22.13의 node:sqlite는 U+0000에서 글을 잘라 저장해, 턴 기록과 대화가 어긋났다.
+ */
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 export interface Topic {
   question: Question;
@@ -60,17 +65,22 @@ function messagesOf(game: GameRecord): MessageView[] {
 }
 
 export function createGames(deps: GameDeps) {
-  /** 한 턴이나 끝내기를 처리하는 중인 판. 서버가 하나일 때만 지켜진다. */
+  /** 한 턴이나 끝내기를 처리하는 중인 (사용자, 판). 서버가 하나일 때만 지켜진다. */
   const busy = new Set<string>();
 
-  /** 같은 판의 턴과 끝내기를 한 번에 하나씩만 처리한다. 둘이 겹치면 나중 저장이 앞의 저장을 지운다. */
-  async function exclusive<T>(id: string, work: () => Promise<T>): Promise<T> {
-    if (busy.has(id)) throw new GameError(409, '이 판의 앞 요청을 아직 처리하고 있습니다. 잠시 뒤 다시 해 주세요.');
-    busy.add(id);
+  /**
+   * 같은 사용자의 같은 판에 온 턴과 끝내기를 한 번에 하나씩만 처리한다. 둘이 겹치면 나중 저장이 앞의 저장을 지운다.
+   * 잠금을 사용자별로 잡고 판의 주인은 그 안에서 확인한다. 그래서 남의 요청은 판이 처리 중이어도
+   * '없는 판'(404)이 되고(판이 있는지 드러나지 않음), 주인의 요청을 막지도 않는다.
+   */
+  async function exclusive<T>(userId: string, id: string, work: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([userId, id]);
+    if (busy.has(key)) throw new GameError(409, '이 판의 앞 요청을 아직 처리하고 있습니다. 잠시 뒤 다시 해 주세요.');
+    busy.add(key);
     try {
       return await work();
     } finally {
-      busy.delete(id);
+      busy.delete(key);
     }
   }
 
@@ -147,10 +157,10 @@ export function createGames(deps: GameDeps) {
     },
 
     async turn(userId: string, id: string, rawText: string): Promise<TurnResponse> {
-      const text = rawText.trim();
+      const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
       if (text.length > MAX_TEXT_LENGTH) throw new GameError(400, `한 턴에는 ${MAX_TEXT_LENGTH}자까지 보낼 수 있습니다.`);
-      return exclusive(id, async () => {
+      return exclusive(userId, id, async () => {
         const game = await load(userId, id);
         if (game.endedAt) throw new GameError(409, '이미 끝난 판입니다.');
         if (game.turns.length >= MAX_TURNS) throw new GameError(409, `이 판은 ${MAX_TURNS}턴을 모두 마쳤습니다.`);
@@ -182,7 +192,7 @@ export function createGames(deps: GameDeps) {
     },
 
     async end(userId: string, id: string): Promise<GameView> {
-      return exclusive(id, async () => {
+      return exclusive(userId, id, async () => {
         const game = await load(userId, id);
         if (!game.endedAt) {
           game.endedAt = deps.now().toISOString();
