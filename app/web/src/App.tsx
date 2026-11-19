@@ -282,7 +282,7 @@ function StartScreen({
                     name="tested-side"
                     checked={tested === index}
                     onChange={() => setTested(index as SideIndex)}
-                    aria-label={item.stance}
+                    aria-label={`${index === 0 ? '왼쪽 입장' : '오른쪽 입장'}: ${item.stance}`}
                   />
                   <span>{index === 0 ? '왼쪽 입장' : '오른쪽 입장'}</span>
                 </label>

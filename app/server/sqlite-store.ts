@@ -237,12 +237,12 @@ export class SqliteGameStore implements GameStore {
     };
   }
 
-  /** 끝난 방식과 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기). */
+  /** 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기). */
   async save(game: GameRecord): Promise<void> {
     this.#transaction(() => {
       const result = this.#db
         .prepare(
-          `UPDATE games SET history = ?, conceded = ?, ended_at = ?,
+          `UPDATE games SET history = ?, conceded = ?, ended_at = COALESCE(ended_at, ?),
                   end_reason = COALESCE(end_reason, ?),
                   end_lean = COALESCE(end_lean, ?),
                   verdict = COALESCE(verdict, ?),

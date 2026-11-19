@@ -109,9 +109,15 @@ export class MemoryGameStore implements GameStore {
     return game ? structuredClone(game) : undefined;
   }
 
+  /** 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(SQLite 저장소와 같다). */
   async save(game: GameRecord): Promise<void> {
-    if (!this.#games.has(game.id)) throw new Error(`없는 판입니다: ${game.id}`);
-    this.#games.set(game.id, structuredClone(game));
+    const saved = this.#games.get(game.id);
+    if (!saved) throw new Error(`없는 판입니다: ${game.id}`);
+    const next = structuredClone(game);
+    if (saved.endedAt) next.endedAt = saved.endedAt;
+    if (saved.endReason) next.endReason = saved.endReason;
+    if (saved.record) next.record = saved.record;
+    this.#games.set(game.id, next);
   }
 
   async list(userId: string, limit: number): Promise<GameSummary[]> {

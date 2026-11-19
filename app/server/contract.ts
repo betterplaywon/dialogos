@@ -111,6 +111,8 @@ export interface TurnResponse {
   reply: string;
   /** 이 턴으로 판이 끝났으면 true. */
   ended: boolean;
+  /** 이 턴으로 판이 끝났으면 끝난 방식(턴을 모두 씀), 아니면 null. */
+  endReason: EndReason | null;
 }
 
 export interface EndRecordRequest {

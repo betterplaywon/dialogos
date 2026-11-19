@@ -253,7 +253,7 @@ export function createGames(deps: GameDeps) {
           game.endReason = 'max-turns';
         }
         await deps.store.save(game);
-        return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined };
+        return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined, endReason: game.endReason ?? null };
       });
     },
 

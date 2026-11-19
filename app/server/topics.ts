@@ -32,9 +32,16 @@ export interface TopicFile {
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const FLAWS: readonly string[] = ['overgeneralization', 'false-dichotomy', 'unsupported-fact', 'self-contradiction'];
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+
+/** 정한 칸 밖의 칸(오타 등)을 찾는다. */
+function unknownKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): string[] {
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  return extra.length > 0 ? [`${label}에 모르는 칸이 있습니다: ${extra.join(', ')}.`] : [];
+}
 
 /** 사용자가 against의 반대 입장을 지킬 때의 질문. 판정 실험의 질문과 같은 모양으로 만든다. */
 function questionAgainst(id: string, text: string, userStance: string, against: SideFile): Question {
@@ -49,13 +56,42 @@ function questionAgainst(id: string, text: string, userStance: string, against: 
   };
 }
 
+/** 한 쪽의 모양: 칸, 전제와 반론 하나하나의 칸과 값. 쓰는 규칙(개수, 결함 네 종류, 길이)은 검사가 본다. */
 function sideProblems(side: unknown, label: string): string[] {
   if (!isObject(side)) return [`${label}이 객체가 아닙니다.`];
-  const problems: string[] = [];
+  const problems = unknownKeys(side, ['stance', 'cardId', 'premises', 'rebuttals'], label);
   if (!isText(side['stance'])) problems.push(`${label}의 stance가 비어 있습니다.`);
   if (!isText(side['cardId'])) problems.push(`${label}의 cardId가 비어 있습니다.`);
-  if (!Array.isArray(side['premises'])) problems.push(`${label}의 premises가 목록이 아닙니다.`);
-  if (!Array.isArray(side['rebuttals'])) problems.push(`${label}의 rebuttals가 목록이 아닙니다.`);
+  const premises = side['premises'];
+  if (!Array.isArray(premises)) problems.push(`${label}의 premises가 목록이 아닙니다.`);
+  else {
+    for (const [index, premise] of premises.entries()) {
+      const at = `${label}.premises[${index}]`;
+      if (!isObject(premise)) {
+        problems.push(`${at}이 객체가 아닙니다.`);
+        continue;
+      }
+      problems.push(...unknownKeys(premise, ['id', 'flaw', 'text'], at));
+      if (!isText(premise['id'])) problems.push(`${at}의 id가 비어 있습니다.`);
+      if (typeof premise['flaw'] !== 'string' || !FLAWS.includes(premise['flaw'])) problems.push(`${at}의 flaw는 ${FLAWS.join(', ')} 가운데 하나입니다.`);
+      if (!isText(premise['text'])) problems.push(`${at}의 text가 비어 있습니다.`);
+    }
+  }
+  const rebuttals = side['rebuttals'];
+  if (!Array.isArray(rebuttals)) problems.push(`${label}의 rebuttals가 목록이 아닙니다.`);
+  else {
+    for (const [index, rebuttal] of rebuttals.entries()) {
+      const at = `${label}.rebuttals[${index}]`;
+      if (!isObject(rebuttal)) {
+        problems.push(`${at}이 객체가 아닙니다.`);
+        continue;
+      }
+      problems.push(...unknownKeys(rebuttal, ['premiseId', 'text', 'why'], at));
+      for (const field of ['premiseId', 'text', 'why']) {
+        if (!isText(rebuttal[field])) problems.push(`${at}의 ${field}가 비어 있습니다.`);
+      }
+    }
+  }
   return problems;
 }
 
@@ -67,7 +103,7 @@ interface BuildContext {
 /** 카드 파일 하나를 주제로 만든다. 문제가 있으면 주제 없이 문제 목록만 돌려준다. */
 export function buildTopic(file: unknown, context: BuildContext): { topic?: Topic; problems: string[] } {
   if (!isObject(file)) return { problems: ['카드가 객체가 아닙니다.'] };
-  const problems: string[] = [];
+  const problems = unknownKeys(file, ['id', 'question', 'sides'], '카드');
   const { id, question, sides } = file;
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) problems.push('id는 영문 소문자, 숫자, -로만 씁니다.');
   if (!isText(question)) problems.push('question이 비어 있습니다.');
@@ -99,7 +135,7 @@ export function buildTopic(file: unknown, context: BuildContext): { topic?: Topi
     if (context.questions.has(id)) problems.push(`id '${id}'는 판정 실험 질문의 id입니다. 그 질문을 쓰려면 sides[1]을 fromEval로 둡니다.`);
     b = second as SideFile;
   }
-  if (a.stance === b.stance) problems.push('두 입장이 같습니다.');
+  if (a.stance.trim() === b.stance.trim()) problems.push('두 입장이 같습니다.');
   if (a.cardId === b.cardId) problems.push('두 입장을 같은 캐릭터가 밉니다. 입장마다 다른 캐릭터를 둡니다.');
 
   // sides[i]를 지키는 사용자는 반대쪽(sides[1 - i])의 캐릭터와 전제에 맞선다.

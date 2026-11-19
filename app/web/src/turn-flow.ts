@@ -33,6 +33,7 @@ export async function sendTurn(api: TurnApi, before: GameView, text: string): Pr
       ...before,
       turn: result.turn,
       ended: result.ended,
+      endReason: result.endReason,
       messages: [...before.messages, { speaker: 'user', text }, { speaker: 'opponent', text: result.reply }],
     };
     if (result.turn === before.turn + 1) return { game: appended, draft: '', error: null };

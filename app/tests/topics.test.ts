@@ -109,6 +109,24 @@ test('주제 카드의 잘못은 파일 이름과 함께 모아서 알린다', (
     }, /없는 전제 'P9'/],
     ['없는 캐릭터', (f) => [{ ...f[1], sides: [{ ...f[1]!.sides[0], cardId: 'nobody' }, f[1]!.sides[1]] }], /입장 카드 'nobody'가 없습니다/],
     ['id가 겹침', (f) => [f[1], { ...f[1] }], /다른 카드와 겹칩니다/],
+    ['빈 전제', (f) => {
+      const card = f[1]!;
+      (card.sides[0] as { premises: unknown[] }).premises[1] = null;
+      return [card];
+    }, /sides\[0\]\.premises\[1\]이 객체가 아닙니다/],
+    ['없는 결함 이름', (f) => {
+      const card = f[1]!;
+      (card.sides[1] as { premises: { flaw: string }[] }).premises[0]!.flaw = 'strawman';
+      return [card];
+    }, /sides\[1\]\.premises\[0\]의 flaw는/],
+    ['빈 반론 글', (f) => {
+      const card = f[1]!;
+      (card.sides[0] as { rebuttals: { text: string }[] }).rebuttals[0]!.text = ' ';
+      return [card];
+    }, /rebuttals\[0\]의 text가 비어 있습니다/],
+    ['모르는 칸', (f) => [{ ...f[1], sides: [{ ...f[1]!.sides[0], premise: [] }, f[1]!.sides[1]] }], /모르는 칸이 있습니다: premise/],
+    ['카드의 모르는 칸', (f) => [{ ...f[1], title: '제목' }], /카드에 모르는 칸이 있습니다: title/],
+    ['공백만 다른 같은 입장', (f) => [{ ...f[1], sides: [f[1]!.sides[0], { ...f[1]!.sides[1], stance: ' 그렇게 해도 됩니다. ' }] }], /두 입장이 같습니다/],
   ];
   for (const [name, edit, expected] of cases) assert.match(problemOf(edit), expected, name);
   // 문제가 여럿이면 한 번에 모두 알린다.

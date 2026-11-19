@@ -160,7 +160,7 @@ test('엔진 방식이면 판정기가 먼저 판정하고, 판정과 장부는 
 
   const { status, data } = await call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '  반론입니다.  ' } });
   assert.equal(status, 200);
-  assert.deepEqual(data, { turn: 1, reply: 'P1을 거둡니다. 다른 근거는 어떻습니까?', ended: false });
+  assert.deepEqual(data, { turn: 1, reply: 'P1을 거둡니다. 다른 근거는 어떻습니까?', ended: false, endReason: null });
 
   const saved = await store.get(game.id);
   assert.deepEqual(saved?.conceded, ['P1']);
@@ -246,7 +246,7 @@ test('끝낸 판과 턴을 모두 쓴 판에는 더 보낼 수 없다', async ()
     assert.equal(status, 200);
     last = data;
   }
-  assert.deepEqual([last?.turn, last?.ended], [MAX_TURNS, true]);
+  assert.deepEqual([last?.turn, last?.ended, last?.endReason], [MAX_TURNS, true, 'max-turns']);
   assert.equal((await call(app, 'POST', `/api/games/${full.id}/turns`, { body: { text: '한 번 더' } })).status, 409);
   // 턴을 모두 쓴 판에 끝내기를 눌러도 끝난 방식은 그대로다.
   assert.equal((await call<GameView>(app, 'POST', `/api/games/${full.id}/end`)).data.endReason, 'max-turns');

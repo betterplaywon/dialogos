@@ -100,6 +100,29 @@ for (const [name, open] of stores) {
     assert.deepEqual([summary?.side, summary?.startLean, summary?.endedAt, summary?.record], [1, 0, ended.endedAt, recorded.record]);
   });
 
+  test(`${name} 저장소: 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 다른 값으로 저장해도 바뀌지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await store.create(sample());
+    const first = sample({
+      endedAt: '2026-11-19T00:03:00.000Z',
+      endReason: 'max-turns',
+      record: { lean: 1, verdict: 'debate', at: '2026-11-19T00:04:00.000Z' },
+    });
+    await store.save(first);
+    await store.save({
+      ...first,
+      endedAt: '2026-11-19T00:09:00.000Z',
+      endReason: 'user',
+      record: { lean: -2, verdict: 'lecture', at: '2026-11-19T00:05:00.000Z' },
+    });
+    assert.deepEqual(await store.get('g1'), first);
+    // 끝난 판을 끝나지 않은 판으로 되돌려 저장해도 끝난 채로 남는다.
+    const { endedAt: _endedAt, endReason: _endReason, record: _record, ...reopened } = first;
+    await store.save(reopened);
+    assert.deepEqual(await store.get('g1'), first);
+  });
+
   test(`${name} 저장소: 판정이 없는 턴(지시문 방식)도 그대로 남는다`, async (t) => {
     const store = open();
     t.after(() => store.close?.());
@@ -202,15 +225,7 @@ test('SQLite 저장소: 스키마 1의 파일을 열면 스키마 2를 더하고
   assert.deepEqual((await store.get('old'))?.record, { lean: 0, verdict: 'debate', at: '2026-11-19T00:00:00.000Z' });
 });
 
-test('SQLite 저장소: 끝난 방식과 끝 기록은 한 번 채우면 다른 값으로 저장해도 바뀌지 않는다', async (t) => {
-  const store = new SqliteGameStore(':memory:');
-  t.after(() => store.close());
-  await store.create(sample());
-  const first = sample({ endedAt: '2026-11-19T00:03:00.000Z', endReason: 'max-turns', record: { lean: 1, verdict: 'debate', at: '2026-11-19T00:04:00.000Z' } });
-  await store.save(first);
-  await store.save({ ...first, endReason: 'user', record: { lean: -2, verdict: 'lecture', at: '2026-11-19T00:05:00.000Z' } });
-  assert.deepEqual(await store.get('g1'), first);
-});
+
 
 test('SQLite 저장소: 다른 프로세스가 쓰는 중이면 바로 실패하지 않고 기다렸다가 저장한다', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dialogos-lock-'));
