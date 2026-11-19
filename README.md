@@ -20,11 +20,11 @@ AI에게 내 주장을 시험받으려 해도, 몇 번 되받아치면 AI가 근
 - 실험 설계와 통과 기준: [eval/README.md](eval/README.md)
 - 채점 기준과 계산 방법: [eval/rubric.md](eval/rubric.md)
 
-실제 모델로 돌린 결과는 아직 없습니다. 지금 저장소에는 질문 20개, 실행기, 엔진 시제품, 채점과 판정 계산, 검사가 들어 있습니다.
+실제 모델로 돌린 결과는 아직 없습니다. 지금 저장소에는 질문 20개, 실행기, 엔진 시제품, 채점과 판정 계산, 검사, 그리고 엔진을 붙인 화면과 서버의 뼈대([app/README.md](app/README.md))가 들어 있습니다.
 
 ## 돌려 보기
 
-Node.js 22.9 이상이 필요합니다. 아래 명령은 모의 모델을 쓰므로 비용이 들지 않습니다. 모의 실행의 숫자는 흐름을 확인하는 용도이고 실험 결과가 아닙니다.
+Node.js 22.12 이상이 필요합니다. 아래 명령은 모의 모델을 쓰므로 비용이 들지 않습니다. 모의 실행의 숫자는 흐름을 확인하는 용도이고 실험 결과가 아닙니다.
 
 ```
 npm install
@@ -33,6 +33,8 @@ npm run eval:run -- --provider mock --run try1
 npm run eval:label -- --provider mock --run try1
 npm run eval:score -- --run try1
 ```
+
+화면과 서버(개발용 뼈대)는 `npm run app:dev`로 띄웁니다. 이것도 모의 모델만 씁니다. 자세한 것은 [app/README.md](app/README.md)에 있습니다.
 
 ## 앞으로
 
