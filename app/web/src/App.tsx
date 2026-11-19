@@ -1,7 +1,7 @@
-// 화면: 주제를 고르고, 글로 한 판을 주고받는다. 음성은 다음 단계에서 붙인다.
+// 화면: 지난 판을 이어 하거나 주제를 골라, 글로 한 판을 주고받는다. 음성은 다음 단계에서 붙인다.
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { GameView, TopicView } from '../../server/contract.ts';
+import type { GameSummaryView, GameView, TopicView } from '../../server/contract.ts';
 import { api } from './api.ts';
 import { sendTurn } from './turn-flow.ts';
 
@@ -9,12 +9,24 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
 }
 
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export function App() {
   const [topics, setTopics] = useState<TopicView[] | null>(null);
+  const [pastGames, setPastGames] = useState<GameSummaryView[] | null>(null);
   const [mock, setMock] = useState(false);
   const [game, setGame] = useState<GameView | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function refreshPastGames() {
+    api
+      .list()
+      .then((data) => setPastGames(data.games))
+      .catch((e: unknown) => setError(messageOf(e)));
+  }
 
   useEffect(() => {
     api
@@ -24,19 +36,26 @@ export function App() {
         setMock(data.provider === 'mock');
       })
       .catch((e: unknown) => setError(messageOf(e)));
+    refreshPastGames();
   }, []);
 
-  async function start(topicId: string) {
+  /** 새 판을 시작하거나(topicId) 지난 판을 연다(gameId). 요청 중에는 다시 누르지 못한다. */
+  async function open(load: () => Promise<GameView>) {
     if (starting) return;
     setStarting(true);
     setError(null);
     try {
-      setGame(await api.start(topicId));
+      setGame(await load());
     } catch (e) {
       setError(messageOf(e));
     } finally {
       setStarting(false);
     }
+  }
+
+  function leave() {
+    setGame(null);
+    refreshPastGames();
   }
 
   return (
@@ -55,8 +74,39 @@ export function App() {
           {error}
         </p>
       )}
-      {game ? <Game initial={game} onLeave={() => setGame(null)} /> : <TopicList topics={topics} busy={starting} onStart={start} />}
+      {game ? (
+        <Game initial={game} onLeave={leave} />
+      ) : (
+        <>
+          <PastGames games={pastGames} busy={starting} onOpen={(id) => void open(() => api.get(id))} />
+          <TopicList topics={topics} busy={starting} onStart={(id) => void open(() => api.start(id))} />
+        </>
+      )}
     </div>
+  );
+}
+
+function PastGames({ games, busy, onOpen }: { games: GameSummaryView[] | null; busy: boolean; onOpen: (id: string) => void }) {
+  if (!games || games.length === 0) return null;
+  return (
+    <section className="past" aria-labelledby="past-title">
+      <h2 id="past-title">지난 판</h2>
+      <ul>
+        {games.map((past) => (
+          <li key={past.id} className="past-game">
+            <div className="past-text">
+              <p className="question">{past.topic.question}</p>
+              <p className="muted">
+                {past.topic.character.name} · {past.turn} / {past.maxTurns}턴 · {past.ended ? '끝남' : '진행 중'} · {formatTime(past.startedAt)}
+              </p>
+            </div>
+            <button type="button" className={past.ended ? 'secondary' : undefined} onClick={() => onOpen(past.id)} disabled={busy}>
+              {past.ended ? '다시 보기' : '이어 하기'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -147,9 +197,17 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
     <section className="game" aria-labelledby="game-title">
       <div className="game-head">
         <h2 id="game-title">{game.topic.question}</h2>
-        <p className="muted">
-          상대: {name} · 턴 {game.turn} / {game.maxTurns}
-        </p>
+        <div className="game-meta">
+          <p className="muted">
+            상대: {name} · 턴 {game.turn} / {game.maxTurns}
+          </p>
+          {!game.ended && (
+            // 판은 저장되므로 목록으로 나갔다가 '지난 판'에서 이어 할 수 있다.
+            <button type="button" className="secondary" onClick={onLeave} disabled={waiting || ending}>
+              목록으로
+            </button>
+          )}
+        </div>
       </div>
       <ol className="messages" aria-live="polite">
         {game.messages.map((message, index) => (
@@ -170,7 +228,7 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
         <div className="ended">
           <p>판이 끝났습니다. {game.turn}턴을 주고받았습니다.</p>
           <button type="button" onClick={onLeave}>
-            다른 주제 고르기
+            목록으로
           </button>
         </div>
       ) : (
