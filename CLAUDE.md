@@ -21,9 +21,10 @@
 
 ## 자주 쓰는 명령
 
-- 검사: `npm run check` (형식 검사와 `npm test`를 함께 돌립니다. `npm test`는 `eval/tests/`와 `.claude/hooks/`의 검사입니다)
+- 검사: `npm run check` (형식 검사와 `npm test`를 함께 돌립니다. `npm test`는 `eval/tests/`, `app/tests/`, `.claude/hooks/`의 검사입니다)
 - 모의 실행(비용 없음): `npm run eval:run -- --provider mock`
 - 흐름 검증과 증거(비용 없음): `node .claude/skills/verify/scripts/verify.mjs flow`
+- 화면과 서버 띄우기(개발용, 모의 모델, 비용 없음): `npm run app:dev`
 
 ## 작업 방식
 
