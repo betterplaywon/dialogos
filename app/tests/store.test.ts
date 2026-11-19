@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -144,6 +145,40 @@ test('SQLite 저장소: 파일을 다시 열면 판이 남고, 스키마는 한 
   t.after(() => second.close());
   assert.equal(second.schemaVersion, 1);
   assert.deepEqual(await second.get('g1'), sample({ turns: [engineTurn] }));
+});
+
+test('SQLite 저장소: 다른 프로세스가 쓰는 중이면 바로 실패하지 않고 기다렸다가 저장한다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-lock-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  const store = new SqliteGameStore(path);
+  t.after(() => store.close());
+  await store.create(sample());
+
+  // 다른 프로세스가 쓰기 잠금을 0.3초 잡았다가 놓는다.
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      `const { DatabaseSync } = require('node:sqlite');
+       const db = new DatabaseSync(${JSON.stringify(path)});
+       db.exec('BEGIN IMMEDIATE');
+       process.stdout.write('locked\\n');
+       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+       db.exec('COMMIT');
+       db.close();`,
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const exited = new Promise((resolve) => holder.on('exit', resolve));
+  await new Promise((resolve) => holder.stdout.once('data', resolve));
+
+  const started = performance.now();
+  await store.save(sample({ conceded: ['P1'] }));
+  const waited = performance.now() - started;
+  assert.ok(waited >= 100, `기다린 시간 ${Math.round(waited)}ms`);
+  assert.deepEqual((await store.get('g1'))?.conceded, ['P1']);
+  await exited;
 });
 
 test('SQLite 저장소: 저장 중에 실패하면 판이 반쯤 바뀌지 않는다', async (t) => {

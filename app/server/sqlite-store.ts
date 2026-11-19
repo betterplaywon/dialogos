@@ -37,6 +37,9 @@ const MIGRATIONS: readonly string[] = [
    );`,
 ];
 
+/** 다른 연결의 쓰기를 기다리는 최대 시간. */
+const BUSY_TIMEOUT_MS = 5000;
+
 interface GameRow {
   id: string;
   user_id: string;
@@ -88,6 +91,9 @@ export class SqliteGameStore implements GameStore {
   /** path는 파일 경로이거나 ':memory:'다. 파일이 없으면 만든다. */
   constructor(path: string) {
     this.#db = new DatabaseSync(path);
+    // 다른 연결(다른 도구나 프로세스)이 쓰는 중이면 바로 실패하지 않고 기다린다.
+    // DatabaseSync는 동기식이라 기다리는 동안 이 프로세스가 멈춘다. 평소에는 연결이 하나라 기다릴 일이 없다.
+    this.#db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     this.#db.exec('PRAGMA foreign_keys = ON');
     if (path !== ':memory:') this.#db.exec('PRAGMA journal_mode = WAL');
     this.#migrate();
@@ -105,10 +111,10 @@ export class SqliteGameStore implements GameStore {
 
   #migrate(): void {
     this.#db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
-    const applied = this.schemaVersion;
     for (const [index, sql] of MIGRATIONS.entries()) {
-      if (index < applied) continue;
       this.#transaction(() => {
+        // 적용했는지는 쓰기 잠금을 잡은 뒤에 본다. 두 프로세스가 같은 새 파일을 열어도 한쪽만 적용한다.
+        if (this.schemaVersion > index) return;
         this.#db.exec(sql);
         this.#db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(index + 1);
       });
