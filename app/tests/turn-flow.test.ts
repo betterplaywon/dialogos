@@ -6,7 +6,16 @@ import { RECOVERED_MESSAGE, sendTurn, type TurnApi } from '../web/src/turn-flow.
 
 const before: GameView = {
   id: 'g1',
-  topic: { id: 'q01', question: '질문', userStance: '내 입장', character: { id: 'c', name: '상대' } },
+  topic: {
+    id: 'q01',
+    question: '질문',
+    sides: [
+      { stance: '내 입장', opponent: { id: 'c', name: '상대' } },
+      { stance: '반대 입장', opponent: null },
+    ],
+  },
+  side: 0,
+  startLean: -1,
   messages: [
     { speaker: 'user', text: '첫 말' },
     { speaker: 'opponent', text: '첫 발언' },
@@ -15,6 +24,8 @@ const before: GameView = {
   maxTurns: 30,
   maxTextLength: 1000,
   ended: false,
+  endReason: null,
+  record: null,
 };
 
 /** 서버에 저장된 판. turns개의 턴이 들어 있다. */
@@ -42,10 +53,16 @@ function fakeApi(turn: () => Promise<TurnResponse>, get: () => Promise<GameView>
 const lost = () => Promise.reject(new ApiError('서버에 닿지 못했습니다.'));
 
 test('답이 오면 보낸 말과 답을 덧붙이고, 판을 다시 부르지 않는다', async () => {
-  const { api, calls } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: false }), async () => serverGame(9));
+  const { api, calls } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: false, endReason: null }), async () => serverGame(9));
   const settled = await sendTurn(api, before, '반론입니다.');
   assert.deepEqual(settled, { game: serverGame(1), draft: '', error: null });
   assert.equal(calls.get, 0);
+});
+
+test('턴을 모두 써서 판이 끝나면 끝난 방식도 화면의 판에 싣는다', async () => {
+  const { api } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: true, endReason: 'max-turns' }), async () => serverGame(9));
+  const settled = await sendTurn(api, before, '반론입니다.');
+  assert.deepEqual([settled.game.ended, settled.game.endReason], [true, 'max-turns']);
 });
 
 test('응답을 잃었지만 서버에 저장됐으면 서버의 판을 쓰고 보낸 말을 되돌리지 않는다', async () => {
@@ -62,7 +79,7 @@ test('서버가 아직 답을 만드는 중에 응답을 잃어도, 다음 턴�
   assert.equal(rolledBack.draft, '반론입니다.');
 
   // 그 사이 서버가 첫 턴을 저장했고, 다시 보낸 말이 두 번째 턴이 된다. 턴 번호가 건너뛰므로 판을 다시 불러 맞춘다.
-  const second = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false }), async () => serverGame(2));
+  const second = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false, endReason: null }), async () => serverGame(2));
   const settled = await sendTurn(second.api, rolledBack.game, rolledBack.draft);
   assert.deepEqual(settled, { game: serverGame(2), draft: '', error: null });
   assert.equal(second.calls.get, 1);

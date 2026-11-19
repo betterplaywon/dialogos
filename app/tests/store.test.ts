@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { SqliteGameStore } from '../server/sqlite-store.ts';
+import { MIGRATIONS, SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type TurnLog } from '../server/store.ts';
 
 /** 같은 검사를 두 저장소에 돌린다. 배포처의 저장소를 붙일 때도 여기에 더한다. */
@@ -18,8 +19,10 @@ function sample(overrides: Partial<GameRecord> = {}): GameRecord {
     id: 'g1',
     userId: 'local',
     topicId: 'q01',
+    side: 0,
     cardId: 'utilitarian',
     mode: 'engine',
+    startLean: -1,
     history: [
       { role: 'user', content: '첫 말' },
       { role: 'assistant', content: '첫 발언' },
@@ -83,6 +86,43 @@ for (const [name, open] of stores) {
     assert.deepEqual(await store.get('g1'), ended);
   });
 
+  test(`${name} 저장소: 지킨 입장, 시작할 때의 생각, 끝난 방식, 끝 기록이 남고 목록에도 실린다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await store.create(sample({ side: 1, startLean: 0 }));
+    const ended = sample({ side: 1, startLean: 0, endedAt: '2026-11-19T00:03:00.000Z', endReason: 'user' });
+    await store.save(ended);
+    assert.deepEqual(await store.get('g1'), ended);
+    const recorded: GameRecord = { ...ended, record: { lean: 2, verdict: 'lecture', at: '2026-11-19T00:04:00.000Z' } };
+    await store.save(recorded);
+    assert.deepEqual(await store.get('g1'), recorded);
+    const [summary] = await store.list('local', 1);
+    assert.deepEqual([summary?.side, summary?.startLean, summary?.endedAt, summary?.record], [1, 0, ended.endedAt, recorded.record]);
+  });
+
+  test(`${name} 저장소: 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 다른 값으로 저장해도 바뀌지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await store.create(sample());
+    const first = sample({
+      endedAt: '2026-11-19T00:03:00.000Z',
+      endReason: 'max-turns',
+      record: { lean: 1, verdict: 'debate', at: '2026-11-19T00:04:00.000Z' },
+    });
+    await store.save(first);
+    await store.save({
+      ...first,
+      endedAt: '2026-11-19T00:09:00.000Z',
+      endReason: 'user',
+      record: { lean: -2, verdict: 'lecture', at: '2026-11-19T00:05:00.000Z' },
+    });
+    assert.deepEqual(await store.get('g1'), first);
+    // 끝난 판을 끝나지 않은 판으로 되돌려 저장해도 끝난 채로 남는다.
+    const { endedAt: _endedAt, endReason: _endReason, record: _record, ...reopened } = first;
+    await store.save(reopened);
+    assert.deepEqual(await store.get('g1'), first);
+  });
+
   test(`${name} 저장소: 판정이 없는 턴(지시문 방식)도 그대로 남는다`, async (t) => {
     const store = open();
     t.after(() => store.close?.());
@@ -117,7 +157,15 @@ for (const [name, open] of stores) {
       all.map((g) => g.id),
       ['new', 'tie-2', 'tie-1', 'old'],
     );
-    assert.deepEqual(all[0], { id: 'new', topicId: 'q01', cardId: 'utilitarian', turns: 1, startedAt: '2026-11-19T09:00:00.000Z' });
+    assert.deepEqual(all[0], {
+      id: 'new',
+      topicId: 'q01',
+      side: 0,
+      cardId: 'utilitarian',
+      startLean: -1,
+      turns: 1,
+      startedAt: '2026-11-19T09:00:00.000Z',
+    });
     assert.equal(all[1]?.endedAt, '2026-11-19T08:30:00.000Z');
     assert.deepEqual(
       (await store.list('local', 2)).map((g) => g.id),
@@ -137,15 +185,47 @@ test('SQLite 저장소: 파일을 다시 열면 판이 남고, 스키마는 한 
   const path = join(dir, 'app.sqlite');
 
   const first = new SqliteGameStore(path);
-  assert.equal(first.schemaVersion, 1);
+  assert.equal(first.schemaVersion, MIGRATIONS.length);
   await first.create(sample({ turns: [engineTurn] }));
   first.close();
 
   const second = new SqliteGameStore(path);
   t.after(() => second.close());
-  assert.equal(second.schemaVersion, 1);
+  assert.equal(second.schemaVersion, MIGRATIONS.length);
   assert.deepEqual(await second.get('g1'), sample({ turns: [engineTurn] }));
 });
+
+test('SQLite 저장소: 스키마 1의 파일을 열면 스키마 2를 더하고, 예전 판은 첫째 입장과 빈 기록으로 읽는다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-migrate-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  // 스키마 1까지만 적용한 파일(이 PR 전의 서버가 만든 파일)을 흉내 낸다.
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+  old.exec(MIGRATIONS[0] ?? '');
+  old.exec('INSERT INTO schema_version (version) VALUES (1)');
+  old
+    .prepare(
+      `INSERT INTO games (id, user_id, topic_id, card_id, mode, history, conceded, started_at, ended_at)
+       VALUES ('old', 'local', 'q01', 'utilitarian', 'engine', '[]', '[]', '2026-11-18T00:00:00.000Z', '2026-11-18T00:10:00.000Z')`,
+    )
+    .run();
+  old.close();
+
+  const store = new SqliteGameStore(path);
+  t.after(() => store.close());
+  assert.equal(store.schemaVersion, 2);
+  const game = await store.get('old');
+  assert.deepEqual(
+    [game?.side, game?.startLean, game?.endedAt, game?.endReason, game?.record],
+    [0, null, '2026-11-18T00:10:00.000Z', undefined, undefined],
+  );
+  // 예전 판에도 끝 기록을 남길 수 있다.
+  await store.save({ ...game!, record: { lean: 0, verdict: 'debate', at: '2026-11-19T00:00:00.000Z' } });
+  assert.deepEqual((await store.get('old'))?.record, { lean: 0, verdict: 'debate', at: '2026-11-19T00:00:00.000Z' });
+});
+
+
 
 test('SQLite 저장소: 다른 프로세스가 쓰는 중이면 바로 실패하지 않고 기다렸다가 저장한다', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dialogos-lock-'));
