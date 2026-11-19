@@ -5,7 +5,7 @@
   "description": "근거 없이는 물러서지 않는 한국어 토론 상대와, 그 차이를 재는 판정 실험",
   "type": "module",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p app/web",

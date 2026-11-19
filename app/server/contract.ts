@@ -38,6 +38,20 @@ export interface GameView {
   ended: boolean;
 }
 
+/** 지난 판 목록의 한 줄. */
+export interface GameSummaryView {
+  id: string;
+  topic: TopicView;
+  turn: number;
+  maxTurns: number;
+  ended: boolean;
+  startedAt: string;
+}
+
+export interface GamesResponse {
+  games: GameSummaryView[];
+}
+
 export interface StartGameRequest {
   topicId: string;
 }
