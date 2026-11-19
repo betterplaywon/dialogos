@@ -1,0 +1,246 @@
+/* 한 줄 화면. 대화는 읽기 쉬운 폭(약 65자)으로, 내 말은 오른쪽, 상대의 말은 왼쪽에 둔다. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --fg: #1b2129;
+  --muted: #5a6472;
+  --line: #dce1e7;
+  --accent: #2b5b70;
+  --accent-fg: #ffffff;
+  --mine: #e2edf2;
+  --notice: #fcf0d6;
+  --notice-fg: #6b4700;
+  --error: #a8261e;
+  --error-soft: #fbe8e6;
+  color-scheme: light;
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101317;
+    --surface: #171b21;
+    --fg: #e3e7ed;
+    --muted: #9ca6b3;
+    --line: #2a3139;
+    --accent: #88bbd1;
+    --accent-fg: #0d1a20;
+    --mine: #1b2b33;
+    --notice: #32270f;
+    --notice-fg: #e7b65c;
+    --error: #f08a80;
+    --error-soft: #3a1c1a;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 1.7;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 16px 64px;
+  display: grid;
+  gap: 20px;
+}
+
+.masthead {
+  display: grid;
+  gap: 4px;
+}
+
+.masthead h1 {
+  font-size: 1.6rem;
+  letter-spacing: -0.01em;
+}
+
+.masthead p,
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  background: var(--notice);
+  color: var(--notice-fg);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.93rem;
+}
+
+.error {
+  background: var(--error-soft);
+  color: var(--error);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.topics {
+  display: grid;
+  gap: 12px;
+}
+
+.topics ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.topic {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.topic .question {
+  font-weight: 600;
+}
+
+.topic dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  font-size: 0.93rem;
+}
+
+.topic dt {
+  color: var(--muted);
+}
+
+.game {
+  display: grid;
+  gap: 14px;
+}
+
+.game-head {
+  display: grid;
+  gap: 4px;
+}
+
+.game-head h2 {
+  font-size: 1.15rem;
+}
+
+.messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.message {
+  max-width: 85%;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: grid;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  justify-self: start;
+}
+
+.message.user {
+  background: var(--mine);
+  border-color: transparent;
+  justify-self: end;
+}
+
+.message.pending p {
+  color: var(--muted);
+}
+
+.who {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.composer {
+  display: grid;
+  gap: 6px;
+}
+
+.composer label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.composer textarea {
+  font: inherit;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.actions .muted {
+  margin-right: auto;
+  font-size: 0.85rem;
+}
+
+.ended {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}

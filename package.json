@@ -8,9 +8,11 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p app/web",
     "test": "tsx --test eval/tests/*.test.ts app/tests/*.test.ts .claude/hooks/*.test.mjs",
     "check": "npm run typecheck && npm test",
+    "app:dev": "tsx app/dev.ts",
+    "app:build": "vite build --config app/web/vite.config.ts",
     "eval:run": "tsx --env-file-if-exists=.env eval/src/run.ts",
     "eval:label": "tsx --env-file-if-exists=.env eval/src/label.ts",
     "eval:score": "tsx eval/src/score.ts",
