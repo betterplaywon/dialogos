@@ -1,6 +1,17 @@
 // 서버 주소를 부르는 함수. 실패하면 서버가 보낸 한국어 메시지를 담은 ApiError를 던진다.
 
-import type { ErrorResponse, GamesResponse, GameView, TopicsResponse, TurnResponse } from '../../server/contract.ts';
+import type {
+  EndRecordRequest,
+  ErrorResponse,
+  GamesResponse,
+  GameView,
+  Lean,
+  SideIndex,
+  StartGameRequest,
+  TopicsResponse,
+  TurnResponse,
+  Verdict,
+} from '../../server/contract.ts';
 
 /** 서버 요청의 실패. status가 없으면 서버에 닿지 못한 것이다. */
 export class ApiError extends Error {
@@ -40,8 +51,11 @@ const gamePath = (gameId: string) => `/api/games/${encodeURIComponent(gameId)}`;
 export const api = {
   topics: () => call<TopicsResponse>('/api/topics'),
   list: () => call<GamesResponse>('/api/games'),
-  start: (topicId: string) => call<GameView>('/api/games', { topicId }),
+  start: (topicId: string, side: SideIndex, lean: Lean) =>
+    call<GameView>('/api/games', { topicId, side, lean } satisfies StartGameRequest),
   get: (gameId: string) => call<GameView>(gamePath(gameId)),
   turn: (gameId: string, text: string) => call<TurnResponse>(`${gamePath(gameId)}/turns`, { text }),
   end: (gameId: string) => call<GameView>(`${gamePath(gameId)}/end`, {}),
+  record: (gameId: string, lean: Lean, verdict: Verdict) =>
+    call<GameView>(`${gamePath(gameId)}/record`, { lean, verdict } satisfies EndRecordRequest),
 };

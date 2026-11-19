@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ErrorResponse, GamesResponse, Provider, TopicsResponse } from './contract.ts';
-import { createGames, GameError, LOCAL_USER, type GameDeps } from './games.ts';
+import { createGames, GameError, isLean, isSide, isVerdict, LOCAL_USER, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
   provider: Provider;
@@ -68,9 +68,11 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/games', async (c) => c.json<GamesResponse>({ games: await games.list(userOf(c.req.raw)) }));
 
   app.post('/api/games', async (c) => {
-    const { topicId } = await readBody(c.req);
+    const { topicId, side, lean } = await readBody(c.req);
     if (typeof topicId !== 'string') throw new GameError(400, '주제(topicId)가 필요합니다.');
-    return c.json(await games.start(userOf(c.req.raw), topicId), 201);
+    if (!isSide(side)) throw new GameError(400, '지킬 입장(side)은 0이나 1입니다.');
+    if (!isLean(lean)) throw new GameError(400, '지금의 생각(lean)은 -2부터 2까지의 정수입니다.');
+    return c.json(await games.start(userOf(c.req.raw), topicId, side, lean), 201);
   });
 
   app.get('/api/games/:id', async (c) => c.json(await games.get(userOf(c.req.raw), c.req.param('id'))));
@@ -82,6 +84,13 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.post('/api/games/:id/end', async (c) => c.json(await games.end(userOf(c.req.raw), c.req.param('id'))));
+
+  app.post('/api/games/:id/record', async (c) => {
+    const { lean, verdict } = await readBody(c.req);
+    if (!isLean(lean)) throw new GameError(400, '지금의 생각(lean)은 -2부터 2까지의 정수입니다.');
+    if (!isVerdict(verdict)) throw new GameError(400, "훈계 문항의 답(verdict)은 'debate'나 'lecture'입니다.");
+    return c.json(await games.record(userOf(c.req.raw), c.req.param('id'), lean, verdict));
+  });
 
   app.notFound((c) => c.json<ErrorResponse>({ error: '없는 주소입니다.' }, 404));
 
