@@ -181,6 +181,38 @@ test('SQLite 저장소: 다른 프로세스가 쓰는 중이면 바로 실패하
   await exited;
 });
 
+test('SQLite 저장소: 스키마를 다 적용한 파일은 다른 프로세스가 쓰는 중이어도 기다리지 않고 열린다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-open-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  new SqliteGameStore(path).close();
+
+  // 다른 프로세스가 쓰기 잠금을 1초 잡는다. 여는 데 쓰기 잠금이 필요하면 그만큼 기다리게 된다.
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      `const { DatabaseSync } = require('node:sqlite');
+       const db = new DatabaseSync(${JSON.stringify(path)});
+       db.exec('BEGIN IMMEDIATE');
+       process.stdout.write('locked\\n');
+       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+       db.exec('COMMIT');
+       db.close();`,
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const exited = new Promise((resolve) => holder.on('exit', resolve));
+  await new Promise((resolve) => holder.stdout.once('data', resolve));
+
+  const started = performance.now();
+  const store = new SqliteGameStore(path);
+  const took = performance.now() - started;
+  store.close();
+  assert.ok(took < 500, `여는 데 걸린 시간 ${Math.round(took)}ms`);
+  await exited;
+});
+
 test('SQLite 저장소: 저장 중에 실패하면 판이 반쯤 바뀌지 않는다', async (t) => {
   const store = new SqliteGameStore(':memory:');
   t.after(() => store.close());

@@ -111,9 +111,13 @@ export class SqliteGameStore implements GameStore {
 
   #migrate(): void {
     this.#db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
+    // 이미 모두 적용한 파일은 쓰기 잠금 없이 연다. 다른 연결이 쓰는 중이어도 기다리지 않는다.
+    if (this.schemaVersion >= MIGRATIONS.length) return;
     for (const [index, sql] of MIGRATIONS.entries()) {
       this.#transaction(() => {
-        // 적용했는지는 쓰기 잠금을 잡은 뒤에 본다. 두 프로세스가 같은 새 파일을 열어도 한쪽만 적용한다.
+        // 적용했는지는 쓰기 잠금을 잡은 뒤에 다시 본다. 다른 프로세스가 먼저 적용했으면 건너뛴다.
+        // 여러 프로세스가 같은 새 파일을 동시에 열면, WAL 전환이 기다리지 않아 일부는 열기부터 실패할 수 있다.
+        // 이 앱은 파일 하나를 서버 하나가 쓰므로 그 경우를 다루지 않는다.
         if (this.schemaVersion > index) return;
         this.#db.exec(sql);
         this.#db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(index + 1);
