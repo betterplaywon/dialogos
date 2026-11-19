@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { GameView, TopicView } from '../../server/contract.ts';
-import { api, ApiError } from './api.ts';
+import { api } from './api.ts';
+import { sendTurn } from './turn-flow.ts';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
@@ -99,33 +100,17 @@ function Game({ initial, onLeave }: { initial: GameView; onLeave: () => void }) 
   async function send() {
     const text = draft.trim();
     if (!text || waiting || ending || game.ended) return;
-    const turnBefore = game.turn;
+    const before = game;
     setWaiting(true);
     setError(null);
-    // 보낸 말을 먼저 보이고, 답이 오면 덧붙인다.
-    setGame((g) => ({ ...g, messages: [...g.messages, { speaker: 'user', text }] }));
+    // 보낸 말을 먼저 보이고, 결과가 오면 sendTurn이 맞춘 판으로 바꾼다.
+    setGame({ ...before, messages: [...before.messages, { speaker: 'user', text }] });
     setDraft('');
     try {
-      const result = await api.turn(game.id, text);
-      setGame((g) => ({
-        ...g,
-        turn: result.turn,
-        ended: result.ended,
-        messages: [...g.messages, { speaker: 'opponent', text: result.reply }],
-      }));
-    } catch (e) {
-      // 서버가 거절했으면(4xx) 저장된 것이 없다. 그 밖의 실패는 응답만 잃었을 수 있으므로 판을 다시 불러 맞춘다.
-      const rejected = e instanceof ApiError && e.rejected;
-      const fresh = rejected ? null : await api.get(game.id).catch(() => null);
-      if (fresh && fresh.turn > turnBefore) {
-        setGame(fresh);
-        setError('응답을 받지 못했지만 서버에 답이 저장되어 있어 불러왔습니다.');
-      } else {
-        // 저장되지 않았으면 보낸 말을 입력 칸으로 되돌려 다시 보낼 수 있게 한다.
-        setGame(fresh ?? ((g) => ({ ...g, messages: g.messages.slice(0, -1) })));
-        setDraft(text);
-        setError(messageOf(e));
-      }
+      const settled = await sendTurn(api, before, text);
+      setGame(settled.game);
+      setDraft(settled.draft);
+      setError(settled.error);
     } finally {
       setWaiting(false);
     }

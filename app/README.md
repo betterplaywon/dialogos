@@ -34,8 +34,9 @@ npm run app:dev
 | `server/models.ts` | 모의 모델 |
 | `server/contract.ts` | 화면과 서버가 주고받는 모양 |
 | `web/` | React 화면 |
+| `web/src/turn-flow.ts` | 한 턴 보내기. 응답을 잃었을 때 판을 다시 불러 서버와 맞춥니다(검사 있음) |
 | `dev.ts` | 개발 명령(`npm run app:dev`) |
-| `tests/` | 서버 검사. `npm test`에 들어 있습니다 |
+| `tests/` | 서버와 한 턴 보내기의 검사. `npm test`에 들어 있습니다 |
 
 ## 주소
 
