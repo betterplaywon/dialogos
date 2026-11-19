@@ -94,11 +94,14 @@ export function openingState(question: Question): DialogueState {
 
 /**
  * 한 턴을 돈다. 엔진 조건이면 판정기가 먼저 "이 말이 남은 전제 하나를 무너뜨렸는가"를 판정하고,
- * 그 판정을 넣은 지시문으로 상대가 답한다. state의 history와 conceded를 고친다.
+ * 그 판정을 넣은 지시문으로 상대가 답한다.
+ * state의 history와 conceded는 턴을 끝까지 마쳤을 때만 바꾼다. 모델 호출이 실패하면 state는 그대로라,
+ * 같은 state로 다시 시도할 수 있다.
  */
 export async function runTurn(state: DialogueState, input: TurnInput): Promise<TurnOutcome> {
   const { question, card, condition, models, text } = input;
-  const { history, conceded } = state;
+  const history: ChatMessage[] = [...state.history];
+  const conceded = new Set(state.conceded);
   const opts: CompleteOptions = input.seed === undefined ? {} : { seed: input.seed };
   const lastReply = history[history.length - 1]?.content ?? '';
   history.push({ role: 'user', content: text });
@@ -142,6 +145,8 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
   const reply = await models.opponent.complete([{ role: 'system', content: system }, ...history], opts);
   const opponentMs = Math.round(performance.now() - started);
   history.push({ role: 'assistant', content: reply });
+  state.history = history;
+  state.conceded = conceded;
   return {
     reply,
     ...(decision ? { decision } : {}),

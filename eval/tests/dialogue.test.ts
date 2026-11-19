@@ -133,6 +133,43 @@ test('한 턴은 상태를 이어받아 판정과 답을 내고, seed가 없어�
   assert.equal(promptState.conceded.size, 0);
 });
 
+test('모델 호출이 실패한 턴은 상태를 바꾸지 않아, 같은 상태로 다시 할 수 있다', async () => {
+  const state = openingState(question);
+  const snapshot = () => ({ history: structuredClone(state.history), conceded: [...state.conceded] });
+  const before = snapshot();
+  const input = { question, card, condition: 'engine' as const, text: '반론입니다.' };
+
+  const failingJudge: ChatModel = {
+    name: 'failing-judge',
+    async complete() {
+      throw new Error('판정기 실패');
+    },
+  };
+  await assert.rejects(runTurn(state, { ...input, models: { opponent: recorder(() => '답입니다.'), judge: failingJudge } }), /판정기 실패/);
+  assert.deepEqual(snapshot(), before);
+
+  // 판정이 끝난 뒤 상대가 실패해도, 판정에서 거둔 전제와 사용자의 말이 남지 않는다.
+  const judge = recorder(() => '{"tactic":"argument","defeats":"P1","reason":"시험"}');
+  const failingOpponent: ChatModel = {
+    name: 'failing-opponent',
+    async complete() {
+      throw new Error('상대 실패');
+    },
+  };
+  await assert.rejects(runTurn(state, { ...input, models: { opponent: failingOpponent, judge } }), /상대 실패/);
+  assert.deepEqual(snapshot(), before);
+
+  // 다시 하면 처음 하는 턴과 같다. 판정기는 사용자의 말이 아니라 상대의 첫 발언을 직전 발언으로 본다.
+  const retried = await runTurn(state, { ...input, models: { opponent: recorder(() => '답입니다.'), judge } });
+  assert.equal(retried.decision?.defeats, 'P1');
+  assert.ok(judge.calls[1]?.[1]?.content.includes(`상대의 직전 발언: ${openingStatement(question)}`));
+  assert.deepEqual(state.history.slice(2), [
+    { role: 'user', content: '반론입니다.' },
+    { role: 'assistant', content: '답입니다.' },
+  ]);
+  assert.deepEqual([...state.conceded], ['P1']);
+});
+
 test('턴 수를 줄여 돌릴 수 있다', async () => {
   const dialogue = await run('engine', mock, { totalTurns: 14 });
   assert.equal(dialogue.turns.length, 14);
