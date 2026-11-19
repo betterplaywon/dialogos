@@ -28,12 +28,13 @@ function globToRegExp(glob) {
   return new RegExp(`${re}$`);
 }
 
-// 사람이 머지하는 경로: 실험 설계와 측정 도구, 돈이 드는 연결, 의존성과 명령, 비밀값 경계, 공개 문서, 규칙과 에이전트 장치.
+// 사람이 머지하는 경로: 실험 설계와 측정 도구, 서비스 주제 카드의 글, 돈이 드는 연결, 의존성과 명령, 비밀값 경계, 공개 문서, 규칙과 에이전트 장치.
 const SENSITIVE = [
   'eval/README.md',
   'eval/rubric.md',
   'eval/cards/**',
   'eval/questions/**',
+  'app/topics/*.json',
   'eval/src/prompts.ts',
   'eval/src/script.ts',
   'eval/src/metrics.ts',

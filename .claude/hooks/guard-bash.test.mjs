@@ -162,6 +162,27 @@ test('커밋할 변경에 금칙어나 비밀값이 있으면 막는다', (t) =>
   assert.equal(verdict('git commit -m "docs: 추가"', { cwd: dir }), 'allow');
 });
 
+test('사람이 머지하는 경로(주제 카드의 글 포함)를 건드린 PR의 머지는 막는다', (t) => {
+  // gh 대신 정해 둔 PR 정보를 내는 가짜 gh를 PATH 앞에 둔다. 실제 GitHub에는 묻지 않는다.
+  const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-gh-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\ncat "$FAKE_GH_JSON"\n', { mode: 0o755 });
+  const merge = (changed) => {
+    const json = path.join(dir, `${changed.replace(/\W/g, '_')}.json`);
+    const checks = [{ name: 'verify', conclusion: 'SUCCESS' }];
+    writeFileSync(json, JSON.stringify({ files: [{ path: changed }], isDraft: false, state: 'OPEN', statusCheckRollup: checks }));
+    return guard('gh pr merge 7 --merge', { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
+  };
+  for (const changed of ['app/topics/s01.json', 'eval/questions/q01.json', '.claude/hooks/guard-bash.mjs', 'CLAUDE.md']) {
+    const result = merge(changed);
+    assert.equal(result.verdict, 'block', changed);
+    assert.match(result.reason, /사람이 머지하는 경로/, changed);
+  }
+  for (const changed of ['app/topics/README.md', 'app/server/topics.ts', 'app/README.md']) {
+    assert.equal(merge(changed).verdict, 'allow', changed);
+  }
+});
+
 test('한 명령 안에서 스테이지에 올리고 커밋하거나, 커밋하고 push하면 막는다', () => {
   // 가드는 실행 전에 한 번만 보므로, 앞 조각이 올린 변경과 새 커밋은 뒤 조각을 검사할 때 아직 없다.
   for (const command of [

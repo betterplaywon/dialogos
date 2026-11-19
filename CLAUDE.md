@@ -57,6 +57,7 @@
 | 사람이 머지하는 경로 | 까닭 |
 | --- | --- |
 | `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준 |
+| `app/topics/*.json` | 서비스 주제 카드의 글(상대의 전제와 타당한 반론). 2026-11-19 사용자 결정 |
 | `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정 도구, 통과 판정 계산 |
 | `eval/src/providers/api.ts` | 돈이 드는 연결, 키 다루기 |
 | `package.json`, `package-lock.json`, `.env.example`, `.gitignore` | 의존성, `.env`를 읽는 위치, 커밋하지 않을 것 |
