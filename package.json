@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test eval/tests/*.test.ts .claude/hooks/*.test.mjs",
+    "test": "tsx --test eval/tests/*.test.ts app/tests/*.test.ts .claude/hooks/*.test.mjs",
     "check": "npm run typecheck && npm test",
     "eval:run": "tsx --env-file-if-exists=.env eval/src/run.ts",
     "eval:label": "tsx --env-file-if-exists=.env eval/src/label.ts",
