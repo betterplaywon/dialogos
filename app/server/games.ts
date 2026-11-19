@@ -56,8 +56,19 @@ function messagesOf(game: GameRecord): MessageView[] {
 }
 
 export function createGames(deps: GameDeps) {
-  /** 한 턴을 처리하는 중인 판. 서버가 하나일 때만 지켜진다. */
+  /** 한 턴이나 끝내기를 처리하는 중인 판. 서버가 하나일 때만 지켜진다. */
   const busy = new Set<string>();
+
+  /** 같은 판의 턴과 끝내기를 한 번에 하나씩만 처리한다. 둘이 겹치면 나중 저장이 앞의 저장을 지운다. */
+  async function exclusive<T>(id: string, work: () => Promise<T>): Promise<T> {
+    if (busy.has(id)) throw new GameError(409, '이 판의 앞 요청을 아직 처리하고 있습니다. 잠시 뒤 다시 해 주세요.');
+    busy.add(id);
+    try {
+      return await work();
+    } finally {
+      busy.delete(id);
+    }
+  }
 
   function topicOf(game: GameRecord): Topic {
     const topic = deps.topics.get(game.topicId);
@@ -114,9 +125,7 @@ export function createGames(deps: GameDeps) {
       const text = rawText.trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
       if (text.length > MAX_TEXT_LENGTH) throw new GameError(400, `한 턴에는 ${MAX_TEXT_LENGTH}자까지 보낼 수 있습니다.`);
-      if (busy.has(id)) throw new GameError(409, '앞의 말에 대한 답을 아직 만들고 있습니다.');
-      busy.add(id);
-      try {
+      return exclusive(id, async () => {
         const game = await load(id);
         if (game.endedAt) throw new GameError(409, '이미 끝난 판입니다.');
         if (game.turns.length >= MAX_TURNS) throw new GameError(409, `이 판은 ${MAX_TURNS}턴을 모두 마쳤습니다.`);
@@ -144,19 +153,18 @@ export function createGames(deps: GameDeps) {
         if (n >= MAX_TURNS) game.endedAt = deps.now().toISOString();
         await deps.store.save(game);
         return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined };
-      } finally {
-        busy.delete(id);
-      }
+      });
     },
 
     async end(id: string): Promise<GameView> {
-      if (busy.has(id)) throw new GameError(409, '앞의 말에 대한 답을 아직 만들고 있습니다.');
-      const game = await load(id);
-      if (!game.endedAt) {
-        game.endedAt = deps.now().toISOString();
-        await deps.store.save(game);
-      }
-      return viewOf(game);
+      return exclusive(id, async () => {
+        const game = await load(id);
+        if (!game.endedAt) {
+          game.endedAt = deps.now().toISOString();
+          await deps.store.save(game);
+        }
+        return viewOf(game);
+      });
     },
   };
 }

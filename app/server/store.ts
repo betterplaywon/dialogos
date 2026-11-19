@@ -37,13 +37,22 @@ export interface GameStore {
   save(game: GameRecord): Promise<void>;
 }
 
-/** 메모리 저장소. 꺼낼 때와 넣을 때 복사해, 밖에서 고쳐도 저장된 판이 바뀌지 않게 한다. */
+/**
+ * 메모리 저장소. 꺼낼 때와 넣을 때 복사해, 밖에서 고쳐도 저장된 판이 바뀌지 않게 한다.
+ * 오래 띄워 두어도 메모리가 계속 늘지 않게, 판이 상한을 넘으면 가장 먼저 만든 판부터 지운다.
+ */
 export class MemoryGameStore implements GameStore {
   readonly #games = new Map<string, GameRecord>();
+
+  constructor(readonly limit = 1000) {}
 
   async create(game: GameRecord): Promise<void> {
     if (this.#games.has(game.id)) throw new Error(`이미 있는 판입니다: ${game.id}`);
     this.#games.set(game.id, structuredClone(game));
+    for (const id of this.#games.keys()) {
+      if (this.#games.size <= this.limit) break;
+      this.#games.delete(id);
+    }
   }
 
   async get(id: string): Promise<GameRecord | undefined> {

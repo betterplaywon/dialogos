@@ -26,6 +26,16 @@ export function createApp(deps: AppDeps): Hono {
   const games = createGames(deps);
   const app = new Hono();
 
+  // 쓰는 요청은 JSON으로만 받는다. 다른 사이트가 브라우저로 보내는 단순 요청(폼, text/plain)은
+  // 여기서 막히고, JSON 요청은 브라우저가 먼저 허락을 묻는데 이 서버는 허락하지 않는다.
+  app.use('/api/*', async (c, next) => {
+    const type = c.req.header('content-type') ?? '';
+    if (c.req.method === 'POST' && !/^application\/json\b/i.test(type)) {
+      return c.json<ErrorResponse>({ error: 'JSON으로 보내 주세요(content-type: application/json).' }, 415);
+    }
+    await next();
+  });
+
   app.use(
     '/api/*',
     bodyLimit({
