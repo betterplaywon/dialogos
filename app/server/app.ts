@@ -3,8 +3,8 @@
 
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import type { ErrorResponse, Provider, TopicsResponse } from './contract.ts';
-import { createGames, GameError, type GameDeps } from './games.ts';
+import type { ErrorResponse, GamesResponse, Provider, TopicsResponse } from './contract.ts';
+import { createGames, GameError, LOCAL_USER, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
   provider: Provider;
@@ -13,6 +13,8 @@ export interface AppDeps extends GameDeps {
    * 악성 사이트가 자기 주소를 이 컴퓨터(127.0.0.1)로 바꿔 서버를 부르는 공격(DNS 리바인딩)을 막으려는 것이다.
    */
   allowedHosts?: readonly string[];
+  /** 요청한 사용자. 주지 않으면 모두 LOCAL_USER다. 로그인(3주 차)을 붙이면 여기서 사람을 가린다. */
+  userOf?: (request: Request) => string;
 }
 
 /** 요청 본문 상한. 한 턴의 글(1,000자)을 담고도 남는다. */
@@ -59,23 +61,27 @@ export function createApp(deps: AppDeps): Hono {
     }),
   );
 
+  const userOf = deps.userOf ?? (() => LOCAL_USER);
+
   app.get('/api/topics', (c) => c.json<TopicsResponse>({ provider: deps.provider, topics: games.topics() }));
+
+  app.get('/api/games', async (c) => c.json<GamesResponse>({ games: await games.list(userOf(c.req.raw)) }));
 
   app.post('/api/games', async (c) => {
     const { topicId } = await readBody(c.req);
     if (typeof topicId !== 'string') throw new GameError(400, '주제(topicId)가 필요합니다.');
-    return c.json(await games.start(topicId), 201);
+    return c.json(await games.start(userOf(c.req.raw), topicId), 201);
   });
 
-  app.get('/api/games/:id', async (c) => c.json(await games.get(c.req.param('id'))));
+  app.get('/api/games/:id', async (c) => c.json(await games.get(userOf(c.req.raw), c.req.param('id'))));
 
   app.post('/api/games/:id/turns', async (c) => {
     const { text } = await readBody(c.req);
     if (typeof text !== 'string') throw new GameError(400, '보낼 말(text)이 필요합니다.');
-    return c.json(await games.turn(c.req.param('id'), text));
+    return c.json(await games.turn(userOf(c.req.raw), c.req.param('id'), text));
   });
 
-  app.post('/api/games/:id/end', async (c) => c.json(await games.end(c.req.param('id'))));
+  app.post('/api/games/:id/end', async (c) => c.json(await games.end(userOf(c.req.raw), c.req.param('id'))));
 
   app.notFound((c) => c.json<ErrorResponse>({ error: '없는 주소입니다.' }, 404));
 

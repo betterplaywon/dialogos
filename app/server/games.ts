@@ -4,13 +4,22 @@
 import { openingState, runTurn, type DialogueModels } from '../../eval/src/dialogue.ts';
 import { DEFAULT_TURNS } from '../../eval/src/script.ts';
 import type { Card, Question } from '../../eval/src/types.ts';
-import type { GameView, MessageView, TopicView, TurnResponse } from './contract.ts';
+import type { GameSummaryView, GameView, MessageView, TopicView, TurnResponse } from './contract.ts';
 import type { GameRecord, GameStore, Mode } from './store.ts';
 
 /** 한 판에서 사용자가 보낼 수 있는 턴 수. 판정 실험이 잰 대화 길이와 같다. */
 export const MAX_TURNS = DEFAULT_TURNS;
 /** 한 턴에 받는 글자 수. 말로 1분쯤 하는 양(300~400자)을 넉넉히 넘는다. */
 export const MAX_TEXT_LENGTH = 1000;
+/** 지난 판 목록에 보이는 판 수. */
+export const RECENT_GAMES = 20;
+/** 로그인을 붙이기 전의 사용자. 3주 차에 사람마다 다른 사용자로 바꾼다. */
+export const LOCAL_USER = 'local';
+/**
+ * 받은 말에서 지우는 보이지 않는 제어 문자(줄바꿈, 탭은 남긴다).
+ * Node 22.13의 node:sqlite는 U+0000에서 글을 잘라 저장해, 턴 기록과 대화가 어긋났다.
+ */
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 export interface Topic {
   question: Question;
@@ -56,17 +65,22 @@ function messagesOf(game: GameRecord): MessageView[] {
 }
 
 export function createGames(deps: GameDeps) {
-  /** 한 턴이나 끝내기를 처리하는 중인 판. 서버가 하나일 때만 지켜진다. */
+  /** 한 턴이나 끝내기를 처리하는 중인 (사용자, 판). 서버가 하나일 때만 지켜진다. */
   const busy = new Set<string>();
 
-  /** 같은 판의 턴과 끝내기를 한 번에 하나씩만 처리한다. 둘이 겹치면 나중 저장이 앞의 저장을 지운다. */
-  async function exclusive<T>(id: string, work: () => Promise<T>): Promise<T> {
-    if (busy.has(id)) throw new GameError(409, '이 판의 앞 요청을 아직 처리하고 있습니다. 잠시 뒤 다시 해 주세요.');
-    busy.add(id);
+  /**
+   * 같은 사용자의 같은 판에 온 턴과 끝내기를 한 번에 하나씩만 처리한다. 둘이 겹치면 나중 저장이 앞의 저장을 지운다.
+   * 잠금을 사용자별로 잡고 판의 주인은 그 안에서 확인한다. 그래서 남의 요청은 판이 처리 중이어도
+   * '없는 판'(404)이 되고(판이 있는지 드러나지 않음), 주인의 요청을 막지도 않는다.
+   */
+  async function exclusive<T>(userId: string, id: string, work: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([userId, id]);
+    if (busy.has(key)) throw new GameError(409, '이 판의 앞 요청을 아직 처리하고 있습니다. 잠시 뒤 다시 해 주세요.');
+    busy.add(key);
     try {
       return await work();
     } finally {
-      busy.delete(id);
+      busy.delete(key);
     }
   }
 
@@ -88,9 +102,10 @@ export function createGames(deps: GameDeps) {
     };
   }
 
-  async function load(id: string): Promise<GameRecord> {
+  /** 그 사용자의 판만 꺼낸다. 남의 판은 있는지도 알리지 않고 '없는 판'으로 답한다. */
+  async function load(userId: string, id: string): Promise<GameRecord> {
     const game = await deps.store.get(id);
-    if (!game) throw new GameError(404, '없는 판입니다.');
+    if (!game || game.userId !== userId) throw new GameError(404, '없는 판입니다.');
     return game;
   }
 
@@ -99,12 +114,32 @@ export function createGames(deps: GameDeps) {
       return [...deps.topics.values()].map(topicView);
     },
 
-    async start(topicId: string): Promise<GameView> {
+    /** 최근에 시작한 판부터. 주제가 사라진 판은 뺀다. */
+    async list(userId: string): Promise<GameSummaryView[]> {
+      const summaries = await deps.store.list(userId, RECENT_GAMES);
+      return summaries.flatMap((summary) => {
+        const topic = deps.topics.get(summary.topicId);
+        if (!topic) return [];
+        return [
+          {
+            id: summary.id,
+            topic: topicView(topic),
+            turn: summary.turns,
+            maxTurns: MAX_TURNS,
+            ended: summary.endedAt !== undefined,
+            startedAt: summary.startedAt,
+          },
+        ];
+      });
+    },
+
+    async start(userId: string, topicId: string): Promise<GameView> {
       const topic = deps.topics.get(topicId);
       if (!topic) throw new GameError(404, '없는 주제입니다.');
       const state = openingState(topic.question);
       const game: GameRecord = {
         id: deps.newId(),
+        userId,
         topicId,
         cardId: topic.card.id,
         mode: deps.pickMode(),
@@ -117,16 +152,16 @@ export function createGames(deps: GameDeps) {
       return viewOf(game);
     },
 
-    async get(id: string): Promise<GameView> {
-      return viewOf(await load(id));
+    async get(userId: string, id: string): Promise<GameView> {
+      return viewOf(await load(userId, id));
     },
 
-    async turn(id: string, rawText: string): Promise<TurnResponse> {
-      const text = rawText.trim();
+    async turn(userId: string, id: string, rawText: string): Promise<TurnResponse> {
+      const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
       if (text.length > MAX_TEXT_LENGTH) throw new GameError(400, `한 턴에는 ${MAX_TEXT_LENGTH}자까지 보낼 수 있습니다.`);
-      return exclusive(id, async () => {
-        const game = await load(id);
+      return exclusive(userId, id, async () => {
+        const game = await load(userId, id);
         if (game.endedAt) throw new GameError(409, '이미 끝난 판입니다.');
         if (game.turns.length >= MAX_TURNS) throw new GameError(409, `이 판은 ${MAX_TURNS}턴을 모두 마쳤습니다.`);
         const topic = topicOf(game);
@@ -156,9 +191,9 @@ export function createGames(deps: GameDeps) {
       });
     },
 
-    async end(id: string): Promise<GameView> {
-      return exclusive(id, async () => {
-        const game = await load(id);
+    async end(userId: string, id: string): Promise<GameView> {
+      return exclusive(userId, id, async () => {
+        const game = await load(userId, id);
         if (!game.endedAt) {
           game.endedAt = deps.now().toISOString();
           await deps.store.save(game);

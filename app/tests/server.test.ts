@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { firstUserMessage, openingStatement } from '../../eval/src/script.ts';
 import type { ChatMessage, ChatModel } from '../../eval/src/types.ts';
 import { createApp, type AppDeps } from '../server/app.ts';
-import type { GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
+import type { GamesResponse, GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
 import { MAX_TEXT_LENGTH, MAX_TURNS } from '../server/games.ts';
 import { mockModels } from '../server/models.ts';
+import { SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type Mode } from '../server/store.ts';
 import { loadTopics } from '../server/topics.ts';
 
@@ -230,6 +234,7 @@ test('저장이 느려도 같은 판의 턴과 끝내기가 서로의 저장을 
       await delay(10);
       return inner.save(game);
     },
+    list: (userId: string, limit: number) => inner.list(userId, limit),
   };
   const { app } = setup({ store: slowStore, pickMode: () => 'prompt' });
   for (let round = 0; round < 5; round++) {
@@ -264,6 +269,138 @@ test('받을 주소를 정하면 다른 주소(Host)로 들어온 요청을 막�
   assert.equal((await post('127.0.0.1:9999')).status, 403);
   assert.equal(await store.get('g1'), undefined);
   assert.equal((await post('127.0.0.1:8787')).status, 201);
+});
+
+test('지난 판 목록은 최근에 시작한 판부터 나오고, 방식은 싣지 않는다', async () => {
+  const { app } = setup();
+  assert.deepEqual((await call<GamesResponse>(app, 'GET', '/api/games')).data, { games: [] });
+  const first = await startQ01(app);
+  const second = (await call<GameView>(app, 'POST', '/api/games', { body: { topicId: 'q02' } })).data;
+  await call(app, 'POST', `/api/games/${first.id}/turns`, { body: { text: '반론입니다.' } });
+  await call(app, 'POST', `/api/games/${first.id}/end`);
+
+  const { status, data } = await call<GamesResponse>(app, 'GET', '/api/games');
+  assert.equal(status, 200);
+  assert.deepEqual(
+    data.games.map((g) => [g.id, g.topic.id, g.turn, g.ended]),
+    [
+      [second.id, 'q02', 0, false],
+      [first.id, 'q01', 1, true],
+    ],
+  );
+  assert.equal(data.games[0]?.maxTurns, MAX_TURNS);
+  for (const hidden of ['"mode"', '"engine"', '"prompt"', '"decision"']) assert.ok(!JSON.stringify(data).includes(hidden), hidden);
+});
+
+test('남의 판은 보거나 이어 하거나 끝낼 수 없고, 목록에도 나오지 않는다', async () => {
+  // 로그인을 붙이면 userOf가 사람을 가린다. 여기서는 머리글로 사용자를 흉내 낸다.
+  const { app, store } = setup({ userOf: (request) => request.headers.get('x-test-user') ?? 'local' });
+  const as = (user: string, method: 'GET' | 'POST', path: string, body?: unknown) =>
+    app.request(path, {
+      method,
+      headers: { 'x-test-user': user, ...(method === 'POST' ? { 'content-type': 'application/json' } : {}) },
+      ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
+    });
+  const mine = (await (await as('a', 'POST', '/api/games', { topicId: 'q01' })).json()) as GameView;
+  assert.equal((await store.get(mine.id))?.userId, 'a');
+
+  for (const [method, path, body] of [
+    ['GET', `/api/games/${mine.id}`, undefined],
+    ['POST', `/api/games/${mine.id}/turns`, { text: '반론입니다.' }],
+    ['POST', `/api/games/${mine.id}/end`, {}],
+  ] as const) {
+    const response = await as('b', method, path, body);
+    assert.equal(response.status, 404, `${method} ${path}`);
+    assert.deepEqual(await response.json(), { error: '없는 판입니다.' });
+  }
+  assert.deepEqual(((await (await as('b', 'GET', '/api/games')).json()) as GamesResponse).games, []);
+  assert.equal(((await (await as('a', 'GET', '/api/games')).json()) as GamesResponse).games.length, 1);
+  // 남이 보낸 요청은 판을 바꾸지 않았다.
+  const saved = await store.get(mine.id);
+  assert.deepEqual([saved?.turns.length, saved?.endedAt], [0, undefined]);
+});
+
+test('남의 판이 처리 중이어도 남의 요청은 404이고, 주인의 요청을 막지 않는다', async () => {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const slow: ChatModel = {
+    name: 'slow',
+    async complete() {
+      await gate;
+      return '답입니다.';
+    },
+  };
+  const { app } = setup({
+    models: { opponent: slow, judge: recorder(() => '{}') },
+    pickMode: () => 'prompt',
+    userOf: (request) => request.headers.get('x-test-user') ?? 'local',
+  });
+  const as = (user: string, path: string, body: unknown = {}) =>
+    app.request(path, { method: 'POST', headers: { 'x-test-user': user, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const game = (await (await as('a', '/api/games', { topicId: 'q01' })).json()) as GameView;
+
+  // a의 턴이 답을 기다리는 동안 b가 같은 판에 보낸다. 판이 있는지 드러나지 않게 404여야 한다.
+  const pending = as('a', `/api/games/${game.id}/turns`, { text: 'a의 반론입니다.' });
+  await delay(20);
+  for (const path of [`/api/games/${game.id}/turns`, `/api/games/${game.id}/end`]) {
+    const response = await as('b', path, { text: 'b의 말입니다.' });
+    assert.equal(response.status, 404, path);
+    assert.deepEqual(await response.json(), { error: '없는 판입니다.' });
+  }
+  release();
+  assert.equal((await pending).status, 200);
+
+  // b의 요청과 겹친 a의 끝내기는 막히지 않는다.
+  const [byOther, byOwner] = await Promise.all([as('b', `/api/games/${game.id}/end`), as('a', `/api/games/${game.id}/end`)]);
+  assert.deepEqual([byOther.status, byOwner.status], [404, 200]);
+});
+
+test('보이지 않는 제어 문자는 지우고, 줄바꿈은 남겨 저장한다', async (t) => {
+  const store = new SqliteGameStore(':memory:');
+  t.after(() => store.close());
+  const { app } = setup({ store, pickMode: () => 'prompt' });
+  const game = await startQ01(app);
+  const sent = await call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '앞부분\u0000뒷부분\u0007은 반론입니다.\n둘째 줄' } });
+  assert.equal(sent.status, 200);
+  const saved = await store.get(game.id);
+  assert.equal(saved?.turns[0]?.user, '앞부분뒷부분은 반론입니다.\n둘째 줄');
+  assert.equal(saved?.history[2]?.content, '앞부분뒷부분은 반론입니다.\n둘째 줄');
+  // 제어 문자만 있는 말은 빈 말로 본다.
+  assert.equal((await call(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '\u0000\u0001 ' } })).status, 400);
+});
+
+test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할 수 있다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-app-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+
+  const firstStore = new SqliteGameStore(path);
+  const first = setup({ store: firstStore }).app;
+  const game = await startQ01(first);
+  await call(first, 'POST', `/api/games/${game.id}/turns`, { body: { text: '첫 반론입니다.' } });
+  firstStore.close();
+
+  // 다시 띄운 서버(새 저장소 객체)에서 같은 판을 불러 이어 간다.
+  const secondStore = new SqliteGameStore(path);
+  t.after(() => secondStore.close());
+  const second = setup({ store: secondStore }).app;
+  const reopened = await call<GameView>(second, 'GET', `/api/games/${game.id}`);
+  assert.equal(reopened.status, 200);
+  assert.equal(reopened.data.turn, 1);
+  assert.equal(reopened.data.messages.length, 4);
+  const next = await call<TurnResponse>(second, 'POST', `/api/games/${game.id}/turns`, { body: { text: '둘째 반론입니다.' } });
+  assert.deepEqual([next.status, next.data.turn], [200, 2]);
+  const saved = await secondStore.get(game.id);
+  assert.deepEqual(
+    saved?.turns.map((turn) => [turn.n, turn.user]),
+    [
+      [1, '첫 반론입니다.'],
+      [2, '둘째 반론입니다.'],
+    ],
+  );
+  assert.equal(saved?.history.length, 6);
 });
 
 test('메모리 저장소는 상한을 넘으면 가장 먼저 만든 판부터 지운다', async () => {
