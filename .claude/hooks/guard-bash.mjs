@@ -380,10 +380,8 @@ function identityProblem(seg) {
 }
 
 /** 이번 커밋에 들어갈 변경의 더한 줄만 파일별로 검사한다. -a면 추적 중인 파일의 변경 전체가 들어간다. */
-function stagedProblem(words) {
-  const all = words.some((w) => w === '--all' || /^-[a-zA-Z]*a/.test(w));
-  const diff = git(all ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color'], cwd);
-  if (!diff) return null;
+/** diff에서 더한 줄만 파일별로 모아 금칙어, 이메일, 비밀값을 찾는다. label은 안내에 쓰는 이름이다. */
+function addedLinesProblem(diff, label) {
   const added = new Map();
   let file = '?';
   for (const line of diff.split('\n')) {
@@ -393,12 +391,18 @@ function stagedProblem(words) {
   const list = forbiddenWords();
   for (const [name, text] of added) {
     const hit = list.find(({ word }) => text.includes(word));
-    if (hit) return `커밋할 변경(${name})에 금칙어가 있다(notes/forbidden-words.txt ${hit.line}번째 줄).`;
+    if (hit) return `${label}(${name})에 금칙어가 있다(notes/forbidden-words.txt ${hit.line}번째 줄).`;
     if ((text.match(EMAIL) ?? []).some((e) => !ALLOWED_EMAIL.test(e)))
-      return `커밋할 변경(${name})에 이메일 주소가 있다(AGENTS.md 2번). noreply 주소와 예시 도메인만 쓴다.`;
-    if (SECRETS.some((re) => re.test(text))) return `커밋할 변경(${name})에 비밀값으로 보이는 문자열이 있다(AGENTS.md 1번).`;
+      return `${label}(${name})에 이메일 주소가 있다(AGENTS.md 2번). noreply 주소와 예시 도메인만 쓴다.`;
+    if (SECRETS.some((re) => re.test(text))) return `${label}(${name})에 비밀값으로 보이는 문자열이 있다(AGENTS.md 1번).`;
   }
   return null;
+}
+
+function stagedProblem(words) {
+  const all = words.some((w) => w === '--all' || /^-[a-zA-Z]*a/.test(w));
+  const diff = git(all ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color'], cwd);
+  return diff ? addedLinesProblem(diff, '커밋할 변경') : null;
 }
 
 // 커밋 전 게이트: npm run check(형식 검사와 검사, 4초 안팎). CI도 같은 명령을 돌린다.
@@ -422,10 +426,24 @@ function overrideIdentityProblem(words, assigns) {
   return values.some((v) => !/noreply/i.test(v)) ? '커밋 명령에 붙인 작성자 주소가 noreply 주소가 아니다(AGENTS.md 3번). 주소는 출력하지 않는다.' : null;
 }
 
+/** -F(--file)로 넘긴 메시지 파일. 읽지 못하면 검사할 수 없으므로 막는다. */
+function messageFromFile(seg) {
+  const file = optionValue(seg, ['-F', '--file']);
+  if (file === null) return null;
+  if (file === '-') return { problem: '커밋 메시지를 표준 입력(-F -)으로 넘기지 않는다. -m이나 메시지 파일을 쓴다.' };
+  try {
+    return { text: readFileSync(path.resolve(cwd, file), 'utf8') };
+  } catch {
+    return { problem: `커밋 메시지 파일을 읽지 못했다: ${file}. 파일을 먼저 만들고, 커밋은 따로 실행한다.` };
+  }
+}
+
 function checkCommit(seg, words, assigns = {}) {
   if (words.includes('--no-verify') || words.includes('-n')) return '--no-verify 금지.';
-  // 메시지는 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체에서 찾는다.
-  const message = commitMessage(command);
+  // 메시지는 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체에서 찾는다. -F면 그 파일을 읽는다.
+  const fromFile = messageFromFile(seg);
+  if (fromFile?.problem) return fromFile.problem;
+  const message = commitMessage(command) ?? fromFile?.text ?? null;
   if (message) {
     const subject = message.split('\n')[0].trim();
     if (!COMMIT_SUBJECT.test(subject) && !/^(Merge|Revert) /.test(subject))
@@ -458,7 +476,11 @@ function checkPush(words) {
   if ((refs.length === 0 || refs.every((r) => r === 'HEAD')) && currentBranch(cwd) === 'main')
     return '지금 main에 있다. `git switch -c <type>/<짧은-설명>` 뒤에 push한다. 저장소의 첫 push는 사용자가 한다.';
   const outgoing = git(['log', '--format=%B', 'origin/main..HEAD'], cwd);
-  return outgoing ? publicTextProblem(outgoing) : null;
+  const messageProblem = outgoing ? publicTextProblem(outgoing) : null;
+  if (messageProblem) return messageProblem;
+  // 커밋할 때의 검사를 비켜 간 변경(다른 도구로 만든 커밋 등)이 공개 브랜치로 나가지 않게, 보낼 커밋의 더한 줄도 본다.
+  const patch = git(['log', '-p', '-U0', '--no-color', '--format=', 'origin/main..HEAD'], cwd);
+  return patch ? addedLinesProblem(patch, '보낼 커밋의 변경') : null;
 }
 
 function checkSegment(seg, words, assigns) {
@@ -558,9 +580,42 @@ function checkShell(words, depth) {
   return check(words.slice(at + 1).join(' ').replace(/^["']|["']$/g, ''), depth + 1);
 }
 
+/** git 조각의 하위 명령(add, commit, push …). git이 아니면 null. */
+function gitSubcommand(words) {
+  if (words[0] !== 'git') return null;
+  const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
+  return at === -1 ? null : words[at];
+}
+
+const STAGING = new Set(['add', 'stage', 'rm', 'mv', 'apply']);
+const MAKES_COMMITS = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'pull', 'am']);
+
+/**
+ * 가드는 명령을 실행하기 전에 한 번만 본다. 그래서 한 명령 안에서 앞 조각이 스테이지에 올린 변경이나 새로 만든 커밋은
+ * 뒤 조각(commit, push)을 검사할 때 아직 없다. 2026-11-19에 이 틈으로 금칙어가 든 커밋이 공개 브랜치에 나갔다.
+ */
+function sequenceProblem(cmd) {
+  const subs = [];
+  for (const seg of segments(cmd)) {
+    const run = unwrap(tokens(seg));
+    const sub = run ? gitSubcommand(run.words) : null;
+    if (sub) subs.push(sub);
+  }
+  for (const [i, sub] of subs.entries()) {
+    const before = subs.slice(0, i);
+    if (sub === 'commit' && before.some((b) => STAGING.has(b)))
+      return 'git add(스테이지에 올리기)와 git commit을 한 명령에 묶지 않는다. 가드가 커밋할 변경을 미리 볼 수 있게 add를 먼저 따로 실행한다.';
+    if (sub === 'push' && before.some((b) => MAKES_COMMITS.has(b)))
+      return '커밋을 만드는 명령과 git push를 한 명령에 묶지 않는다. 가드가 보낼 커밋을 미리 볼 수 있게 push는 따로 실행한다.';
+  }
+  return null;
+}
+
 function check(cmd, depth = 0) {
   if (depth > 4) return null;
   for (const [re, reason] of WHOLE_COMMAND_RULES) if (re.test(cmd)) return reason;
+  const sequence = sequenceProblem(cmd);
+  if (sequence) return sequence;
   for (const match of cmd.matchAll(SUBSTITUTION)) {
     const reason = check(match[1], depth + 1);
     if (reason) return reason;
