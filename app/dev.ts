@@ -19,6 +19,8 @@ const app = createApp({
   pickMode: randomMode,
   newId: () => crypto.randomUUID(),
   now: () => new Date(),
+  // 화면 서버는 /api를 넘길 때 주소를 이 서버의 것으로 바꾼다(vite.config.ts의 changeOrigin).
+  allowedHosts: [`127.0.0.1:${API_PORT}`, `localhost:${API_PORT}`],
 });
 
 serve({ fetch: app.fetch, port: API_PORT, hostname: '127.0.0.1' }, (info) => {

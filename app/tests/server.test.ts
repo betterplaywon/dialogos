@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { firstUserMessage, openingStatement } from '../../eval/src/script.ts';
 import type { ChatMessage, ChatModel } from '../../eval/src/types.ts';
-import { createApp } from '../server/app.ts';
+import { createApp, type AppDeps } from '../server/app.ts';
 import type { GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
-import { MAX_TEXT_LENGTH, MAX_TURNS, type GameDeps } from '../server/games.ts';
+import { MAX_TEXT_LENGTH, MAX_TURNS } from '../server/games.ts';
 import { mockModels } from '../server/models.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type Mode } from '../server/store.ts';
 import { loadTopics } from '../server/topics.ts';
@@ -28,7 +28,7 @@ function recorder(reply: (messages: ChatMessage[], call: number) => string): Cha
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function setup(overrides: Partial<GameDeps> = {}) {
+function setup(overrides: Partial<AppDeps> = {}) {
   let next = 0;
   const store = new MemoryGameStore();
   const app = createApp({
@@ -244,6 +244,26 @@ test('저장이 느려도 같은 판의 턴과 끝내기가 서로의 저장을 
     if (end.status === 200) assert.deepEqual([saved?.endedAt !== undefined, saved?.turns.length], [true, 0]);
     else assert.deepEqual([saved?.endedAt, saved?.turns.length], [undefined, 1]);
   }
+});
+
+test('받을 주소를 정하면 다른 주소(Host)로 들어온 요청을 막는다', async () => {
+  // 악성 사이트가 자기 주소를 127.0.0.1로 바꿔 부르는 경우(DNS 리바인딩)에는 Host가 그 사이트의 주소다.
+  const { app, store } = setup({ allowedHosts: ['127.0.0.1:8787', 'localhost:8787'] });
+  const post = (host: string) =>
+    app.request(`http://${host}/api/games`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topicId: 'q01' }),
+    });
+  assert.equal((await app.request('http://127.0.0.1:8787/api/topics')).status, 200);
+  assert.equal((await app.request('http://localhost:8787/api/topics')).status, 200);
+  const evil = await app.request('http://evil.example:8787/api/topics');
+  assert.equal(evil.status, 403);
+  assert.match(((await evil.json()) as { error: string }).error, /[가-힣]/);
+  assert.equal((await post('evil.example:8787')).status, 403);
+  assert.equal((await post('127.0.0.1:9999')).status, 403);
+  assert.equal(await store.get('g1'), undefined);
+  assert.equal((await post('127.0.0.1:8787')).status, 201);
 });
 
 test('메모리 저장소는 상한을 넘으면 가장 먼저 만든 판부터 지운다', async () => {

@@ -8,6 +8,11 @@ import { createGames, GameError, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
   provider: Provider;
+  /**
+   * 받을 주소(Host). 주면 다른 주소로 들어온 요청을 막는다.
+   * 악성 사이트가 자기 주소를 이 컴퓨터(127.0.0.1)로 바꿔 서버를 부르는 공격(DNS 리바인딩)을 막으려는 것이다.
+   */
+  allowedHosts?: readonly string[];
 }
 
 /** 요청 본문 상한. 한 턴의 글(1,000자)을 담고도 남는다. */
@@ -25,6 +30,16 @@ async function readBody(request: { json(): Promise<unknown> }): Promise<Record<s
 export function createApp(deps: AppDeps): Hono {
   const games = createGames(deps);
   const app = new Hono();
+
+  if (deps.allowedHosts) {
+    const allowed = new Set(deps.allowedHosts);
+    app.use('*', async (c, next) => {
+      if (!allowed.has(new URL(c.req.url).host)) {
+        return c.json<ErrorResponse>({ error: '허용하지 않은 주소로 들어온 요청입니다.' }, 403);
+      }
+      await next();
+    });
+  }
 
   // 쓰는 요청은 JSON으로만 받는다. 다른 사이트가 브라우저로 보내는 단순 요청(폼, text/plain)은
   // 여기서 막히고, JSON 요청은 브라우저가 먼저 허락을 묻는데 이 서버는 허락하지 않는다.
