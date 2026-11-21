@@ -73,7 +73,7 @@ const PROBLEM_OF_ERROR = new Map<string, ListenProblem>([
 export interface ListenTimings {
   /** 듣기 시작한 뒤 첫 결과를 기다리는 시간. */
   firstResultMs: number;
-  /** 마지막 결과 뒤로 새 결과가 없으면 말이 끝난 것으로 보는 시간. */
+  /** 들은 글이 이만큼 동안 달라지지 않으면 말이 끝난 것으로 본다. */
   silenceMs: number;
   /** stop()을 부르거나 오류가 난 뒤 end를 기다리는 시간. */
   stopMs: number;
@@ -185,12 +185,10 @@ export function listenOnce(
   recognizer.onresult = (event) => {
     if (phase === 'done') return;
     const text = textOf(event.results);
-    // 빈 결과는 아직 말을 듣지 못한 것이다. 첫 결과를 계속 기다린다.
-    if (text === '' && heard === '') return;
-    if (text !== heard) {
-      heard = text;
-      handlers.onInterim(text);
-    }
+    // 글이 그대로면 새로 들은 것이 없다. 빈 첫 결과와 같은 글이 되풀이해 오는 결과는 조용함을 미루지 않는다.
+    if (text === heard) return;
+    heard = text;
+    handlers.onInterim(text);
     // stop()을 부른 뒤의 결과(확정된 글)는 받되, 조용함을 다시 재지 않는다.
     if (phase === 'listening') after(timings.silenceMs, requestStop);
   };

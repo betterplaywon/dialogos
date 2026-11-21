@@ -90,6 +90,20 @@ test('스스로 끝내지 않는 인식기는 조용해진 지 2.5초 뒤에 sto
   assert.equal(done.length, 1);
 });
 
+test('같은 글이 되풀이해 오는 결과는 새로 들은 것으로 치지 않아 조용함을 미루지 않는다', (t) => {
+  const { recognizer, interims, tick } = listen(t);
+  recognizer.result('거짓말은 옳지 않습니다');
+  // 말은 끝났는데 인식기가 같은 글을 계속 내는 경우. 끝없이 듣지 않는다.
+  for (let n = 0; n < 4; n++) {
+    tick(600);
+    recognizer.result('거짓말은 옳지 않습니다');
+  }
+  assert.deepEqual(recognizer.calls, ['start']);
+  tick(100);
+  assert.deepEqual(recognizer.calls, ['start', 'stop']);
+  assert.deepEqual(interims, ['거짓말은 옳지 않습니다']);
+});
+
 test('stop을 부른 뒤에 온 결과는 조용함을 다시 재지 않는다', (t) => {
   const { recognizer, done, tick } = listen(t);
   recognizer.result('거짓말은');
