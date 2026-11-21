@@ -128,7 +128,8 @@ export function listenOnce(
     try {
       recognizer.abort();
     } catch {
-      // 이미 끝난 인식기다.
+      // 명세는 끝난 인식기의 abort()를 무시하라고 하지만, Chrome 밖에서는 확인하지 못했다.
+      // 여기서 예외가 나가면 끝났다는 알림이 빠져 화면이 듣는 중에 갇힌다.
     }
   }
 
@@ -179,8 +180,8 @@ export function listenOnce(
   if (options.processLocally) recognizer.processLocally = true;
 
   recognizer.onstart = () => {
-    // 인식기가 실제로 듣기 시작한 때부터 다시 잰다. 마이크 허락 창에 답하느라 늦어진 시간을 빼려는 것이다
-    // (허락 창이 떠 있는 동안 start 이벤트가 미뤄지는지는 이 환경에서 확인하지 못했다).
+    // 인식기가 실제로 듣기 시작한 때부터 다시 잰다. 마이크 허락 창에 답하느라 늦어진 시간을 빼려는 것이다.
+    // 명세는 start를 권한 확인 뒤 듣기 시작할 때 낸다고 한다. 허락 창이 실제로 뜨는 흐름은 이 환경에서 보지 못했다.
     if (phase === 'listening' && heard === '') after(timings.firstResultMs, requestStop);
   };
   recognizer.onresult = (event) => {

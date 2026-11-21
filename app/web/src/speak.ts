@@ -82,14 +82,8 @@ export function styleOf(characterId: string | undefined): VoiceStyle {
 export const SPEECH_CHUNK_CHARS = 80;
 
 /** 문장 끝 부호 뒤의 공백. 닫는 따옴표와 괄호는 앞 문장에 붙인다. '3.5'는 뒤에 공백이 없어 나뉘지 않는다. */
-const AFTER_SENTENCE_END = /([.!?…][)\]"'”’]*)\s+/gu;
-const AFTER_COMMA = /([,，、])\s+/gu;
-
-/**
- * 부호 뒤의 공백에서 나누고, 부호는 앞 조각에 남긴다. 줄바꿈은 먼저 나뉘어 글 안에 없으므로 나눌 자리의 표시로 쓴다.
- * 뒤돌아보기(lookbehind) 정규식으로 쓰면 더 짧지만, 그 문법을 모르는 브라우저(Safari 16.3까지)는 스크립트 전체를 읽지 못한다.
- */
-const splitAfter = (text: string, gap: RegExp): string[] => text.replace(gap, '$1\n').split('\n');
+const SENTENCE_GAP = /(?<=[.!?…][)\]"'”’]*)\s+/u;
+const COMMA_GAP = /(?<=[,，、])\s+/u;
 
 /** 이어진 조각들을 상한을 넘지 않는 만큼씩 다시 붙인다. */
 function pack(parts: readonly string[], limit: number): string[] {
@@ -113,7 +107,7 @@ function slices(word: string, limit: number): string[] {
 /** 상한을 넘는 문장을 쉼표에서, 그래도 길면 공백에서 나눈다. */
 function fit(sentence: string, limit: number): string[] {
   if (sentence.length <= limit) return [sentence];
-  return pack(splitAfter(sentence, AFTER_COMMA), limit).flatMap((clause) => {
+  return pack(sentence.split(COMMA_GAP), limit).flatMap((clause) => {
     if (clause.length <= limit) return [clause];
     return pack(clause.split(/\s+/), limit).flatMap((piece) => (piece.length <= limit ? [piece] : slices(piece, limit)));
   });
@@ -145,7 +139,7 @@ export function splitForSpeech(text: string, maxChars = SPEECH_CHUNK_CHARS): str
   const limit = Math.max(1, Math.floor(maxChars));
   return text
     .split(/\n+/)
-    .flatMap((line) => joinListNumbers(splitAfter(line.trim(), AFTER_SENTENCE_END)))
+    .flatMap((line) => joinListNumbers(line.trim().split(SENTENCE_GAP)))
     .flatMap((sentence) => fit(sentence, limit))
     .filter((chunk) => /[\p{L}\p{N}]/u.test(chunk));
 }
@@ -161,7 +155,7 @@ export interface SpeechChunk<V> {
 export interface ChunkEvents {
   /** 조각이 실제로 읽히기 시작했다. */
   onStart(): void;
-  /** 조각이 끝났다. 끝까지 읽혔으면 'end', 오류로 끝났으면 그 오류 코드다. 오류는 speak가 돌아가기 전에 올 수도 있다. */
+  /** 조각이 끝났다. 끝까지 읽혔으면 'end', 오류로 끝났으면 그 오류 코드다. 오류는 speak가 돌아가기 전에 올 수도 있다(Chrome 157의 not-allowed가 그랬다, 실측). */
   onDone(outcome: string): void;
 }
 
@@ -198,7 +192,7 @@ export interface Speaker<V> {
 
 /**
  * 넣은 조각이 이만큼 동안 시작하지도 끝나지도 않으면 합성기가 멈춘 것으로 본다.
- * 실측에서 넣은 뒤 start까지는 보통 5~22ms였고, 음성을 처음 켠 직후에는 목소리 목록을 기다리느라 약 1.1초였다.
+ * 실측에서 넣은 뒤 start까지는 보통 25ms 안이었고, 음성을 처음 켠 직후에는 목소리 목록을 기다리느라 약 1.1초였다.
  * 그보다 넉넉히 길게 잡았다. 원격 목소리의 시작이 얼마나 늦을 수 있는지는 재지 않았다.
  */
 const START_WATCH_MS = 6_000;
@@ -226,7 +220,7 @@ interface Batch<V> {
  * 대기열은 조각이 읽히는 중일 때만 끊는다. Chrome 157은 맨 앞 조각이 start를 내기 전에 cancel하면 대기열이 멈췄다
  * (실측: 뒤에 넣은 조각이 시작하지 않고 speaking과 pending이 참으로 남았다. start 이벤트 안이나 그 뒤에 끊으면 뒤의 조각을 모두 읽었다).
  * 그래서 넣었지만 아직 시작 전이면 끊지 않고 기다렸다가, 다음 start에서 다시 맞춘다.
- * 문장과 문장 사이의 틈도 그렇게 다룬다. 그 틈에 끊어도 멈추는지는 재지 않았다(추정).
+ * 문장과 문장 사이의 틈도 그렇게 다룬다. 그 틈(앞 문장의 end 이벤트 안)에 끊었을 때는 세 번 모두 멈추지 않았지만(실측), 경우를 나누지 않는 쪽이 단순하다.
  */
 export function createSpeaker<V>(synth: SynthPort<V>): Speaker<V> {
   /** 사용자가 지금 원하는 읽기. say가 바꾸고, stop과 끝났다는 알림이 비운다. */
@@ -252,7 +246,7 @@ export function createSpeaker<V>(synth: SynthPort<V>): Speaker<V> {
   function flush(): void {
     if (queued) {
       if (queued.reading === wanted) return;
-      // 읽히는 중이 아닐 때 끊으면 대기열이 멈춘다. 끊지 않고 두었다가 다음 start에서 다시 맞춘다.
+      // 읽히는 중이 아니면 끊지 않고 두었다가 다음 start에서 다시 맞춘다(까닭은 위의 설명).
       if (!queued.speaking) return;
       queued = null;
       synth.cancel();

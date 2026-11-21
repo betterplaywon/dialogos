@@ -658,11 +658,9 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
               <span className="who">{message.speaker === 'user' ? (index === 0 ? '나 · 고른 입장' : '나') : name}</span>
               <p>{message.text}</p>
               {message.speaker === 'opponent' && canRead && (
-                // 단추의 글자가 바뀌는 것까지 새 말처럼 읽히지 않게, 이 단추는 목록의 aria-live에서 뺀다.
                 <button
                   type="button"
                   className="secondary read"
-                  aria-live="off"
                   disabled={state.listening}
                   onClick={() => (reading ? control.stopReading() : control.read(readRequestOf(game, index, message.text)))}
                 >

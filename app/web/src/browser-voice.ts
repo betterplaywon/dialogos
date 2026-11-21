@@ -88,12 +88,11 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
           onChange(settled, true);
         }, VOICES_SETTLE_MS);
       };
-      // voiceschanged를 내지 않는 브라우저에서도 처음 한 번 읽고, 2.5초 뒤에는 다 온 것으로 알린다.
-      engine.addEventListener?.('voiceschanged', report);
+      engine.addEventListener('voiceschanged', report);
       report();
       return () => {
         window.clearTimeout(timer);
-        engine.removeEventListener?.('voiceschanged', report);
+        engine.removeEventListener('voiceschanged', report);
       };
     },
 
