@@ -82,8 +82,14 @@ export function styleOf(characterId: string | undefined): VoiceStyle {
 export const SPEECH_CHUNK_CHARS = 80;
 
 /** 문장 끝 부호 뒤의 공백. 닫는 따옴표와 괄호는 앞 문장에 붙인다. '3.5'는 뒤에 공백이 없어 나뉘지 않는다. */
-const SENTENCE_GAP = /(?<=[.!?…][)\]"'”’]*)\s+/u;
-const COMMA_GAP = /(?<=[,，、])\s+/u;
+const AFTER_SENTENCE_END = /([.!?…][)\]"'”’]*)\s+/gu;
+const AFTER_COMMA = /([,，、])\s+/gu;
+
+/**
+ * 부호 뒤의 공백에서 나누고, 부호는 앞 조각에 남긴다. 줄바꿈은 먼저 나뉘어 글 안에 없으므로 나눌 자리의 표시로 쓴다.
+ * 뒤돌아보기(lookbehind) 정규식으로 쓰면 더 짧지만, 그 문법을 모르는 브라우저(Safari 16.3까지)는 스크립트 전체를 읽지 못한다.
+ */
+const splitAfter = (text: string, gap: RegExp): string[] => text.replace(gap, '$1\n').split('\n');
 
 /** 이어진 조각들을 상한을 넘지 않는 만큼씩 다시 붙인다. */
 function pack(parts: readonly string[], limit: number): string[] {
@@ -107,7 +113,7 @@ function slices(word: string, limit: number): string[] {
 /** 상한을 넘는 문장을 쉼표에서, 그래도 길면 공백에서 나눈다. */
 function fit(sentence: string, limit: number): string[] {
   if (sentence.length <= limit) return [sentence];
-  return pack(sentence.split(COMMA_GAP), limit).flatMap((clause) => {
+  return pack(splitAfter(sentence, AFTER_COMMA), limit).flatMap((clause) => {
     if (clause.length <= limit) return [clause];
     return pack(clause.split(/\s+/), limit).flatMap((piece) => (piece.length <= limit ? [piece] : slices(piece, limit)));
   });
@@ -121,7 +127,7 @@ export function splitForSpeech(text: string, maxChars = SPEECH_CHUNK_CHARS): str
   const limit = Math.max(1, Math.floor(maxChars));
   return text
     .split(/\n+/)
-    .flatMap((line) => line.trim().split(SENTENCE_GAP))
+    .flatMap((line) => splitAfter(line.trim(), AFTER_SENTENCE_END))
     .flatMap((sentence) => fit(sentence, limit))
     .filter((chunk) => /[\p{L}\p{N}]/u.test(chunk));
 }
