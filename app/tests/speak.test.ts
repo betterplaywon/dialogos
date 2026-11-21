@@ -54,6 +54,16 @@ test('기본 상한은 80자이고, 어떤 글도 상한을 넘는 조각을 남
   assert.equal(letters(chunks.join('')), letters(long));
 });
 
+test('목록의 번호는 따로 읽지 않고 뒤의 문장에 붙인다', () => {
+  assert.deepEqual(splitForSpeech('근거는 둘입니다. 1. 약속이 무너집니다. 2. 신뢰가 사라집니다.'), [
+    '근거는 둘입니다.',
+    '1. 약속이 무너집니다.',
+    '2. 신뢰가 사라집니다.',
+  ]);
+  // 숫자로 끝나는 문장은 번호가 아니다.
+  assert.deepEqual(splitForSpeech('그 일은 2019년에 있었습니다. 지금은 다릅니다.'), ['그 일은 2019년에 있었습니다.', '지금은 다릅니다.']);
+});
+
 test('빈 글과 소리 낼 글자가 없는 조각은 버린다', () => {
   assert.deepEqual(splitForSpeech(''), []);
   assert.deepEqual(splitForSpeech('  \n \n'), []);
@@ -131,11 +141,13 @@ test('기기 안 한국어 목소리가 있으면 목록이 다 오기 전에도
   assert.equal(chooseVoice(MEASURED_VOICES, null, true), MEASURED_VOICES.find((item) => item.name === 'Yuna'));
 });
 
-test('기기 안 목소리가 없으면 목록이 다 올 때까지 기다리고, 다 온 뒤에만 원격 목소리를 쓴다', () => {
+test('기기 안 목소리가 없으면 원격 목소리를 스스로 고르지 않는다. 목록이 오는 동안에는 기다리고, 다 온 뒤에는 목소리가 없다', () => {
   // 처음에는 빈 목록이고, 곧 원격 목소리만 먼저 온다(실측).
   assert.equal(chooseVoice([], null, false), 'wait');
   assert.equal(chooseVoice(REMOTE_ONLY_VOICES, null, false), 'wait');
-  assert.equal(chooseVoice(REMOTE_ONLY_VOICES, null, true), REMOTE_ONLY_VOICES.find((item) => item.name === 'Google 한국의'));
+  assert.equal(chooseVoice(REMOTE_ONLY_VOICES, null, true), null);
+  // 사용자가 고른 원격 목소리는 쓴다.
+  assert.equal(chooseVoice(REMOTE_ONLY_VOICES, 'Google 한국의', true), REMOTE_ONLY_VOICES.find((item) => item.name === 'Google 한국의'));
 });
 
 test('목록이 다 왔는데 한국어 목소리가 없으면 읽을 목소리가 없다', () => {

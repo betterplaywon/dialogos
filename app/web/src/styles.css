@@ -477,10 +477,9 @@ select:focus-visible {
   font-size: 0.85rem;
 }
 
-/* 듣는 중인 말하기 단추. */
-button[aria-pressed='true'] {
-  background: var(--accent);
-  color: var(--accent-fg);
+.interim .muted {
+  display: block;
+  font-size: 0.85rem;
 }
 
 @media (max-width: 480px) {

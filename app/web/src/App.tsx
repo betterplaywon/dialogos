@@ -394,12 +394,12 @@ function EndPanel({ game, onRecorded, onLeave }: { game: GameView; onRecorded: (
 /** 음성을 켜기 전에 읽는 안내. 말소리와 읽을 글이 어디로 가는지 알린다. */
 const VOICE_NOTES: readonly string[] = [
   '말소리는 브라우저의 음성 인식이 글로 바꿉니다. 기기 안에서 바꿀 수 있으면 그렇게 하고(처음 한 번 한국어 인식 팩 수십 MB를 내려받습니다), 안 되면 브라우저가 정한 방식으로 바꿉니다. 이때 말소리가 브라우저 회사의 서버(Chrome은 Google, Safari는 Apple, Edge는 Microsoft)로 갈 수 있습니다.',
-  '상대의 말은 기기 안의 목소리로 읽고, 없으면 브라우저 회사 서버의 목소리로 읽습니다. 이때 읽을 글이 그 서버로 갑니다.',
+  '상대의 말은 기기 안의 목소리로 읽습니다. 기기 안에 한국어 목소리가 없으면 읽지 않습니다. 기기 밖 목소리는 직접 고른 경우에만 쓰고, 그때는 읽을 글이 그 목소리의 서버로 갑니다.',
   'dialogos 서버는 소리를 받지도 저장하지도 않습니다. 인식된 글은 입력 칸에 넣어 드리고, 고친 뒤 직접 보냅니다.',
 ];
 
 const PREPARING_NOTICE = '기기 안 인식을 준비하는 중입니다. 처음에는 인식 팩을 내려받습니다.';
-const LISTENING_NOTICE = '듣는 중입니다. 말을 마치면 [말 마치기]를 누르거나 잠시 기다려 주세요.';
+const LISTENING_HINT = '말을 마치면 [말 마치기]를 누르거나 잠시 기다려 주세요.';
 
 /** 말소리가 어디서 글로 바뀌는지, 아니면 왜 음성 입력을 쓸 수 없는지. */
 function recognitionNotice(state: VoiceState): string {
@@ -413,19 +413,33 @@ function recognitionNotice(state: VoiceState): string {
 function speechNotice(state: VoiceState): string | null {
   if (!state.canSpeak) return '이 브라우저는 음성 합성을 지원하지 않아 상대의 말을 읽어 주지 못합니다.';
   if (state.voice === 'wait') return '한국어 목소리를 찾는 중입니다.';
-  if (state.voice === null) return '이 브라우저에는 한국어 목소리가 없어 읽어 주지 못합니다.';
+  if (state.voice === null) {
+    return state.voices.length > 0
+      ? '기기 안에 한국어 목소리가 없어 읽지 않습니다. 기기 밖 목소리를 고르면 그 목소리로 읽고, 읽을 글이 그 목소리의 서버로 갑니다.'
+      : '이 브라우저에는 한국어 목소리가 없어 읽어 주지 못합니다.';
+  }
   return state.voice.localService ? null : '이 목소리는 읽을 글을 기기 밖 서버로 보냅니다.';
 }
 
 /** 음성 줄. 켜기 전에는 단추와 안내를, 켠 뒤에는 말소리와 읽을 글이 가는 곳을 보인다. */
 function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
   const { state, control } = voice;
+  const bar = useRef<HTMLElement | null>(null);
+  const wasOn = useRef(state.on);
+
+  useEffect(() => {
+    if (wasOn.current === state.on) return;
+    wasOn.current = state.on;
+    // 켜고 끌 때 누른 단추가 사라진다. 초점을 그 자리에 생긴 단추로 옮겨, 키보드로 쓰는 사람이 자리를 잃지 않게 한다.
+    bar.current?.querySelector('button')?.focus();
+  }, [state.on]);
+
   if (!state.canListen && !state.canSpeak) {
     return <p className="voice-bar muted">이 브라우저는 음성 기능을 지원하지 않습니다. 글로 토론할 수 있습니다.</p>;
   }
   if (!state.on) {
     return (
-      <section className="voice-bar" aria-label="음성">
+      <section className="voice-bar" aria-label="음성" ref={bar}>
         {/* 이 누름이 브라우저가 요구하는 사용자 제스처다. 첫 읽기와 인식 팩 내려받기가 이 안에서 시작된다. */}
         <button type="button" onClick={onTurnOn}>
           음성으로 하기
@@ -440,14 +454,21 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
   }
   const chosen = state.voice === 'wait' ? null : state.voice;
   const notice = speechNotice(state);
+  // 고를 것이 있을 때만 목록을 보인다. 기기 안 목소리가 없으면 기기 밖 목소리를 직접 고를 수 있게 보인다.
+  const pickable = chosen ? state.voices.length >= 2 : state.voice === null && state.voices.length >= 1;
   return (
-    <section className="voice-bar" aria-label="음성">
+    <section className="voice-bar" aria-label="음성" ref={bar}>
       <div className="voice-lines">
         <p role="status">{recognitionNotice(state)}</p>
-        {chosen && state.voices.length >= 2 && (
+        {pickable && (
           <label className="voice-pick">
             <span>목소리</span>
-            <select value={chosen.name} onChange={(event) => control.preferVoice(event.target.value)}>
+            <select value={chosen?.name ?? ''} onChange={(event) => control.preferVoice(event.target.value)}>
+              {!chosen && (
+                <option value="" disabled>
+                  고르지 않음
+                </option>
+              )}
               {state.voices.map((item, index) => (
                 <option key={`${index}:${item.name}`} value={item.name}>
                   {item.localService ? item.name : `${item.name} (기기 밖)`}
@@ -492,7 +513,9 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
   const latestDraft = useRef('');
   /** 이 턴에 음성 인식으로 입력 칸에 들어간 조각들. 보낼 때 넣은 방식을 정한다. */
   const segments = useRef<string[]>([]);
+  const draftBox = useRef<HTMLTextAreaElement | null>(null);
   const { state, control } = voice;
+  const wasBlocked = useRef(state.blocked !== null);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -508,6 +531,19 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
       control.stopReading();
     };
   }, [control, initial]);
+
+  useEffect(() => {
+    // 음성을 끄면 듣기의 지난 알림을 지운다. 다시 켰을 때 지난 일이 방금 일처럼 보이지 않게 한다.
+    if (!state.on) setHeardNotice('');
+  }, [state.on]);
+
+  useEffect(() => {
+    const blocked = state.blocked !== null;
+    if (blocked === wasBlocked.current) return;
+    wasBlocked.current = blocked;
+    // 음성 입력이 꺼지면 [말하기]가 사라진다. 초점이 거기 있었으면 입력 칸으로 옮긴다.
+    if (blocked && (document.activeElement === null || document.activeElement === document.body)) draftBox.current?.focus();
+  }, [state.blocked]);
 
   function changeDraft(next: string) {
     latestDraft.current = next;
@@ -548,8 +584,9 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
       segments.current = [...segments.current, appended.added];
       changeDraft(appended.draft);
     }
-    const notices = [dictationNotice(appended), result.problem ? LISTEN_PROBLEMS[result.problem].message : null];
-    setHeardNotice(notices.filter((notice) => notice !== null).join(' '));
+    // 음성 입력을 끄는 문제는 음성 줄이 이유를 보인다. 같은 말을 두 곳에서 알리지 않는다.
+    const problem = result.problem !== null && !LISTEN_PROBLEMS[result.problem].blocks ? LISTEN_PROBLEMS[result.problem].message : null;
+    setHeardNotice([dictationNotice(appended), problem].filter((notice) => notice !== null).join(' '));
   }
 
   function toggleListening() {
@@ -612,7 +649,8 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
       </div>
       {/* 켜자마자 마지막 상대의 말을 읽는다. 끝난 판과 답을 기다리는 중에는 읽지 않는다. */}
       <VoiceBar voice={voice} onTurnOn={() => control.turnOn(game.ended || waiting ? null : lastOpponentRequest(game))} />
-      <ol className="messages" aria-live="polite">
+      {/* 앱이 상대의 말을 소리로 읽는 동안에는 화면 낭독기가 같은 말을 겹쳐 읽지 않게 한다. */}
+      <ol className="messages" aria-live={canRead ? 'off' : 'polite'}>
         {game.messages.map((message, index) => {
           const reading = state.reading === `${game.id}:${index}`;
           return (
@@ -649,6 +687,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
           {/* 답을 기다리는 동안 비활성(disabled)으로 두면 포커스가 빠지므로 읽기 전용으로 둔다. */}
           <textarea
             id="draft"
+            ref={draftBox}
             rows={3}
             value={draft}
             maxLength={game.maxTextLength}
@@ -657,11 +696,17 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
             onChange={(event) => changeDraft(event.target.value)}
             onKeyDown={onKeyDown}
           />
-          {/* 중간 글은 빠르게 바뀌므로 소리 내어 읽게 하지 않는다(aria-live 없음). 상태가 바뀐 것만 아래 한 줄로 알린다. */}
-          {state.listening && <p className="interim">듣는 중: {state.interim || '…'}</p>}
+          {/* 듣는 동안의 글은 화면 낭독기가 읽지 않게 한다(aria-live 없음). 낭독 소리가 마이크로 들어가 받아쓴 글에 섞인다. */}
+          {state.listening && (
+            <p className="interim">
+              듣는 중: {state.interim || '…'}
+              <span className="muted">{LISTENING_HINT}</span>
+            </p>
+          )}
+          {/* 듣기가 끝난 뒤의 일(글을 넣었다, 문제가 생겼다)만 알린다. */}
           {state.on && state.canListen && (
             <p className="muted voice-status" role="status">
-              {state.listening ? LISTENING_NOTICE : heardNotice}
+              {state.listening ? '' : heardNotice}
             </p>
           )}
           <div className="actions">
@@ -669,10 +714,10 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
               {draft.length} / {game.maxTextLength}자 · ⌘ 또는 Ctrl + Enter로 보내기
             </span>
             {canDictate && (
+              // 듣는 중인지는 단추의 글자가 알린다. aria-pressed를 함께 쓰면 '말 마치기, 눌림'처럼 겹쳐 읽힌다.
               <button
                 type="button"
-                className="secondary"
-                aria-pressed={state.listening}
+                className={state.listening ? undefined : 'secondary'}
                 onClick={toggleListening}
                 disabled={!state.listening && (waiting || ending || state.place === 'preparing')}
               >

@@ -26,7 +26,11 @@ export function browserRecognition(): RecognitionPort | null {
   };
 }
 
-/** 목소리 목록의 마지막 변경 뒤 이만큼 조용하면 다 온 것으로 본다. 실측에서 두 변경의 간격은 약 1.1초였다. */
+/**
+ * 목소리 목록의 마지막 변경 뒤 이만큼 조용하면 다 온 것으로 본다. 목록이 다 왔다는 신호가 없어서 두는 추정이다.
+ * 실측에서 두 변경의 간격은 약 1.1초였다. 이 값은 '찾는 중'과 '없음' 가운데 화면에 보일 말을 가를 뿐이고,
+ * 읽을 글을 어디로 보낼지는 정하지 않는다(원격 목소리는 사용자가 고를 때만 쓴다).
+ */
 const VOICES_SETTLE_MS = 2_500;
 
 export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
@@ -34,12 +38,15 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
   const engine = window.speechSynthesis;
   /** 읽는 동안 utterance가 쓰레기 수집되면 end와 error 이벤트를 잃는다. 끝날 때까지 여기에 잡아 둔다. */
   const alive = new Set<SpeechSynthesisUtterance>();
+  /** 다 왔다고 본 목록의 목소리 수. 아직 그렇게 본 적이 없으면 null이다. */
+  let settledCount: number | null = null;
   return {
     synth: {
       speak(chunk, done) {
         const utterance = new SpeechSynthesisUtterance(chunk.text);
         utterance.lang = 'ko-KR';
-        // voice를 비워 두면 Chrome이 원격 목소리를 골라 읽을 글을 서버로 보낼 수 있다(실측). 고른 목소리를 항상 넣는다.
+        // voice를 비워 두면 브라우저가 목소리를 고른다. 기기 목소리가 오기 전에 그렇게 읽은 문장은 시작이 1.1초 늦고
+        // 낱말 경계 이벤트가 없었다(실측). 원격 목소리로 읽혀 글이 서버로 간 것으로 보인다(추정). 고른 목소리를 항상 넣는다.
         utterance.voice = chunk.voice;
         utterance.rate = chunk.rate;
         utterance.pitch = chunk.pitch;
@@ -66,8 +73,19 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
       // 목록은 처음에 비어 있고 여러 번에 걸쳐 온다(실측: 원격 목소리가 먼저, 기기 목소리는 약 1.1초 뒤).
       const report = () => {
         window.clearTimeout(timer);
-        onChange(engine.getVoices(), false);
-        timer = window.setTimeout(() => onChange(engine.getVoices(), true), VOICES_SETTLE_MS);
+        const voices = engine.getVoices();
+        // 다 왔다고 본 목록이 그대로면 다시 기다리지 않는다(껐다 켤 때).
+        if (settledCount === voices.length) {
+          onChange(voices, true);
+          return;
+        }
+        settledCount = null;
+        onChange(voices, false);
+        timer = window.setTimeout(() => {
+          const settled = engine.getVoices();
+          settledCount = settled.length;
+          onChange(settled, true);
+        }, VOICES_SETTLE_MS);
       };
       // voiceschanged를 내지 않는 브라우저에서도 처음 한 번 읽고, 2.5초 뒤에는 다 온 것으로 알린다.
       engine.addEventListener?.('voiceschanged', report);

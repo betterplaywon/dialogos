@@ -158,23 +158,45 @@ test('읽는 중에 기기 목소리가 목록에서 빠진 뒤 새 요청이 �
   assert.deepEqual(synth.texts().slice(2), ['그 반론은 받아들입니다.']);
 });
 
-test('기기 목소리가 끝내 없으면 목록이 다 온 뒤에 원격 목소리로 읽는다', () => {
-  const { control, speech, synth } = setup({ voices: REMOTE_ONLY_VOICES });
+test('기기 목소리가 끝내 없으면 원격 목소리로 읽지 않고, 사용자가 원격 목소리를 고르면 기다리던 말을 읽는다', () => {
+  const { control, speech, synth, remembered } = setup({ voices: REMOTE_ONLY_VOICES });
   control.turnOn(OPENING);
-  assert.equal(synth.spoken.length, 0);
+  // 목록이 오는 동안에는 곧 읽을 것으로 보인다.
+  assert.deepEqual([control.getState().voice, control.getState().reading, synth.spoken.length], ['wait', 'g1:1', 0]);
   speech.emit(REMOTE_ONLY_VOICES, true);
+  // 다 왔는데 기기 목소리가 없다. 읽을 글을 서버로 보내는 일을 앱이 대신 정하지 않는다.
+  assert.deepEqual([control.getState().voice, control.getState().reading, synth.spoken.length], [null, null, 0]);
+  // 고를 수 있게 원격 목소리는 목록에 남는다.
   assert.deepEqual(
-    synth.spoken.map((item) => [item.chunk.voice.name, item.chunk.voice.localService]),
+    control.getState().voices.map((item) => item.name),
+    ['Google 한국의'],
+  );
+  control.preferVoice('Google 한국의');
+  assert.equal(remembered(), 'Google 한국의');
+  assert.deepEqual(
+    synth.spoken.map((item) => [item.chunk.text, item.chunk.voice.name, item.chunk.voice.localService]),
     [
-      ['Google 한국의', false],
-      ['Google 한국의', false],
+      ['저는 반대로 생각합니다.', 'Google 한국의', false],
+      ['근거는 네 가지입니다.', 'Google 한국의', false],
     ],
   );
-  const chosen = control.getState().voice;
-  assert.equal(typeof chosen === 'object' && chosen?.localService, false);
+  assert.equal(control.getState().reading, 'g1:1');
 });
 
-test('한국어 목소리가 없으면 기다리던 읽기를 그만두고, 그 뒤로도 읽지 않는다', () => {
+test('기기 목소리가 목록이 다 왔다고 본 뒤에 늦게 와도, 그사이 원격 목소리로 읽지 않고 오면 기기 목소리로 읽는다', () => {
+  const { control, speech, synth } = setup({ voices: REMOTE_ONLY_VOICES });
+  control.turnOn(OPENING);
+  speech.emit(REMOTE_ONLY_VOICES, true);
+  assert.equal(synth.spoken.length, 0);
+  speech.emit(MEASURED_VOICES, false);
+  assert.deepEqual(
+    synth.spoken.map((item) => item.chunk.voice.name),
+    ['Yuna', 'Yuna'],
+  );
+  assert.equal(control.getState().reading, 'g1:1');
+});
+
+test('한국어 목소리가 하나도 없으면 읽는 중으로 보이지 않고, 그 뒤의 요청도 읽지 않는다', () => {
   const { control, speech, synth } = setup({ voices: [] });
   control.turnOn(OPENING);
   speech.emit([voice('Samantha', 'en-US', true, true)], true);
@@ -390,14 +412,37 @@ test('끄면 듣기와 읽기를 멈추고 목소리 구독을 그만두며, 준
   assert.deepEqual([control.getState().reading, synth.spoken.length], [null, spoken]);
 });
 
-test('듣는 중에 끄면 인식기를 끊고 들은 글을 넘기지 않는다', async (t) => {
+test('듣는 중에 끄면 인식기를 끊고, 그때까지 들은 글은 버리지 않고 한 번 넘긴다', async (t) => {
   const { control, recognition } = await turnedOn(t);
-  control.listen(() => assert.fail('끈 뒤에는 넘기지 않아야 한다'));
-  recognition.last.result('거짓말은');
+  const heard: ListenResult[] = [];
+  control.listen((result) => heard.push(result));
+  recognition.last.result('거짓말은 결과가');
   control.turnOff();
   assert.deepEqual(recognition.last.calls, ['start', 'abort']);
+  assert.deepEqual(heard, [{ transcript: '거짓말은 결과가', problem: null }]);
+  // 끊긴 인식기가 늦게 낸 이벤트로 다시 넘기지 않는다.
   recognition.last.end();
+  assert.equal(heard.length, 1);
   assert.deepEqual([control.getState().on, control.getState().listening, control.getState().interim], [false, false, '']);
+});
+
+test('아직 들은 글이 없을 때 끄면 아무것도 넘기지 않는다', async (t) => {
+  const { control, recognition } = await turnedOn(t);
+  control.listen(() => assert.fail('들은 글이 없으면 넘기지 않아야 한다'));
+  control.turnOff();
+  assert.deepEqual(recognition.last.calls, ['start', 'abort']);
+});
+
+test('준비 중에 껐다가 다시 켜면 설치를 겹쳐 부르지 않고, 같은 준비가 끝나면 그 결과를 적는다', async () => {
+  const { control, device, log } = setup();
+  control.turnOn(null);
+  control.turnOff();
+  control.turnOn(null);
+  assert.equal(control.getState().place, 'preparing');
+  assert.equal(log.filter((entry) => entry === 'install').length, 1);
+  device.finishInstall(true);
+  await settle();
+  assert.equal(control.getState().place, 'device');
 });
 
 test('기기 안 인식이 한 번 확인되면 다시 켤 때 설치를 되풀이하지 않는다', async (t) => {
@@ -411,29 +456,25 @@ test('기기 안 인식이 한 번 확인되면 다시 켤 때 설치를 되풀�
   assert.equal(log.filter((entry) => entry === 'watch').length, 2);
 });
 
-test('지난번에 고른 목소리로 읽고, 새로 고르면 기억해 두고 읽던 말을 새 목소리로 처음부터 다시 읽는다', async (t) => {
+test('지난번에 고른 목소리로 읽고, 새로 고르면 기억해 두고 다음 읽기부터 쓴다. 읽던 말을 다시 읽지 않는다', async (t) => {
   const { control, synth, remembered } = await turnedOn(t, { remembered: 'Flo (Korean (South Korea))' }, OPENING);
   assert.deepEqual(
     synth.spoken.map((item) => item.chunk.voice.name),
     ['Flo (Korean (South Korea))', 'Flo (Korean (South Korea))'],
   );
+  // 목록을 넘기다 원격 목소리를 지나가도, 읽던 글이 그 목소리로 다시 나가지 않는다.
+  const cancels = synth.cancels;
+  control.preferVoice('Google 한국의');
   control.preferVoice('Yuna');
   assert.equal(remembered(), 'Yuna');
   const chosen = control.getState().voice;
   assert.equal(typeof chosen === 'object' && chosen?.name, 'Yuna');
+  assert.deepEqual([synth.spoken.length, synth.cancels, control.getState().reading], [2, cancels, 'g1:1']);
+  control.read(REPLY);
   assert.deepEqual(
     synth.spoken.slice(2).map((item) => [item.chunk.text, item.chunk.voice.name]),
-    [
-      ['저는 반대로 생각합니다.', 'Yuna'],
-      ['근거는 네 가지입니다.', 'Yuna'],
-    ],
+    [['그 반론은 받아들입니다.', 'Yuna']],
   );
-  assert.equal(control.getState().reading, 'g1:1');
-  // 읽는 중이 아니면 고르기만 한다.
-  control.stopReading();
-  const spoken = synth.spoken.length;
-  control.preferVoice('Google 한국의');
-  assert.deepEqual([remembered(), synth.spoken.length], ['Google 한국의', spoken]);
 });
 
 test('상태가 바뀔 때만 구독자를 부르고, 구독을 그만두면 부르지 않는다', async (t) => {

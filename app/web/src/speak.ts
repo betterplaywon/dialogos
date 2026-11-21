@@ -41,8 +41,9 @@ export function koreanVoices<V extends VoiceLike>(voices: readonly V[]): V[] {
 
 /**
  * 지금 쓸 목소리. preferredName(사용자가 고른 이름)이 목록에 있으면 그것, 없으면 기기 안 목소리 가운데 가장 좋은 것이다.
- * 기기 안 목소리가 없으면 목록이 다 온 뒤(settled)에만 원격 목소리를 쓴다. 그 전에는 'wait'다.
- * 기기 목소리는 원격 목소리보다 늦게 온다(실측 약 1.1초). 그사이에 읽을 글을 서버로 보내지 않으려는 것이다.
+ * 원격 목소리는 사용자가 고른 것일 때만 쓴다. 읽을 글이 서버로 가는 일을 앱이 대신 정하지 않는다.
+ * 기기 안 목소리가 없으면 목록이 오는 동안(settled 전)에는 'wait', 다 온 뒤에는 null이다.
+ * settled는 추정이라(목록이 다 왔다는 신호가 없다) 화면에 보일 말을 가르는 데만 쓴다.
  */
 export function chooseVoice<V extends VoiceLike>(voices: readonly V[], preferredName: string | null, settled: boolean): V | 'wait' | null {
   const korean = koreanVoices(voices);
@@ -50,8 +51,7 @@ export function chooseVoice<V extends VoiceLike>(voices: readonly V[], preferred
   if (preferred) return preferred;
   const best = korean[0];
   if (best?.localService) return best;
-  if (!settled) return 'wait';
-  return best ?? null;
+  return settled ? null : 'wait';
 }
 
 export interface VoiceStyle {
@@ -119,6 +119,24 @@ function fit(sentence: string, limit: number): string[] {
   });
 }
 
+/** 번호만 있는 조각('1.', '2.'). 목록의 번호가 뒤의 문장과 떨어져 따로 읽히지 않게 다음 조각에 붙인다. */
+const LIST_NUMBER = /^\d{1,3}\.$/;
+
+function joinListNumbers(sentences: readonly string[]): string[] {
+  const joined: string[] = [];
+  let number = '';
+  for (const sentence of sentences) {
+    if (LIST_NUMBER.test(sentence)) {
+      number = number ? `${number} ${sentence}` : sentence;
+      continue;
+    }
+    joined.push(number ? `${number} ${sentence}` : sentence);
+    number = '';
+  }
+  if (number) joined.push(number);
+  return joined;
+}
+
 /**
  * 읽을 글을 조각으로 나눈다. 줄바꿈과 문장 끝에서 나누고, 긴 문장은 maxChars 안에 들게 더 나눈다.
  * 소리 낼 글자가 없는 조각(빈 줄, 부호뿐인 조각)은 버린다.
@@ -127,7 +145,7 @@ export function splitForSpeech(text: string, maxChars = SPEECH_CHUNK_CHARS): str
   const limit = Math.max(1, Math.floor(maxChars));
   return text
     .split(/\n+/)
-    .flatMap((line) => splitAfter(line.trim(), AFTER_SENTENCE_END))
+    .flatMap((line) => joinListNumbers(splitAfter(line.trim(), AFTER_SENTENCE_END)))
     .flatMap((sentence) => fit(sentence, limit))
     .filter((chunk) => /[\p{L}\p{N}]/u.test(chunk));
 }
