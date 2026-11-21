@@ -272,6 +272,23 @@ test('앱이 끊지 않았는데 끊긴 읽기와 그 밖의 오류는 문제로
   for (const message of Object.values(SPEAK_PROBLEMS)) assert.match(message, /[가-힣]/);
 });
 
+test('읽는 것이 없을 때는 대기열을 끊지 않는다', () => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  // 아무것도 읽지 않았을 때의 stop과 첫 읽기.
+  reader.stop();
+  reader.say('첫 문장입니다.', YUNA, STYLE, onDone);
+  assert.equal(synth.cancels, 0);
+  // 끝까지 읽은 뒤의 stop과 다음 읽기.
+  synth.finish(0);
+  reader.stop();
+  reader.say('다음 문장입니다.', YUNA, STYLE, onDone);
+  assert.equal(synth.cancels, 0);
+  // 읽는 중에 새로 읽을 때만 끊는다.
+  reader.say('끼어든 문장입니다.', YUNA, STYLE, onDone);
+  assert.equal(synth.cancels, 1);
+  assert.deepEqual(done, [null]);
+});
+
 test('문제로 끝난 뒤에도 다시 읽을 수 있다', () => {
   const { synth, done, speaker: reader, onDone } = speaker();
   reader.say('첫 문장입니다.', YUNA, STYLE, onDone);

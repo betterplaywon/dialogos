@@ -181,16 +181,31 @@ export interface Speaker<V> {
  */
 export function createSpeaker<V>(synth: SynthPort<V>): Speaker<V> {
   let generation = 0;
+  /** 넣은 조각이 아직 다 읽히지 않았는가. */
+  let busy = false;
+
+  /**
+   * 지금 세대를 끝낸다. 읽던 것이 있을 때만 대기열을 끊는다.
+   * 읽는 것이 없는데도 끊으면, 끊은 직후의 읽기를 놓친다고 알려진 브라우저(Safari)에서 새 읽기가 빠질 수 있다
+   * (이 환경에서 확인하지 못했다. Chrome 157은 끊은 직후의 읽기를 정상으로 읽었다).
+   */
+  function close(): void {
+    generation += 1;
+    if (!busy) return;
+    busy = false;
+    synth.cancel();
+  }
+
   return {
     say(text, voice, style, onDone) {
-      generation += 1;
+      close();
       const mine = generation;
-      synth.cancel();
       const chunks = splitForSpeech(text);
       if (chunks.length === 0) {
         onDone(null);
         return;
       }
+      busy = true;
       for (const [index, chunk] of chunks.entries()) {
         // 앞 조각이 넣자마자 오류로 끝났으면 남은 조각은 넣지 않는다.
         if (mine !== generation) return;
@@ -199,18 +214,15 @@ export function createSpeaker<V>(synth: SynthPort<V>): Speaker<V> {
           if (outcome === 'end') {
             if (index < chunks.length - 1) return;
             generation += 1;
+            busy = false;
             onDone(null);
             return;
           }
-          generation += 1;
-          synth.cancel();
+          close();
           onDone(problemOf(outcome));
         });
       }
     },
-    stop() {
-      generation += 1;
-      synth.cancel();
-    },
+    stop: close,
   };
 }
