@@ -1,8 +1,9 @@
 // 음성 검사가 함께 쓰는 가짜 브라우저 객체. 실제 인식기와 합성기가 내는 이벤트를 검사가 손으로 낸다.
 // 이벤트의 차례와 목소리 목록은 Chrome 157에서 잰 것을 따른다(app/README.md의 '음성' 절).
 
-import type { RecognizerPort } from '../web/src/listen.ts';
+import type { OnDevicePort, RecognizerPort } from '../web/src/listen.ts';
 import type { SpeechChunk, SynthPort, VoiceLike } from '../web/src/speak.ts';
+import type { RecognitionPort, SpeechPort } from '../web/src/voice-control.ts';
 
 export class FakeRecognizer implements RecognizerPort {
   lang = '';
@@ -94,9 +95,12 @@ export class FakeSynth<V = FakeVoice> implements SynthPort<V> {
   cancels = 0;
   /** 주면 speak가 조각을 받자마자 이 결과로 끝낸다. */
   failWith: string | null = null;
+  /** 주면 조각이 들어올 때마다 'speak'를 적는다(다른 가짜 객체와 차례를 견줄 때 쓴다). */
+  log: string[] | null = null;
 
   speak(chunk: SpeechChunk<V>, done: (outcome: string) => void): void {
     this.spoken.push({ chunk, done });
+    this.log?.push('speak');
     if (this.failWith !== null) done(this.failWith);
   }
 
@@ -114,4 +118,87 @@ export class FakeSynth<V = FakeVoice> implements SynthPort<V> {
     if (!item) throw new Error(`${index}번째 조각이 없습니다.`);
     item.done(outcome);
   }
+}
+
+/** 가짜 음성 합성. 목소리 목록이 언제 무엇으로 오는지는 검사가 정한다. */
+export class FakeSpeech implements SpeechPort<FakeVoice> {
+  readonly synth = new FakeSynth();
+  primes = 0;
+  /** 지금 브라우저가 가진 목록. watchVoices가 처음에 이것을 알린다. */
+  voices: readonly FakeVoice[];
+  readonly log: string[];
+  #onChange: ((voices: readonly FakeVoice[], settled: boolean) => void) | null = null;
+
+  constructor(voices: readonly FakeVoice[] = MEASURED_VOICES, log: string[] = []) {
+    this.voices = voices;
+    this.log = log;
+    this.synth.log = log;
+  }
+
+  prime(): void {
+    this.primes += 1;
+    this.log.push('prime');
+  }
+
+  watchVoices(onChange: (voices: readonly FakeVoice[], settled: boolean) => void): () => void {
+    this.log.push('watch');
+    this.#onChange = onChange;
+    onChange(this.voices, false);
+    return () => {
+      this.log.push('unwatch');
+      this.#onChange = null;
+    };
+  }
+
+  get watching(): boolean {
+    return this.#onChange !== null;
+  }
+
+  /** 목록이 바뀌었다고, 또는 다 왔다고(settled) 알린다. */
+  emit(voices: readonly FakeVoice[], settled: boolean): void {
+    this.voices = voices;
+    this.#onChange?.(voices, settled);
+  }
+}
+
+/** 가짜 음성 인식. 만든 인식기를 차례대로 적어 둔다. */
+export class FakeRecognition implements RecognitionPort {
+  readonly created: FakeRecognizer[] = [];
+  onDevice: OnDevicePort | null = null;
+  /** 주면 다음에 만드는 인식기의 start()가 이것을 던진다. */
+  nextStartError: Error | null = null;
+
+  create(): FakeRecognizer {
+    const recognizer = new FakeRecognizer();
+    recognizer.startError = this.nextStartError;
+    this.nextStartError = null;
+    this.created.push(recognizer);
+    return recognizer;
+  }
+
+  /** 가장 최근에 만든 인식기. */
+  get last(): FakeRecognizer {
+    const recognizer = this.created[this.created.length - 1];
+    if (!recognizer) throw new Error('만든 인식기가 없습니다.');
+    return recognizer;
+  }
+}
+
+/** 가짜 기기 안 인식 API. install은 검사가 끝내 줄 때까지 기다린다. */
+export function fakeOnDevice(log: string[] = []) {
+  let finishInstall: (installed: boolean) => void = () => {};
+  const installing = new Promise<boolean>((resolve) => {
+    finishInstall = resolve;
+  });
+  const api: OnDevicePort = {
+    install() {
+      log.push('install');
+      return installing;
+    },
+    async available() {
+      log.push('available');
+      return 'available';
+    },
+  };
+  return { api, finishInstall };
 }
