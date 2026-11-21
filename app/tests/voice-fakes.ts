@@ -2,7 +2,7 @@
 // 이벤트의 차례와 목소리 목록은 Chrome 157에서 잰 것을 따른다(app/README.md의 '음성' 절).
 
 import type { OnDevicePort, RecognizerPort } from '../web/src/listen.ts';
-import type { SpeechChunk, SynthPort, VoiceLike } from '../web/src/speak.ts';
+import type { ChunkEvents, SpeechChunk, SynthPort, VoiceLike } from '../web/src/speak.ts';
 import type { RecognitionPort, SpeechPort } from '../web/src/voice-control.ts';
 
 export class FakeRecognizer implements RecognizerPort {
@@ -85,10 +85,16 @@ export const REMOTE_ONLY_VOICES: readonly FakeVoice[] = MEASURED_VOICES.filter((
 
 interface Spoken<V> {
   chunk: SpeechChunk<V>;
-  done: (outcome: string) => void;
+  events: ChunkEvents;
+  /** 'queued'는 시작을 기다리는 중, 'speaking'은 읽히는 중, 'gone'은 대기열에서 빠진 것(끝났거나 끊겼다)이다. */
+  stage: 'queued' | 'speaking' | 'gone';
 }
 
-/** 대기열에 들어온 조각을 적어 두는 가짜 합성기. 조각을 끝내는 것은 검사가 한다. */
+/**
+ * 대기열에 들어온 조각을 적어 두는 가짜 합성기. 조각을 시작시키고 끝내는 것은 검사가 한다.
+ * Chrome 157에서 잰 결함을 그대로 갖는다: 대기열에 조각이 있는데 읽히는 중인 조각이 없을 때 cancel이 불리면 대기열이 멈춘다.
+ * 그 순서가 오면 cancel이 예외를 던져, 이 가짜를 쓰는 어느 검사에서든 드러난다.
+ */
 export class FakeSynth<V = FakeVoice> implements SynthPort<V> {
   /** 지금까지 들어온 모든 조각(끊긴 것 포함). */
   readonly spoken: Spoken<V>[] = [];
@@ -97,26 +103,63 @@ export class FakeSynth<V = FakeVoice> implements SynthPort<V> {
   failWith: string | null = null;
   /** 주면 조각이 들어올 때마다 'speak'를 적는다(다른 가짜 객체와 차례를 견줄 때 쓴다). */
   log: string[] | null = null;
+  /**
+   * 검사가 true로 두면 대기열이 이미 멈춘 것이다(넣은 조각이 시작하지 않는다).
+   * 멈춘 대기열은 끊어도 더 잃을 것이 없어, 다음 cancel 한 번은 시작 전이어도 받는다.
+   */
+  stalled = false;
 
-  speak(chunk: SpeechChunk<V>, done: (outcome: string) => void): void {
-    this.spoken.push({ chunk, done });
+  speak(chunk: SpeechChunk<V>, events: ChunkEvents): void {
+    this.spoken.push({ chunk, events, stage: 'queued' });
     this.log?.push('speak');
-    if (this.failWith !== null) done(this.failWith);
+    if (this.failWith !== null) this.finish(this.spoken.length - 1, this.failWith);
   }
 
   cancel(): void {
+    const queue = this.#queue();
+    if (queue.length > 0 && !this.stalled && !queue.some((item) => item.stage === 'speaking')) {
+      throw new Error('시작 전의 cancel: 넣은 조각이 읽히기 전에 끊으면 Chrome의 읽기 대기열이 멈춥니다.');
+    }
     this.cancels += 1;
+    this.stalled = false;
+    for (const item of queue) item.stage = 'gone';
   }
 
   texts(): string[] {
     return this.spoken.map((item) => item.chunk.text);
   }
 
-  /** index번째로 들어온 조각을 outcome으로 끝낸다. */
+  /** 지금 대기열에 남아 있는 조각의 글(읽히는 중인 것부터). */
+  queue(): string[] {
+    return this.#queue().map((item) => item.chunk.text);
+  }
+
+  /** index번째로 들어온 조각이 읽히기 시작했다고 알린다. */
+  start(index: number): void {
+    const item = this.#at(index);
+    if (item.stage === 'queued') item.stage = 'speaking';
+    item.events.onStart();
+  }
+
+  /**
+   * index번째로 들어온 조각을 outcome으로 끝낸다.
+   * 끝까지 읽힌('end') 조각이 아직 시작 전이면 start를 먼저 낸다(브라우저가 내는 차례). 오류는 시작 없이도 온다.
+   */
   finish(index: number, outcome = 'end'): void {
+    const item = this.#at(index);
+    if (outcome === 'end' && item.stage === 'queued') this.start(index);
+    item.stage = 'gone';
+    item.events.onDone(outcome);
+  }
+
+  #at(index: number): Spoken<V> {
     const item = this.spoken[index];
     if (!item) throw new Error(`${index}번째 조각이 없습니다.`);
-    item.done(outcome);
+    return item;
+  }
+
+  #queue(): Spoken<V>[] {
+    return this.spoken.filter((item) => item.stage !== 'gone');
   }
 }
 

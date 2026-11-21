@@ -42,7 +42,7 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
   let settledCount: number | null = null;
   return {
     synth: {
-      speak(chunk, done) {
+      speak(chunk, { onStart, onDone }) {
         const utterance = new SpeechSynthesisUtterance(chunk.text);
         utterance.lang = 'ko-KR';
         // voice를 비워 두면 브라우저가 목소리를 고른다. 기기 목소리가 오기 전에 그렇게 읽은 문장은 시작이 1.1초 늦고
@@ -50,13 +50,14 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
         utterance.voice = chunk.voice;
         utterance.rate = chunk.rate;
         utterance.pitch = chunk.pitch;
+        utterance.onstart = () => onStart();
         utterance.onend = () => {
           alive.delete(utterance);
-          done('end');
+          onDone('end');
         };
         utterance.onerror = (event) => {
           alive.delete(utterance);
-          done(event.error);
+          onDone(event.error);
         };
         alive.add(utterance);
         engine.speak(utterance);

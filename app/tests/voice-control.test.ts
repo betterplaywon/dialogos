@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { test, type TestContext } from 'node:test';
+import { beforeEach, test, type TestContext } from 'node:test';
 import type { ListenResult } from '../web/src/listen.ts';
-import { createVoiceControl, type ReadRequest } from '../web/src/voice-control.ts';
+import { createVoiceControl, type ReadRequest, type VoiceControl } from '../web/src/voice-control.ts';
 import { fakeOnDevice, FakeRecognition, FakeSpeech, MEASURED_VOICES, REMOTE_ONLY_VOICES, voice, type FakeVoice } from './voice-fakes.ts';
 
 const OPENING: ReadRequest = { key: 'g1:1', text: '저는 반대로 생각합니다. 근거는 네 가지입니다.', characterId: 'deontologist' };
@@ -9,6 +9,11 @@ const REPLY: ReadRequest = { key: 'g1:3', text: '그 반론은 받아들입니�
 
 /** 약속(promise)에 걸린 일이 모두 돌 때까지 기다린다. */
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+// 듣기의 시간 제한과 읽기의 시작 감시가 타이머를 건다. 이 파일의 검사는 모두 가짜 타이머로 돌려, 실제 타이머가 검사 뒤에 남지 않게 한다.
+beforeEach((t) => {
+  if ('mock' in t) t.mock.timers.enable({ apis: ['setTimeout'] });
+});
 
 interface Options {
   /** 처음에 브라우저가 가진 목소리 목록. 주지 않으면 실측한 목록이다. */
@@ -46,9 +51,8 @@ function setup(options: Options = {}) {
   return { control, speech, synth: speech.synth, recognition, device, log, remembered: () => remembered, notified: () => notified };
 }
 
-/** 음성을 켜고 기기 안 인식 준비까지 끝낸다. 듣기의 시간 제한은 가짜 타이머로 돌린다. */
+/** 음성을 켜고 기기 안 인식 준비까지 끝낸다. tick은 가짜 타이머의 시간을 보낸다. */
 async function turnedOn(t: TestContext, options: Options = {}, first: ReadRequest | null = null) {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
   const made = setup(options);
   made.control.turnOn(first);
   made.device.finishInstall(true);
@@ -144,6 +148,7 @@ test('읽는 중에 기기 목소리가 목록에서 빠진 뒤 새 요청이 �
   const { control, speech, synth } = setup();
   control.turnOn(OPENING);
   assert.equal(synth.spoken.length, 2);
+  synth.start(0);
   speech.emit(REMOTE_ONLY_VOICES, false);
   // 목록이 바뀐 것만으로는 읽던 것을 끊지 않는다.
   assert.deepEqual([control.getState().voice, control.getState().reading], ['wait', 'g1:1']);
@@ -226,6 +231,7 @@ test('음성을 켜지 않았으면 판 화면이 사라질 때의 정리가 브
 test('읽기가 끝나면 읽는 중 표시를 지우고, 새로 읽으면 앞의 읽기를 끊는다', async (t) => {
   const { control, synth } = await turnedOn(t, {}, OPENING);
   assert.equal(control.getState().reading, 'g1:1');
+  synth.start(0);
   control.read(REPLY);
   assert.equal(control.getState().reading, 'g1:3');
   // 끊긴 앞 읽기의 이벤트가 늦게 와도 새 읽기의 표시는 그대로다.
@@ -237,11 +243,56 @@ test('읽기가 끝나면 읽는 중 표시를 지우고, 새로 읽으면 앞�
 
 test('멈추면 읽는 중 표시를 지우고, 끊긴 읽기는 문제로 치지 않는다', async (t) => {
   const { control, synth } = await turnedOn(t, {}, OPENING);
+  synth.start(0);
   const before = synth.cancels;
   control.stopReading();
   assert.equal(synth.cancels, before + 1);
   synth.finish(0, 'interrupted');
   assert.deepEqual([control.getState().reading, control.getState().speakProblem], [null, null]);
+});
+
+test('판 화면의 효과가 두 번 돌아 읽기, 끊기, 읽기가 한 틱에 와도, 넣어 둔 문장이 시작한 뒤에 끊고 다시 읽는다', async (t) => {
+  const { control, synth } = await turnedOn(t);
+  // 개발 서버의 React StrictMode는 판 화면의 효과를 돌리고, 정리하고, 다시 돌린다.
+  control.read(OPENING);
+  control.cancelListening();
+  control.stopReading();
+  control.read(OPENING);
+  // 넣어 둔 문장이 시작하기 전에 끊으면 Chrome의 대기열이 멈춘다(실측). 그래서 아직 끊지 않는다.
+  assert.deepEqual([synth.cancels, control.getState().reading], [0, 'g1:1']);
+  synth.start(0);
+  assert.deepEqual([synth.cancels, synth.queue()], [1, ['저는 반대로 생각합니다.', '근거는 네 가지입니다.']]);
+  synth.finish(2);
+  synth.finish(3);
+  assert.deepEqual([control.getState().reading, control.getState().speakProblem], [null, null]);
+});
+
+test('읽기가 시작하기 전에 말하기, 멈춤, 음성 끄기를 눌러도 대기열을 끊지 않고, 넣어 둔 문장이 시작할 때 끊는다', async (t) => {
+  const presses: [string, (control: VoiceControl) => void][] = [
+    ['말하기', (control) => control.listen(() => {})],
+    ['멈춤', (control) => control.stopReading()],
+    ['음성 끄기', (control) => control.turnOff()],
+  ];
+  for (const [name, press] of presses) {
+    // 음성을 처음 켠 직후에는 넣은 문장이 시작하기까지 약 1.1초가 걸렸다(실측). 그사이에 누른 것이다.
+    const { control, synth } = await turnedOn(t, {}, OPENING);
+    press(control);
+    assert.deepEqual([control.getState().reading, synth.cancels], [null, 0], name);
+    synth.start(0);
+    assert.deepEqual([synth.cancels, synth.queue()], [1, []], name);
+  }
+});
+
+test('넣은 문장이 6초 동안 시작하지 않으면 읽는 중 표시를 지우고 문제로 알린다. 다시 읽으면 새로 넣는다', async (t) => {
+  const { control, synth, tick } = await turnedOn(t, {}, OPENING);
+  // 합성기가 멈췄다. 넣은 문장이 시작하지 않는다.
+  synth.stalled = true;
+  tick(5_900);
+  assert.deepEqual([control.getState().reading, control.getState().speakProblem], ['g1:1', null]);
+  tick(100);
+  assert.deepEqual([control.getState().reading, control.getState().speakProblem], [null, 'failed']);
+  control.read(REPLY);
+  assert.deepEqual([control.getState().reading, control.getState().speakProblem, synth.queue()], ['g1:3', null, ['그 반론은 받아들입니다.']]);
 });
 
 test('브라우저가 소리 재생을 막으면 그렇게 알리고, 다시 읽기 시작하면 알림을 지운다', async (t) => {
@@ -258,8 +309,7 @@ test('읽을 글자가 없는 말은 읽는 중으로 남지 않는다', async (
   assert.deepEqual([control.getState().reading, synth.spoken.length], [null, 0]);
 });
 
-test('기기 안 인식을 준비하는 동안에는 듣지 않고, 준비되면 기기 안 인식으로 한 발화를 듣는다', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('기기 안 인식을 준비하는 동안에는 듣지 않고, 준비되면 기기 안 인식으로 한 발화를 듣는다', async () => {
   const { control, recognition, device } = setup();
   const heard: ListenResult[] = [];
   control.turnOn(null);
@@ -289,8 +339,7 @@ test('기기 안 인식을 준비하는 동안에는 듣지 않고, 준비되면
   assert.equal(recognition.created.length, 2);
 });
 
-test('기기 안 인식이 확인되지 않았으면 processLocally를 켜지 않고 듣는다', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('기기 안 인식이 확인되지 않았으면 processLocally를 켜지 않고 듣는다', async () => {
   const { control, recognition } = setup({ onDevice: false });
   control.turnOn(null);
   await settle();
@@ -300,6 +349,7 @@ test('기기 안 인식이 확인되지 않았으면 processLocally를 켜지 �
 
 test('듣기 시작하면 읽던 것을 끊고, 듣는 동안에는 읽지 않는다', async (t) => {
   const { control, synth, recognition } = await turnedOn(t, {}, OPENING);
+  synth.start(0);
   const before = synth.cancels;
   control.listen(() => {});
   assert.ok(synth.cancels > before);
@@ -334,8 +384,7 @@ test('다시 눌러도 풀리지 않는 문제가 나면 음성 입력을 끄고
   assert.equal(control.getState().reading, 'g1:1');
 });
 
-test('음성 입력이 꺼진 뒤에는 다시 켜도 인식 팩을 준비하지 않는다', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('음성 입력이 꺼진 뒤에는 다시 켜도 인식 팩을 준비하지 않는다', async () => {
   const { control, recognition, device, log } = setup();
   control.turnOn(null);
   // 기기 안 인식을 쓰지 못해 브라우저가 정한 방식으로 듣다가, 마이크를 찾지 못했다.
@@ -390,10 +439,10 @@ test('듣기를 버리면 인식기를 끊고, 들은 글을 넘기지 않는다
   recognition.last.end();
 });
 
-test('끄면 듣기와 읽기를 멈추고 목소리 구독을 그만두며, 준비 중이던 결과는 버린다', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('끄면 듣기와 읽기를 멈추고 목소리 구독을 그만두며, 준비 중이던 결과는 버린다', async () => {
   const { control, speech, synth, device, log } = setup();
   control.turnOn(OPENING);
+  synth.start(0);
   const cancels = synth.cancels;
   control.turnOff();
   assert.ok(synth.cancels > cancels);
@@ -462,6 +511,7 @@ test('지난번에 고른 목소리로 읽고, 새로 고르면 기억해 두고
     synth.spoken.map((item) => item.chunk.voice.name),
     ['Flo (Korean (South Korea))', 'Flo (Korean (South Korea))'],
   );
+  synth.start(0);
   // 목록을 넘기다 원격 목소리를 지나가도, 읽던 글이 그 목소리로 다시 나가지 않는다.
   const cancels = synth.cancels;
   control.preferVoice('Google 한국의');

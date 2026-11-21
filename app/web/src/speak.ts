@@ -157,13 +157,17 @@ export interface SpeechChunk<V> {
   pitch: number;
 }
 
-/**
- * 브라우저의 음성 합성에서 쓰는 것만 적은 포트. speak는 조각을 대기열 끝에 넣는다.
- * done은 조각이 끝까지 읽혔으면 'end'로, 오류로 끝났으면 그 오류 코드로 부른다.
- * 읽기 전에 cancel된 대기 조각은 done이 불리지 않는다(실측: 아무 이벤트도 오지 않았다).
- */
+/** 대기열에 넣은 조각 하나가 내는 이벤트. cancel된 대기 조각은 아무 이벤트도 내지 않는다(실측). */
+export interface ChunkEvents {
+  /** 조각이 실제로 읽히기 시작했다. */
+  onStart(): void;
+  /** 조각이 끝났다. 끝까지 읽혔으면 'end', 오류로 끝났으면 그 오류 코드다. 오류는 speak가 돌아가기 전에 올 수도 있다. */
+  onDone(outcome: string): void;
+}
+
+/** 브라우저의 음성 합성에서 쓰는 것만 적은 포트. speak는 조각을 대기열 끝에 넣고, cancel은 대기열을 비운다. */
 export interface SynthPort<V> {
-  speak(chunk: SpeechChunk<V>, done: (outcome: string) => void): void;
+  speak(chunk: SpeechChunk<V>, events: ChunkEvents): void;
   cancel(): void;
 }
 
@@ -193,54 +197,130 @@ export interface Speaker<V> {
 }
 
 /**
- * 읽기 제어기. 조각을 모두 한꺼번에 대기열에 넣고, 마지막 조각이 끝나면 끝났다고 알린다.
- * 취소된 대기 조각은 이벤트가 오지 않으므로 조각의 이벤트로 상태를 세지 않는다.
- * say와 stop마다 세대 번호를 올리고, 지난 세대의 이벤트(끊긴 조각의 interrupted 등)는 버린다.
+ * 넣은 조각이 이만큼 동안 시작하지도 끝나지도 않으면 합성기가 멈춘 것으로 본다.
+ * 실측에서 넣은 뒤 start까지는 보통 5~22ms였고, 음성을 처음 켠 직후에는 목소리 목록을 기다리느라 약 1.1초였다.
+ * 그보다 넉넉히 길게 잡았다. 원격 목소리의 시작이 얼마나 늦을 수 있는지는 재지 않았다.
+ */
+const START_WATCH_MS = 6_000;
+
+/** 사용자가 원하는 읽기 하나. */
+interface Reading<V> {
+  readonly chunks: readonly string[];
+  readonly voice: V;
+  readonly style: VoiceStyle;
+  readonly onDone: (problem: SpeakProblem | null) => void;
+}
+
+/** 합성기 대기열에 넣은 한 읽기의 조각들. */
+interface Batch<V> {
+  readonly reading: Reading<V>;
+  /** 넣은 조각 가운데 아직 끝나지 않은 수. */
+  left: number;
+  /** 조각 하나가 읽히는 중이다(start가 왔고 아직 끝나지 않았다). */
+  speaking: boolean;
+}
+
+/**
+ * 읽기 제어기. 사용자가 원하는 읽기(wanted)와 합성기 대기열에 든 우리 조각(queued)을 따로 갖고, flush가 둘을 맞춘다.
+ *
+ * 대기열은 조각이 읽히는 중일 때만 끊는다. Chrome 157은 맨 앞 조각이 start를 내기 전에 cancel하면 대기열이 멈췄다
+ * (실측: 뒤에 넣은 조각이 시작하지 않고 speaking과 pending이 참으로 남았다. start 이벤트 안이나 그 뒤에 끊으면 뒤의 조각을 모두 읽었다).
+ * 그래서 넣었지만 아직 시작 전이면 끊지 않고 기다렸다가, 다음 start에서 다시 맞춘다.
+ * 문장과 문장 사이의 틈도 그렇게 다룬다. 그 틈에 끊어도 멈추는지는 재지 않았다(추정).
  */
 export function createSpeaker<V>(synth: SynthPort<V>): Speaker<V> {
-  let generation = 0;
-  /** 넣은 조각이 아직 다 읽히지 않았는가. */
-  let busy = false;
-
+  /** 사용자가 지금 원하는 읽기. say가 바꾸고, stop과 끝났다는 알림이 비운다. */
+  let wanted: Reading<V> | null = null;
   /**
-   * 지금 세대를 끝낸다. 읽던 것이 있을 때만 대기열을 끊는다.
-   * 읽는 것이 없는데도 끊으면, 끊은 직후의 읽기를 놓친다고 알려진 브라우저(Safari)에서 새 읽기가 빠질 수 있다
-   * (이 환경에서 확인하지 못했다. Chrome 157은 끊은 직후의 읽기를 정상으로 읽었다).
+   * 합성기 대기열에 든 우리 조각들. 모두 끝났거나 끊었으면 null이다.
+   * cancel한 뒤에 오는 이벤트(끊긴 조각의 interrupted 등)는 조각의 묶음이 이것과 달라서 버려진다.
+   * null일 때는 cancel을 부르지 않는다. 읽는 것이 없는데 끊으면 끊은 직후의 읽기를 놓친다고 알려진 브라우저(Safari)가 있다
+   * (이 환경에서 확인하지 못했다).
    */
-  function close(): void {
-    generation += 1;
-    if (!busy) return;
-    busy = false;
-    synth.cancel();
+  let queued: Batch<V> | null = null;
+  /** 시작 감시. 넣은 조각이 있고 읽히는 중인 조각이 없는 동안에만 걸려 있다. */
+  let startWatch: ReturnType<typeof setTimeout> | undefined;
+
+  /** 읽기가 끝났다고 한 번 알린다. 그사이 끊겼거나 새 읽기에 밀린 읽기는 알리지 않는다. */
+  function settle(reading: Reading<V>, problem: SpeakProblem | null): void {
+    if (wanted !== reading) return;
+    wanted = null;
+    reading.onDone(problem);
+  }
+
+  /** 합성기 대기열을 원하는 읽기에 맞춘다. 원하는 읽기나 대기열의 상태가 바뀔 때마다 부른다. */
+  function flush(): void {
+    if (queued) {
+      if (queued.reading === wanted) return;
+      // 읽히는 중이 아닐 때 끊으면 대기열이 멈춘다. 끊지 않고 두었다가 다음 start에서 다시 맞춘다.
+      if (!queued.speaking) return;
+      queued = null;
+      synth.cancel();
+    }
+    if (wanted) put(wanted);
+  }
+
+  /** 시작 감시를 처음부터 다시 잰다. 조각을 넣었을 때와, 조각이 끝났는데 남은 조각이 있을 때 부른다. */
+  function watchStart(batch: Batch<V>): void {
+    clearTimeout(startWatch);
+    startWatch = setTimeout(() => {
+      // 이미 멈춘 대기열이라 시작 전에 끊어도 더 잃을 것이 없다.
+      // 멈춘 대기열을 끊고 같은 틱에 새 조각을 넣었더니 되살아난 적이 있다(실측: 두 번 가운데 한 번).
+      queued = null;
+      synth.cancel();
+      settle(batch.reading, 'failed');
+      flush();
+    }, START_WATCH_MS);
+  }
+
+  /** 읽기의 조각을 모두 한꺼번에 차례대로 넣는다. */
+  function put(reading: Reading<V>): void {
+    const batch: Batch<V> = { reading, left: 0, speaking: false };
+    queued = batch;
+    watchStart(batch);
+    for (const text of reading.chunks) {
+      batch.left += 1;
+      synth.speak(
+        { text, voice: reading.voice, rate: reading.style.rate, pitch: reading.style.pitch },
+        {
+          onStart() {
+            if (queued !== batch) return;
+            clearTimeout(startWatch);
+            batch.speaking = true;
+            flush();
+          },
+          onDone(outcome) {
+            if (queued !== batch) return;
+            batch.speaking = false;
+            batch.left -= 1;
+            if (batch.left > 0) {
+              watchStart(batch);
+            } else {
+              clearTimeout(startWatch);
+              queued = null;
+            }
+            // 오류로 끝난 조각 뒤에 남은 조각은 원하는 읽기가 아니게 되어, 시작할 때 flush가 끊는다.
+            if (outcome !== 'end') settle(reading, problemOf(outcome));
+            else if (batch.left === 0) settle(reading, null);
+            flush();
+          },
+        },
+      );
+      // 조각이 넣자마자 오류로 끝났으면 남은 조각은 넣지 않는다.
+      if (wanted !== reading) return;
+    }
   }
 
   return {
     say(text, voice, style, onDone) {
-      close();
-      const mine = generation;
       const chunks = splitForSpeech(text);
-      if (chunks.length === 0) {
-        onDone(null);
-        return;
-      }
-      busy = true;
-      for (const [index, chunk] of chunks.entries()) {
-        // 앞 조각이 넣자마자 오류로 끝났으면 남은 조각은 넣지 않는다.
-        if (mine !== generation) return;
-        synth.speak({ text: chunk, voice, rate: style.rate, pitch: style.pitch }, (outcome) => {
-          if (mine !== generation) return;
-          if (outcome === 'end') {
-            if (index < chunks.length - 1) return;
-            generation += 1;
-            busy = false;
-            onDone(null);
-            return;
-          }
-          close();
-          onDone(problemOf(outcome));
-        });
-      }
+      wanted = chunks.length > 0 ? { chunks, voice, style, onDone } : null;
+      flush();
+      if (chunks.length === 0) onDone(null);
     },
-    stop: close,
+    stop() {
+      wanted = null;
+      flush();
+    },
   };
 }

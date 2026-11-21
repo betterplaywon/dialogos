@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { beforeEach, test } from 'node:test';
 import {
   chooseVoice,
   createSpeaker,
@@ -11,6 +11,11 @@ import {
   type SpeakProblem,
 } from '../web/src/speak.ts';
 import { FakeSynth, MEASURED_VOICES, REMOTE_ONLY_VOICES, voice } from './voice-fakes.ts';
+
+// 읽기 제어기는 넣은 조각의 시작을 타이머로 감시한다. 이 파일의 검사는 모두 가짜 타이머로 돌려, 6초짜리 실제 타이머가 검사 뒤에 남지 않게 한다.
+beforeEach((t) => {
+  if ('mock' in t) t.mock.timers.enable({ apis: ['setTimeout'] });
+});
 
 const letters = (text: string) => text.replace(/[^\p{L}\p{N}]/gu, '');
 
@@ -207,6 +212,8 @@ test('읽을 글의 조각을 모두 한꺼번에 차례대로 넣고, 마지막
   // 같은 조각의 이벤트가 다시 와도 한 번만 알린다.
   synth.finish(2);
   assert.deepEqual(done, [null]);
+  // 끝까지 읽는 동안 대기열을 끊지 않는다.
+  assert.equal(synth.cancels, 0);
 });
 
 test('읽을 조각이 없으면 아무것도 넣지 않고 바로 끝났다고 알린다', () => {
@@ -216,27 +223,42 @@ test('읽을 조각이 없으면 아무것도 넣지 않고 바로 끝났다고 
   assert.deepEqual(done, [null]);
 });
 
-test('stop하면 대기열을 끊고, 끊긴 읽기는 끝났다고 알리지 않는다', () => {
+test('읽히는 중에 stop하면 바로 대기열을 끊고, 끊긴 읽기는 끝났다고 알리지 않는다', () => {
   const { synth, done, speaker: reader, onDone } = speaker();
   reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
-  const before = synth.cancels;
+  synth.start(0);
   reader.stop();
-  assert.equal(synth.cancels, before + 1);
+  assert.equal(synth.cancels, 1);
   // 읽던 조각은 interrupted로 끝나고, 대기 중이던 조각은 아무 이벤트도 오지 않는다(실측).
   synth.finish(0, 'interrupted');
   assert.deepEqual(done, []);
 });
 
-test('새로 읽으면 앞의 읽기를 끊고, 끊긴 조각이 늦게 낸 이벤트는 새 읽기에 영향을 주지 않는다', () => {
+test('읽기를 넣고 시작하기 전에 stop하면 끊지 않고, 그 문장이 시작할 때 한 번 끊는다', () => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
+  reader.stop();
+  // 맨 앞 문장이 시작하기 전에 끊으면 Chrome의 대기열이 멈춘다(실측). 그래서 아직 끊지 않는다.
+  assert.equal(synth.cancels, 0);
+  synth.start(0);
+  assert.equal(synth.cancels, 1);
+  assert.deepEqual(synth.queue(), []);
+  synth.finish(0, 'interrupted');
+  assert.equal(synth.cancels, 1);
+  assert.deepEqual(done, []);
+});
+
+test('읽히는 중에 새로 읽으면 바로 앞의 읽기를 끊고, 끊긴 조각이 늦게 낸 이벤트는 새 읽기에 영향을 주지 않는다', () => {
   const { synth, speaker: reader } = speaker();
   const first: (SpeakProblem | null)[] = [];
   const second: (SpeakProblem | null)[] = [];
   reader.say('앞의 글 하나. 앞의 글 둘.', YUNA, STYLE, (problem) => first.push(problem));
-  const before = synth.cancels;
+  synth.start(0);
   reader.say('새 글 하나. 새 글 둘.', YUNA, STYLE, (problem) => second.push(problem));
-  // 앞의 것을 끊은 뒤에 새 조각을 넣는다.
-  assert.equal(synth.cancels, before + 1);
+  // 앞의 것을 끊은 뒤에 새 조각을 넣는다. 그래서 대기열에는 새 조각만 남는다.
+  assert.equal(synth.cancels, 1);
   assert.deepEqual(synth.texts(), ['앞의 글 하나.', '앞의 글 둘.', '새 글 하나.', '새 글 둘.']);
+  assert.deepEqual(synth.queue(), ['새 글 하나.', '새 글 둘.']);
   // 앞 세대의 조각이 끊기며 낸 오류와, 그사이 끝까지 읽힌 조각의 end가 늦게 온다.
   synth.finish(0, 'interrupted');
   synth.finish(1, 'end');
@@ -246,17 +268,137 @@ test('새로 읽으면 앞의 읽기를 끊고, 끊긴 조각이 늦게 낸 이�
   assert.deepEqual([first, second], [[], [null]]);
 });
 
-test('브라우저가 소리 재생을 막으면 남은 조각을 끊고 막혔다고 따로 알린다', () => {
+test('끊긴 조각이 늦게 낸 이벤트는 새 읽기를 읽히는 중으로도, 끝난 것으로도 만들지 않는다', () => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('앞의 글 하나. 앞의 글 둘.', YUNA, STYLE, onDone);
+  synth.start(0);
+  reader.say('새 글 하나. 새 글 둘.', YUNA, STYLE, onDone);
+  // 끊는 순간 합성기가 다음 조각으로 넘어가고 있었다면, 끊긴 조각들의 end와 start가 늦게 올 수 있다(추정).
+  synth.finish(0);
+  synth.start(1);
+  synth.finish(1, 'interrupted');
+  // 새 읽기는 아직 시작 전이다. 지금 stop해도 끊지 않고, 새 읽기의 조각이 시작하면 그때 끊는다.
+  reader.stop();
+  assert.deepEqual([synth.cancels, synth.queue()], [1, ['새 글 하나.', '새 글 둘.']]);
+  synth.start(2);
+  assert.deepEqual([synth.cancels, synth.queue(), done], [2, [], []]);
+});
+
+test('읽기, stop, 새 읽기가 한 틱에 와도 앞의 문장이 시작하기 전에는 끊지 않고, 시작하면 끊은 뒤 새 읽기를 넣는다', () => {
+  const { synth, speaker: reader } = speaker();
+  const first: (SpeakProblem | null)[] = [];
+  const second: (SpeakProblem | null)[] = [];
+  // 개발 서버의 React StrictMode가 판 화면의 효과를 두 번 돌릴 때의 순서다.
+  reader.say('앞의 글 하나. 앞의 글 둘.', YUNA, STYLE, (problem) => first.push(problem));
+  reader.stop();
+  reader.say('새 글 하나. 새 글 둘.', YUNA, STYLE, (problem) => second.push(problem));
+  assert.equal(synth.cancels, 0);
+  assert.deepEqual(synth.queue(), ['앞의 글 하나.', '앞의 글 둘.']);
+  synth.start(0);
+  assert.equal(synth.cancels, 1);
+  assert.deepEqual(synth.queue(), ['새 글 하나.', '새 글 둘.']);
+  synth.finish(0, 'interrupted');
+  synth.finish(2);
+  assert.deepEqual([first, second], [[], []]);
+  synth.finish(3);
+  assert.deepEqual([first, second], [[], [null]]);
+  assert.equal(synth.cancels, 1);
+});
+
+test('시작하기 전에 새 읽기가 두 번 연달아 오면 마지막 것만 읽는다', () => {
+  const { synth, speaker: reader } = speaker();
+  const done: string[] = [];
+  reader.say('첫째 글.', YUNA, STYLE, () => done.push('첫째'));
+  reader.say('둘째 글.', YUNA, STYLE, () => done.push('둘째'));
+  reader.say('셋째 글.', YUNA, STYLE, () => done.push('셋째'));
+  assert.deepEqual([synth.texts(), synth.cancels], [['첫째 글.'], 0]);
+  synth.start(0);
+  assert.deepEqual([synth.texts(), synth.cancels], [['첫째 글.', '셋째 글.'], 1]);
+  synth.finish(1);
+  assert.deepEqual(done, ['셋째']);
+});
+
+test('문장과 문장 사이에 stop하면 다음 문장이 시작할 때 끊는다', () => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다. 셋째 문장입니다.', YUNA, STYLE, onDone);
+  // 첫 문장은 끝났고 둘째 문장은 아직 시작 전이다.
+  synth.finish(0);
+  reader.stop();
+  assert.equal(synth.cancels, 0);
+  synth.start(1);
+  assert.equal(synth.cancels, 1);
+  assert.deepEqual(synth.queue(), []);
+  assert.deepEqual(done, []);
+});
+
+test('문장과 문장 사이에 새로 읽으면 다음 문장이 시작할 때 끊고 새 읽기를 넣는다', () => {
+  const { synth, speaker: reader } = speaker();
+  const first: (SpeakProblem | null)[] = [];
+  const second: (SpeakProblem | null)[] = [];
+  reader.say('앞의 글 하나. 앞의 글 둘.', YUNA, STYLE, (problem) => first.push(problem));
+  synth.finish(0);
+  reader.say('새 글.', YUNA, STYLE, (problem) => second.push(problem));
+  assert.deepEqual([synth.cancels, synth.queue()], [0, ['앞의 글 둘.']]);
+  synth.start(1);
+  assert.deepEqual([synth.cancels, synth.queue()], [1, ['새 글.']]);
+  synth.finish(2);
+  assert.deepEqual([first, second], [[], [null]]);
+});
+
+test('조각이 오류로 끝나면 문제를 한 번 알리고, 남은 조각은 시작할 때 끊는다', () => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다. 셋째 문장입니다.', YUNA, STYLE, onDone);
+  synth.start(0);
+  synth.finish(0, 'synthesis-failed');
+  assert.deepEqual(done, ['failed']);
+  // 남은 조각은 아직 시작 전이라 끊지 않는다.
+  assert.deepEqual([synth.cancels, synth.queue()], [0, ['둘째 문장입니다.', '셋째 문장입니다.']]);
+  synth.start(1);
+  assert.deepEqual([synth.cancels, synth.queue()], [1, []]);
+  synth.finish(1, 'interrupted');
+  assert.deepEqual(done, ['failed']);
+});
+
+test('오류로 끝난 읽기의 남은 조각이 시작하기 전에 새로 읽으면, 그 조각이 시작할 때 끊고 새 읽기를 넣는다', () => {
   const { synth, done, speaker: reader, onDone } = speaker();
   reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
-  const before = synth.cancels;
+  synth.start(0);
+  synth.finish(0, 'synthesis-failed');
+  reader.say('다시 읽습니다.', YUNA, STYLE, onDone);
+  assert.deepEqual([synth.cancels, synth.queue()], [0, ['둘째 문장입니다.']]);
+  synth.start(1);
+  assert.deepEqual([synth.cancels, synth.queue()], [1, ['다시 읽습니다.']]);
+  synth.finish(2);
+  assert.deepEqual(done, ['failed', null]);
+});
+
+test('브라우저가 소리 재생을 막으면 막혔다고 따로 알리고, 남은 조각의 오류로 다시 알리지 않는다', (t) => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
   synth.finish(0, 'not-allowed');
   assert.deepEqual(done, ['blocked']);
-  assert.equal(synth.cancels, before + 1);
-  // 남은 조각의 이벤트가 와도 다시 알리지 않는다.
   synth.finish(1, 'not-allowed');
-  synth.finish(1);
-  assert.deepEqual(done, ['blocked']);
+  // 조각이 모두 오류로 끝나 대기열이 비었다. 읽힌 조각이 없었으므로 시간이 지나도 끊지 않는다.
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([done, synth.cancels], [['blocked'], 0]);
+  // 다음 읽기는 바로 넣는다.
+  reader.say('다시 읽습니다.', YUNA, STYLE, onDone);
+  assert.deepEqual([synth.cancels, synth.queue()], [0, ['다시 읽습니다.']]);
+});
+
+test('시작하지 못한 앞의 읽기가 오류로 모두 끝나면, 기다리던 새 읽기를 끊지 않고 넣는다', () => {
+  const { synth, speaker: reader } = speaker();
+  const first: (SpeakProblem | null)[] = [];
+  const second: (SpeakProblem | null)[] = [];
+  reader.say('앞의 글 하나. 앞의 글 둘.', YUNA, STYLE, (problem) => first.push(problem));
+  reader.say('새 글.', YUNA, STYLE, (problem) => second.push(problem));
+  synth.finish(0, 'not-allowed');
+  assert.deepEqual(synth.queue(), ['앞의 글 둘.']);
+  synth.finish(1, 'not-allowed');
+  assert.deepEqual([synth.cancels, synth.queue()], [0, ['새 글.']]);
+  // 새 읽기에 밀린 앞의 읽기는 문제도 알리지 않는다.
+  synth.finish(2);
+  assert.deepEqual([first, second], [[], [null]]);
 });
 
 test('조각이 넣자마자 오류로 끝나면 남은 조각은 넣지 않는다', () => {
@@ -295,7 +437,8 @@ test('읽는 것이 없을 때는 대기열을 끊지 않는다', () => {
   reader.stop();
   reader.say('다음 문장입니다.', YUNA, STYLE, onDone);
   assert.equal(synth.cancels, 0);
-  // 읽는 중에 새로 읽을 때만 끊는다.
+  // 읽히는 중에 새로 읽을 때만 끊는다.
+  synth.start(1);
   reader.say('끼어든 문장입니다.', YUNA, STYLE, onDone);
   assert.equal(synth.cancels, 1);
   assert.deepEqual(done, [null]);
@@ -308,4 +451,101 @@ test('문제로 끝난 뒤에도 다시 읽을 수 있다', () => {
   reader.say('다시 읽습니다.', YUNA, STYLE, onDone);
   synth.finish(1);
   assert.deepEqual(done, ['failed', null]);
+});
+
+test('넣은 조각이 6초 동안 시작하지 않으면 문제로 한 번 알리고, 그 뒤의 읽기는 다시 넣는다', (t) => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
+  // 합성기가 멈췄다. start도 end도 오류도 오지 않는다.
+  synth.stalled = true;
+  t.mock.timers.tick(5_900);
+  assert.deepEqual([done, synth.cancels], [[], 0]);
+  t.mock.timers.tick(100);
+  // 멈춘 대기열은 비운다.
+  assert.deepEqual([done, synth.cancels, synth.queue()], [['failed'], 1, []]);
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([done, synth.cancels], [['failed'], 1]);
+  reader.say('다시 읽습니다.', YUNA, STYLE, onDone);
+  assert.deepEqual(synth.queue(), ['다시 읽습니다.']);
+  synth.finish(2);
+  assert.deepEqual(done, ['failed', null]);
+});
+
+test('읽히는 동안에는 시간을 재지 않고, 문장 사이에서 다시 6초를 잰다', (t) => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다. 둘째 문장입니다.', YUNA, STYLE, onDone);
+  t.mock.timers.tick(5_900);
+  synth.start(0);
+  // 긴 문장은 읽는 데 6초를 넘긴다(80자는 약 10초). 읽히는 중이면 멈춘 것이 아니다.
+  t.mock.timers.tick(30_000);
+  assert.deepEqual([done, synth.cancels], [[], 0]);
+  synth.finish(0);
+  synth.stalled = true;
+  t.mock.timers.tick(5_900);
+  assert.deepEqual([done, synth.cancels], [[], 0]);
+  t.mock.timers.tick(100);
+  assert.deepEqual([done, synth.cancels], [['failed'], 1]);
+});
+
+test('끝까지 읽은 뒤와 읽히는 중에 끊은 뒤에는 시간이 지나도 문제로 알리지 않는다', (t) => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다.', YUNA, STYLE, onDone);
+  synth.finish(0);
+  t.mock.timers.tick(60_000);
+  reader.say('다음 문장입니다.', YUNA, STYLE, onDone);
+  synth.start(1);
+  reader.stop();
+  t.mock.timers.tick(60_000);
+  assert.deepEqual([done, synth.cancels], [[null], 1]);
+});
+
+test('멈춘 대기열에서는 끊긴 읽기를 알리지 않고, 기다리던 새 읽기를 이어서 넣는다', (t) => {
+  const { synth, speaker: reader } = speaker();
+  const first: (SpeakProblem | null)[] = [];
+  const second: (SpeakProblem | null)[] = [];
+  reader.say('앞의 글.', YUNA, STYLE, (problem) => first.push(problem));
+  reader.say('새 글.', YUNA, STYLE, (problem) => second.push(problem));
+  synth.stalled = true;
+  t.mock.timers.tick(6_000);
+  assert.deepEqual([first, second, synth.cancels, synth.queue()], [[], [], 1, ['새 글.']]);
+  // 끊고 넣은 새 읽기가 되살아나 끝까지 읽힌다.
+  synth.finish(1);
+  assert.deepEqual([first, second], [[], [null]]);
+});
+
+test('멈춘 대기열에서 stop으로 끊긴 읽기는 알리지 않고, 6초 뒤에 대기열만 비운다', (t) => {
+  const { synth, done, speaker: reader, onDone } = speaker();
+  reader.say('첫 문장입니다.', YUNA, STYLE, onDone);
+  reader.stop();
+  synth.stalled = true;
+  t.mock.timers.tick(6_000);
+  assert.deepEqual([done, synth.cancels, synth.queue()], [[], 1, []]);
+});
+
+test('가짜 합성기는 읽히는 조각이 없을 때의 cancel을 잡아낸다', () => {
+  const chunk = (text: string) => ({ text, voice: YUNA, rate: 1, pitch: 1 });
+  const events = { onStart() {}, onDone() {} };
+  const early = /시작 전의 cancel/;
+  const synth = new FakeSynth();
+  // 빈 대기열은 끊어도 된다.
+  synth.cancel();
+  // 넣었지만 시작 전이다(Chrome 157에서 대기열이 멈춘 순서).
+  synth.speak(chunk('하나.'), events);
+  synth.speak(chunk('둘.'), events);
+  assert.throws(() => synth.cancel(), early);
+  // 읽히는 중이면 끊어도 된다.
+  synth.start(0);
+  synth.cancel();
+  assert.deepEqual([synth.cancels, synth.queue()], [2, []]);
+  // 문장과 문장 사이다.
+  synth.speak(chunk('셋.'), events);
+  synth.speak(chunk('넷.'), events);
+  synth.finish(2);
+  assert.throws(() => synth.cancel(), early);
+  // 이미 멈춘 대기열은 한 번 끊을 수 있다. 그 뒤에 넣은 조각은 다시 지켜본다.
+  synth.stalled = true;
+  synth.cancel();
+  synth.speak(chunk('다섯.'), events);
+  assert.throws(() => synth.cancel(), early);
+  assert.equal(synth.cancels, 3);
 });
