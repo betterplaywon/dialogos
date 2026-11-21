@@ -12,10 +12,11 @@ import type {
   MessageView,
   SideIndex,
   TopicView,
+  TurnInput,
   TurnResponse,
   Verdict,
 } from './contract.ts';
-import type { EndRecord, GameRecord, GameStore, Mode } from './store.ts';
+import { voiceTallyOf, type EndRecord, type GameRecord, type GameStore, type Mode } from './store.ts';
 
 /** 한 판에서 사용자가 보낼 수 있는 턴 수. 판정 실험이 잰 대화 길이와 같다. */
 export const MAX_TURNS = DEFAULT_TURNS;
@@ -57,6 +58,8 @@ export const isSide = (value: unknown): value is SideIndex => value === 0 || val
 export const isLean = (value: unknown): value is Lean =>
   typeof value === 'number' && Number.isInteger(value) && value >= -2 && value <= 2;
 export const isVerdict = (value: unknown): value is Verdict => value === 'debate' || value === 'lecture';
+export const isTurnInput = (value: unknown): value is TurnInput =>
+  value === 'text' || value === 'voice' || value === 'voice-edited';
 
 export interface GameDeps {
   topics: ReadonlyMap<string, Topic>;
@@ -148,6 +151,7 @@ export function createGames(deps: GameDeps) {
       ended: game.endedAt !== undefined,
       endReason: game.endReason ?? null,
       record: recordView(game.record),
+      voice: voiceTallyOf(game.turns),
     };
   }
 
@@ -179,6 +183,7 @@ export function createGames(deps: GameDeps) {
             maxTurns: MAX_TURNS,
             ended: summary.endedAt !== undefined,
             record: recordView(summary.record),
+            voice: summary.voice,
             startedAt: summary.startedAt,
           },
         ];
@@ -219,7 +224,8 @@ export function createGames(deps: GameDeps) {
       return viewOf(await load(userId, id));
     },
 
-    async turn(userId: string, id: string, rawText: string): Promise<TurnResponse> {
+    /** input은 사용자가 이 말을 넣은 방식이다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다. */
+    async turn(userId: string, id: string, rawText: string, input: TurnInput): Promise<TurnResponse> {
       const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
       if (text.length > MAX_TEXT_LENGTH) throw new GameError(400, `한 턴에는 ${MAX_TEXT_LENGTH}자까지 보낼 수 있습니다.`);
@@ -242,6 +248,7 @@ export function createGames(deps: GameDeps) {
         game.turns.push({
           n,
           user: text,
+          input,
           reply: outcome.reply,
           ...(outcome.decision ? { decision: outcome.decision } : {}),
           ...(outcome.judge ? { judge: outcome.judge } : {}),

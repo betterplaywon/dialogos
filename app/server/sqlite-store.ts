@@ -3,7 +3,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type { ChatMessage, JudgeDecision } from '../../eval/src/types.ts';
-import type { EndReason, Lean, SideIndex, Verdict } from './contract.ts';
+import type { EndReason, Lean, SideIndex, TurnInput, Verdict } from './contract.ts';
 import type { EndRecord, GameRecord, GameStore, GameSummary, Mode, TurnLog } from './store.ts';
 
 /**
@@ -43,6 +43,8 @@ export const MIGRATIONS: readonly string[] = [
    ALTER TABLE games ADD COLUMN end_lean INTEGER CHECK (end_lean BETWEEN -2 AND 2);
    ALTER TABLE games ADD COLUMN verdict TEXT CHECK (verdict IN ('debate', 'lecture'));
    ALTER TABLE games ADD COLUMN recorded_at TEXT;`,
+  // 3: 턴의 말을 넣은 방식. 스키마 2까지는 글 입력뿐이었으므로 그때의 턴은 모두 'text'가 사실과 맞다.
+  `ALTER TABLE turns ADD COLUMN input TEXT NOT NULL DEFAULT 'text' CHECK (input IN ('text', 'voice', 'voice-edited'));`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -69,6 +71,7 @@ interface GameRow {
 interface TurnRow {
   n: number;
   user_text: string;
+  input: string;
   reply: string;
   decision: string | null;
   judge_calls: number | null;
@@ -85,6 +88,8 @@ interface SummaryRow {
   card_id: string;
   start_lean: number | null;
   turns: number;
+  voice_turns: number;
+  voice_edited: number;
   started_at: string;
   ended_at: string | null;
   end_lean: number | null;
@@ -102,6 +107,7 @@ function turnOf(row: TurnRow): TurnLog {
   return {
     n: row.n,
     user: row.user_text,
+    input: row.input as TurnInput,
     reply: row.reply,
     ...(row.decision !== null ? { decision: JSON.parse(row.decision) as JudgeDecision } : {}),
     ...(row.judge_calls !== null ? { judge: { calls: row.judge_calls, readable: row.judge_readable === 1 } } : {}),
@@ -165,8 +171,8 @@ export class SqliteGameStore implements GameStore {
   /** 아직 저장하지 않은 턴만 넣는다. 한 번 저장한 턴은 바꾸지 않는다. */
   #insertTurns(game: GameRecord): void {
     const insert = this.#db.prepare(
-      `INSERT INTO turns (game_id, n, user_text, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO turns (game_id, n, user_text, input, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (game_id, n) DO NOTHING`,
     );
     for (const turn of game.turns) {
@@ -174,6 +180,7 @@ export class SqliteGameStore implements GameStore {
         game.id,
         turn.n,
         turn.user,
+        turn.input,
         turn.reply,
         turn.decision ? JSON.stringify(turn.decision) : null,
         turn.judge ? turn.judge.calls : null,
@@ -269,7 +276,9 @@ export class SqliteGameStore implements GameStore {
       .prepare(
         `SELECT g.id, g.topic_id, g.side, g.card_id, g.start_lean, g.started_at, g.ended_at,
                 g.end_lean, g.verdict, g.recorded_at,
-                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id) AS turns
+                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id) AS turns,
+                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input <> 'text') AS voice_turns,
+                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input = 'voice-edited') AS voice_edited
          FROM games g
          WHERE g.user_id = ?
          ORDER BY g.started_at DESC, g.rowid DESC
@@ -285,6 +294,7 @@ export class SqliteGameStore implements GameStore {
         cardId: row.card_id,
         startLean: row.start_lean as Lean | null,
         turns: row.turns,
+        voice: { turns: row.voice_turns, edited: row.voice_edited },
         startedAt: row.started_at,
         ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
         ...(record ? { record } : {}),

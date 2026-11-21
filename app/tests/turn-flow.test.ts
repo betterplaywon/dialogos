@@ -26,6 +26,7 @@ const before: GameView = {
   ended: false,
   endReason: null,
   record: null,
+  voice: { turns: 0, edited: 0 },
 };
 
 /** 서버에 저장된 판. turns개의 턴이 들어 있다. */
