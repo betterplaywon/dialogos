@@ -121,6 +121,8 @@ test('목소리 목록이 아직 오지 않았으면 기다렸다가, 기기 목
   // 기다리는 동안 온 새 요청이 앞의 것을 대신한다.
   control.read(REPLY);
   assert.equal(control.getState().reading, 'g1:3');
+  // 읽던 것이 없으므로 대기열을 끊지 않는다. 켜는 누름 안에서 넣은 소리 없는 첫 읽기가 끊기지 않는다.
+  assert.equal(synth.cancels, 0);
   // 원격 목소리가 먼저 온다(실측). 목록이 다 오기 전에는 원격 목소리로 읽지 않는다.
   speech.emit(REMOTE_ONLY_VOICES, false);
   assert.deepEqual([control.getState().voice, synth.spoken.length], ['wait', 0]);
@@ -136,6 +138,24 @@ test('목소리 목록이 아직 오지 않았으면 기다렸다가, 기기 목
   assert.equal(synth.spoken.length, 1);
   synth.finish(0);
   assert.equal(control.getState().reading, null);
+});
+
+test('읽는 중에 기기 목소리가 목록에서 빠진 뒤 새 요청이 오면, 읽던 것을 끊고 목소리를 기다린다', () => {
+  const { control, speech, synth } = setup();
+  control.turnOn(OPENING);
+  assert.equal(synth.spoken.length, 2);
+  speech.emit(REMOTE_ONLY_VOICES, false);
+  // 목록이 바뀐 것만으로는 읽던 것을 끊지 않는다.
+  assert.deepEqual([control.getState().voice, control.getState().reading], ['wait', 'g1:1']);
+  const before = synth.cancels;
+  control.read(REPLY);
+  assert.equal(synth.cancels, before + 1);
+  assert.deepEqual([control.getState().reading, synth.spoken.length], ['g1:3', 2]);
+  // 끊긴 읽기의 늦은 이벤트는 기다리는 요청의 표시를 지우지 않는다.
+  synth.finish(0, 'interrupted');
+  assert.equal(control.getState().reading, 'g1:3');
+  speech.emit(MEASURED_VOICES, false);
+  assert.deepEqual(synth.texts().slice(2), ['그 반론은 받아들입니다.']);
 });
 
 test('기기 목소리가 끝내 없으면 목록이 다 온 뒤에 원격 목소리로 읽는다', () => {

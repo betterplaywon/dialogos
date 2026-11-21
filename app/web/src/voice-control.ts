@@ -159,7 +159,8 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
       say(request, voice);
       return;
     }
-    speaker.stop();
+    // 읽던 것이 있을 때만 끊는다. 켜는 누름 안에서 넣은 소리 없는 첫 읽기까지 끊지 않으려는 것이다.
+    if (current && !awaitingVoice) speaker.stop();
     current = request;
     awaitingVoice = true;
     set({ reading: request.key, speakProblem: null });

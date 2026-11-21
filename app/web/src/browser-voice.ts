@@ -79,9 +79,10 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
     },
 
     prime() {
-      // Chrome 157은 사용자의 누름 없이 한 첫 speak()를 not-allowed로 막았다(실측).
-      // Safari와 iOS는 첫 speak()가 누름 안에 있어야 한다고 알려져 있다(이 환경에서 확인하지 못했다).
+      // Safari와 iOS는 첫 speak()가 사용자의 누름 안에 있어야 한다고 알려져 있다(이 환경에서 확인하지 못했다).
       // 그래서 켜는 누름 안에서 빈 글을 소리 크기 0으로 한 번 읽어 둔다.
+      // Chrome 157은 누름이 한 번도 없으면 speak()를 not-allowed로 막고, 페이지를 한 번 누른 뒤로는 누름 밖의 읽기도
+      // 막지 않았다(실측). 목록이 오기 전에 넣은 이 빈 글은 기기 목소리가 올 때까지 대기했다가 바로 끝났다(실측).
       const utterance = new SpeechSynthesisUtterance('');
       utterance.lang = 'ko-KR';
       utterance.volume = 0;
