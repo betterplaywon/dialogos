@@ -7,7 +7,7 @@
 import { NOT_JUDGED_DECISION, UNREADABLE_DECISION } from './dialogue.ts';
 import type { RunMeta } from './runio.ts';
 import { CONDITIONS, type Condition, type Dialogue, type LabeledTurn, type TurnRecord, type Usage } from './types.ts';
-import { percent, quantile } from './util.ts';
+import { billedOutputTokens, percent, quantile } from './util.ts';
 
 export interface JudgeChecks {
   /** 엔진 조건의 대화 수. */
@@ -196,10 +196,7 @@ export function computeUsageChecks(metas: RunMeta[], dialogues: Dialogue[], labe
   const out: UsageChecks = { roles: {} };
   for (const role of ['opponent', 'judge', 'scorer'] as const) {
     const total = totals[role];
-    if (total) {
-      const outputTokens = total.totalTokens > 0 ? Math.max(0, total.totalTokens - total.promptTokens) : total.completionTokens;
-      out.roles[role] = { ...total, dialogues: counts[role], outputTokens };
-    }
+    if (total) out.roles[role] = { ...total, dialogues: counts[role], outputTokens: billedOutputTokens(total) };
   }
   if (totals.scorer) out.scorerRetries = Math.max(0, totals.scorer.calls - labels.length);
   return out;

@@ -1,5 +1,17 @@
 // 여러 곳에서 쓰는 작은 도구들. 외부 의존성 없이 둔다.
 
+import type { Usage } from './types.ts';
+
+/**
+ * 과금되는 출력 토큰(생각 토큰 포함). 응답이 전체 토큰을 알려 줬으면 전체에서 입력을 뺀 값, 아니면 출력 토큰 그대로.
+ * 생각 토큰을 출력에 넣어 알려 주는 곳과 따로 알려 주는 곳이 있어서, 전체 토큰을 기준으로 삼는다.
+ * 사용량을 비용으로 바꾸는 곳은 모두 이 셈을 써서 과금 기준을 한곳에 둔다.
+ */
+export function billedOutputTokens(usage: Usage): number {
+  const total = usage.totalTokens ?? 0;
+  return total > 0 ? Math.max(0, total - usage.promptTokens) : usage.completionTokens;
+}
+
 /** 문자열을 32비트 정수로 바꾼다(FNV-1a). 암호용이 아니라 고정된 섞기용이다. */
 export function hash(text: string): number {
   let h = 0x811c9dc5;
