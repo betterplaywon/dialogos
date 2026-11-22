@@ -392,19 +392,78 @@ test('판정기 뒤에 상대가 실패하면 500이고, 받은 응답의 양은
   assert.equal((await turn(app, game.id, '네 번째 반론입니다.')).status, 429);
 });
 
-test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않는다', async () => {
+test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으며, 그 뒤로는 서버를 다시 띄울 때까지 누구의 새 판과 턴도 503으로 막는다', async () => {
   const inner = new MemoryGameStore();
+  let ledgerDown = true;
   const store = storeWith(inner, {
-    async addSpend() {
-      throw new Error('원장 쓰기 실패: 시험용 오류');
+    async addSpend(entry) {
+      if (ledgerDown) throw new Error('원장 쓰기 실패: 시험용 오류');
+      return inner.addSpend(entry);
     },
   });
-  const { app } = setup({ store, models: steady().source, limits: NO_LIMITS });
-  const game = await start(app);
-  const { result, logged } = await quietly(() => turn(app, game.id, '반론입니다.'));
+  const { source, sent } = steady();
+  const { app } = setup({ store, models: source, limits: NO_LIMITS });
+  const mine = await start(app);
+  const theirs = await start(app, 'b');
+
+  const { result, logged } = await quietly(() => turn(app, mine.id, '원장에 남지 못할 반론입니다.'));
   assert.equal(result.status, 500);
   assert.match(logged.join('\n'), /원장 쓰기 실패/);
-  assert.equal((await inner.get(game.id))?.turns.length, 0);
+  // 닫히는 때 운영자가 알 수 있게 한 줄을 남긴다. 보낸 말은 남기지 않는다.
+  assert.equal(logged.filter((line) => /서버를 다시 띄울 때까지 새 판과 턴을 막습니다/.test(line)).length, 1);
+  assert.doesNotMatch(logged.join('\n'), /원장에 남지 못할 반론/);
+  // 판정기는 답했지만 그 양은 원장에 없고, 상대는 부르지 않았다.
+  assert.equal(sent.requests, 1);
+  assert.equal(await inner.totalSpendMicroUsd(), 0);
+  assert.equal((await inner.get(mine.id))?.turns.length, 0);
+
+  // 원장 쓰기가 다시 되어도 닫힌 채다. 같은 사용자와 다른 사용자의 턴, 새 판을 모두 막고 모델을 부르지 않는다.
+  ledgerDown = false;
+  for (const [path, body, user] of [
+    [`/api/games/${mine.id}/turns`, { text: '다시 보낸 반론입니다.' }, 'local'],
+    [`/api/games/${theirs.id}/turns`, { text: 'b의 반론입니다.' }, 'b'],
+    ['/api/games', START_Q01, 'local'],
+    ['/api/games', START_Q01, 'b'],
+  ] as const) {
+    const refused = await call(app, 'POST', path, body, user);
+    assert.equal(refused.status, 503, `${user} ${path}`);
+    assert.match(refused.data.error, /모델 사용량을 기록하지 못해/);
+  }
+  assert.equal(sent.requests, 1);
+  assert.equal((await call<GamesResponse>(app, 'GET', '/api/games')).data.games.length, 1);
+
+  // 끝내기와 끝 기록은 모델을 부르지 않아 막지 않는다.
+  assert.equal((await call(app, 'POST', `/api/games/${mine.id}/end`)).status, 200);
+  assert.equal((await call(app, 'POST', `/api/games/${mine.id}/record`, { lean: 0, verdict: 'debate' })).status, 200);
+
+  // 같은 저장소로 새로 띄운 서버는 다시 받고, 그 턴의 양은 원장에 남는다.
+  const restarted = setup({ store, models: source, limits: NO_LIMITS }).app;
+  assert.equal((await turn(restarted, theirs.id, '다시 띄운 뒤 b가 보낸 반론입니다.', 'b')).status, 200);
+  assert.equal(await inner.totalSpendMicroUsd(), JUDGE_CALL + OPPONENT_CALL);
+});
+
+test('상한을 확인하다 원장을 읽지 못하면 그 요청만 실패하고 닫지 않는다. 모델을 부르지 않아 기록 없이 나간 돈이 없다', async () => {
+  const inner = new MemoryGameStore();
+  let ledgerUnreadable = false;
+  const store = storeWith(inner, {
+    async totalSpendMicroUsd() {
+      if (ledgerUnreadable) throw new Error('원장 읽기 실패: 시험용 오류');
+      return inner.totalSpendMicroUsd();
+    },
+  });
+  const { source, sent } = steady();
+  const { app } = setup({ store, models: source, limits: NO_LIMITS });
+  const game = await start(app);
+
+  ledgerUnreadable = true;
+  const { result, logged } = await quietly(() => turn(app, game.id, '원장을 읽지 못할 때 보낸 반론입니다.'));
+  assert.equal(result.status, 500);
+  assert.match(logged.join('\n'), /원장 읽기 실패/);
+  assert.equal(sent.requests, 0);
+
+  ledgerUnreadable = false;
+  assert.equal((await turn(app, game.id, '다시 보낸 반론입니다.')).status, 200);
+  assert.equal(await inner.totalSpendMicroUsd(), JUDGE_CALL + OPPONENT_CALL);
 });
 
 test('모의 모델은 원장에 남기지 않지만 하루 턴 수에는 든다', async () => {

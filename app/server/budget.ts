@@ -62,15 +62,23 @@ export interface Refusal {
 }
 
 /**
- * 새 판이나 새 턴을 받을지 본다. 받으면 null이다.
- * 서비스 상한(503)을 먼저 본다. 서비스가 멈췄는데 '내일 다시 할 수 있다'고 알리지 않으려는 것이다.
+ * 새 판이나 새 턴을 받을지 본다. 받으면 null이다. ledgerClosed는 원장 쓰기가 실패해 판 진행(games.ts)이 원장을 닫았는지다.
+ * 원장이 닫혔는지(503)를 가장 먼저 본다. 저장소가 아직 망가져 있으면 원장을 읽다가 실패해, 막는 까닭을 알리지 못한다.
+ * 그다음 서비스 상한(503)을 하루 턴 수(429)보다 먼저 본다. 서비스가 멈췄는데 '내일 다시 할 수 있다'고 알리지 않으려는 것이다.
  */
 export async function limitRefusal(
   store: Pick<GameStore, 'totalSpendMicroUsd' | 'countTurnsSince'>,
   limits: Limits,
   userId: string,
   now: Date,
+  ledgerClosed: boolean,
 ): Promise<Refusal | null> {
+  if (ledgerClosed) {
+    return {
+      status: 503,
+      message: "서버가 모델 사용량을 기록하지 못해, 운영자가 확인할 때까지 새 판과 턴을 받지 않습니다. 하던 판은 '지난 판'에 남아 있습니다.",
+    };
+  }
   // 원으로 정한 상한을 원장의 단위(100만분의 1달러)로 바꿔 견준다.
   const capMicroUsd = (limits.totalWon / KRW_PER_USD) * 1_000_000;
   if ((await store.totalSpendMicroUsd()) >= capMicroUsd) {
