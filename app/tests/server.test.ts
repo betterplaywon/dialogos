@@ -10,7 +10,7 @@ import type { GamesResponse, GameView, TopicsResponse, TurnResponse } from '../s
 import { MAX_TEXT_LENGTH, MAX_TURNS } from '../server/games.ts';
 import { mockModels } from '../server/models.ts';
 import { SqliteGameStore } from '../server/sqlite-store.ts';
-import { MemoryGameStore, type GameRecord, type GameStore, type Mode } from '../server/store.ts';
+import { MemoryGameStore, type GameRecord, type GameStore, type Mode, type SpendEntry } from '../server/store.ts';
 import { loadFixtureTopics } from './topic-fixtures.ts';
 
 const topics = loadFixtureTopics();
@@ -371,6 +371,9 @@ test('저장이 느려도 같은 판의 턴과 끝내기가 서로의 저장을 
       return inner.save(game);
     },
     list: (userId: string, limit: number) => inner.list(userId, limit),
+    countTurnsSince: (userId: string, since: string) => inner.countTurnsSince(userId, since),
+    addSpend: (entry: SpendEntry) => inner.addSpend(entry),
+    totalSpendMicroUsd: () => inner.totalSpendMicroUsd(),
   };
   const { app } = setup({ store: slowStore, pickMode: () => 'prompt' });
   for (let round = 0; round < 5; round++) {

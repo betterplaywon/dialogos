@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { MIGRATIONS, SqliteGameStore } from '../server/sqlite-store.ts';
-import { MemoryGameStore, type GameRecord, type GameStore, type TurnLog } from '../server/store.ts';
+import { MemoryGameStore, type GameRecord, type GameStore, type SpendEntry, type TurnLog } from '../server/store.ts';
 
 /** 같은 검사를 두 저장소에 돌린다. 배포처의 저장소를 붙일 때도 여기에 더한다. */
 const stores: [string, () => GameStore & { close?: () => void }][] = [
@@ -63,6 +63,25 @@ const mixedInputTurns: TurnLog[] = (['text', 'voice', 'voice-edited', 'voice'] a
   n: index + 1,
   input,
 }));
+
+/** 저장한 시각만 다른 지시문 방식의 턴. */
+const turnAt = (n: number, at: string): TurnLog => ({ ...promptTurn, n, at });
+
+/** 판정기를 한 번 부른 원장 한 줄. */
+function spend(overrides: Partial<SpendEntry> = {}): SpendEntry {
+  return {
+    at: '2026-11-19T00:01:00.000Z',
+    userId: 'local',
+    gameId: 'g1',
+    role: 'judge',
+    model: 'fake-judge',
+    calls: 1,
+    inputTokens: 1000,
+    outputTokens: 240,
+    costMicroUsd: 850,
+    ...overrides,
+  };
+}
 
 for (const [name, open] of stores) {
   test(`${name} 저장소: 만든 판을 그대로 돌려주고, 밖에서 고쳐도 저장된 판은 그대로다`, async (t) => {
@@ -204,6 +223,39 @@ for (const [name, open] of stores) {
     );
     assert.deepEqual(await store.list('nobody', 10), []);
   });
+
+  test(`${name} 저장소: 턴 수는 그 사용자가 since 이후에 저장한 턴만 센다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    const since = '2026-11-18T15:00:00.000Z';
+    // since 1ms 전의 턴은 세지 않고, since와 같은 시각의 턴부터 센다.
+    await store.create(
+      sample({ id: 'a', mode: 'prompt', turns: [turnAt(1, '2026-11-18T14:59:59.999Z'), turnAt(2, since), turnAt(3, '2026-11-19T01:00:00.000Z')] }),
+    );
+    // 끝난 판의 턴도 센다.
+    await store.create(
+      sample({ id: 'b', mode: 'prompt', turns: [turnAt(1, '2026-11-19T02:00:00.000Z')], endedAt: '2026-11-19T02:10:00.000Z', endReason: 'user' }),
+    );
+    await store.create(sample({ id: 'c', userId: 'someone-else', mode: 'prompt', turns: [turnAt(1, '2026-11-19T03:00:00.000Z')] }));
+    assert.equal(await store.countTurnsSince('local', since), 3);
+    assert.equal(await store.countTurnsSince('someone-else', since), 1);
+    assert.equal(await store.countTurnsSince('nobody', since), 0);
+    // 새 턴을 저장하면 바로 센다.
+    const game = await store.get('a');
+    await store.save({ ...game!, turns: [...game!.turns, turnAt(4, '2026-11-19T04:00:00.000Z')] });
+    assert.equal(await store.countTurnsSince('local', since), 4);
+  });
+
+  test(`${name} 저장소: 원장은 덧붙인 비용을 모두 더하고, 없는 판의 비용도 받는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    assert.equal(await store.totalSpendMicroUsd(), 0);
+    await store.addSpend(spend());
+    await store.addSpend(spend({ role: 'opponent', model: 'fake-opponent', inputTokens: 2000, outputTokens: 100, costMicroUsd: 1875 }));
+    // 판이 없어져도 쓴 돈은 남아야 하므로, 원장은 판이 있는지 따지지 않는다.
+    await store.addSpend(spend({ userId: 'someone-else', gameId: '없는판', costMicroUsd: 1 }));
+    assert.equal(await store.totalSpendMicroUsd(), 850 + 1875 + 1);
+  });
 }
 
 test('SQLite 저장소: 파일을 다시 열면 판이 남고, 스키마는 한 번만 적용한다', async (t) => {
@@ -333,6 +385,84 @@ test('SQLite 저장소: 정해지지 않은 방식의 턴은 저장하지 않는
   const unknown = { ...promptTurn, input: 'dictated' as TurnLog['input'] };
   await assert.rejects(store.save(sample({ mode: 'prompt', turns: [unknown] })));
   assert.deepEqual((await store.get('g1'))?.turns, []);
+});
+
+test('SQLite 저장소: 원장은 정한 역할, 1 이상의 호출 수, 음수가 아닌 양만 받는다', async (t) => {
+  const store = new SqliteGameStore(':memory:');
+  t.after(() => store.close());
+  for (const bad of [
+    spend({ role: 'scorer' as SpendEntry['role'] }),
+    spend({ calls: 0 }),
+    spend({ inputTokens: -1 }),
+    spend({ outputTokens: -1 }),
+    spend({ costMicroUsd: -1 }),
+  ]) {
+    await assert.rejects(store.addSpend(bad), JSON.stringify(bad));
+  }
+  assert.equal(await store.totalSpendMicroUsd(), 0);
+});
+
+test('SQLite 저장소: 원장은 파일을 다시 열어도 남는다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-spend-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  const first = new SqliteGameStore(path);
+  await first.addSpend(spend());
+  await first.addSpend(spend({ role: 'opponent', model: 'fake-opponent', costMicroUsd: 1875 }));
+  first.close();
+
+  const second = new SqliteGameStore(path);
+  t.after(() => second.close());
+  assert.equal(await second.totalSpendMicroUsd(), 850 + 1875);
+});
+
+test('SQLite 저장소: 스키마 3의 파일을 열면 원장을 더하고, 예전 판과 턴은 그대로 읽고 센다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-migrate-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  // 스키마 3까지만 적용한 파일(비용 상한을 붙이기 전의 서버가 만든 파일)을 흉내 낸다. 그때는 원장 표가 없다.
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+  for (const sql of MIGRATIONS.slice(0, 3)) old.exec(sql);
+  old.exec('INSERT INTO schema_version (version) VALUES (1), (2), (3)');
+  old
+    .prepare(
+      `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, history, conceded, start_lean, started_at)
+       VALUES ('old', 'local', 'q01', 0, 'utilitarian', 'prompt', '[]', '[]', -1, '2026-11-21T00:00:00.000Z')`,
+    )
+    .run();
+  const insertTurn = old.prepare(
+    `INSERT INTO turns (game_id, n, user_text, input, reply, ms_opponent, at) VALUES ('old', ?, ?, ?, '답입니다.', 7, ?)`,
+  );
+  insertTurn.run(1, '첫 반론입니다.', 'voice', '2026-11-21T00:01:00.000Z');
+  insertTurn.run(2, '둘째 반론입니다.', 'text', '2026-11-21T00:02:00.000Z');
+  old.close();
+
+  const store = new SqliteGameStore(path);
+  t.after(() => store.close());
+  assert.equal(store.schemaVersion, MIGRATIONS.length);
+  const oldTurn = { reply: '답입니다.', ms: { opponent: 7 } };
+  assert.deepEqual(await store.get('old'), {
+    id: 'old',
+    userId: 'local',
+    topicId: 'q01',
+    side: 0,
+    cardId: 'utilitarian',
+    mode: 'prompt',
+    startLean: -1,
+    history: [],
+    conceded: [],
+    turns: [
+      { n: 1, user: '첫 반론입니다.', input: 'voice', ...oldTurn, at: '2026-11-21T00:01:00.000Z' },
+      { n: 2, user: '둘째 반론입니다.', input: 'text', ...oldTurn, at: '2026-11-21T00:02:00.000Z' },
+    ],
+    startedAt: '2026-11-21T00:00:00.000Z',
+  });
+  // 예전 턴도 턴 수에 든다. 원장은 비어서 시작하고 이어서 쓸 수 있다.
+  assert.equal(await store.countTurnsSince('local', '2026-11-21T00:00:00.000Z'), 2);
+  assert.equal(await store.totalSpendMicroUsd(), 0);
+  await store.addSpend(spend({ gameId: 'old' }));
+  assert.equal(await store.totalSpendMicroUsd(), 850);
 });
 
 
