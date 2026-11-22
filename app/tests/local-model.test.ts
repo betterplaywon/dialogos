@@ -221,18 +221,30 @@ test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/
   );
 });
 
-test('생각: 로컬 모델 서버가 받는 요청에는 기본으로 reasoning_effort "none"이 있어 생각을 끄고, APP_LOCAL_THINK=1이면 없으며, 그 밖의 값으로는 설정을 만들지 않는다', async (t) => {
-  const ollama = await fakeOllama(t, [OPPONENT]);
-  const ask = (env: Record<string, string>) =>
-    localSource(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, ...env })).create('opponent').complete(HELLO);
-  await ask({});
-  await ask({ APP_LOCAL_THINK: '1' });
-  assert.deepEqual(ollama.received, [
-    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
-    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT },
-  ]);
-  for (const value of ['0', 'true', 'yes', 'none']) {
-    assert.throws(() => localConfigFromEnv({ APP_LOCAL_THINK: value }), /APP_LOCAL_THINK에는 1만/, value);
+test('생각: APP_LOCAL_THINK를 적지 않거나 judge면 판정기만 생각하고, all이면 둘 다 생각하며, none이면 둘 다 끈다. 생각을 끄는 역할의 요청에만 reasoning_effort "none"이 실리고, 첫 줄이 생각하는 역할을 알린다', async (t) => {
+  const ollama = await fakeOllama(t, [OPPONENT, JUDGE]);
+  /** 그 설정의 개발 서버 출처로 판정기와 상대를 한 번씩 부르고, 가짜 서버가 받은 역할별 reasoning_effort(없으면 '없음')와 첫 줄의 생각 표시를 낸다. 두 역할은 모델 이름으로 가른다. */
+  const thinking = async (env: Record<string, string>) => {
+    const setup = await devSetup({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, APP_LOCAL_JUDGE_MODEL: JUDGE, ...env });
+    const before = ollama.received.length;
+    await setup.models.create('judge').complete(HELLO);
+    await setup.models.create('opponent').complete(HELLO);
+    const effortOf = (model: string) => {
+      const sent = ollama.received.slice(before).filter((request) => request.model === model);
+      assert.equal(sent.length, 1, model);
+      return sent[0]?.reasoning_effort ?? '없음';
+    };
+    return { judge: effortOf(JUDGE), opponent: effortOf(OPPONENT), label: /생각: ([^,]+)/.exec(setup.label)?.[1] };
+  };
+  const judgeOnly = { judge: '없음', opponent: 'none', label: '판정기만' };
+  assert.deepEqual(await thinking({}), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: '' }), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'judge' }), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'all' }), { judge: '없음', opponent: '없음', label: '판정기와 상대' });
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'none' }), { judge: 'none', opponent: 'none', label: '끔' });
+  // 그 밖의 값(전에 받던 1 포함)으로는 설정을 만들지 않고, 쓸 수 있는 값을 알린다.
+  for (const value of ['1', '0', 'true', 'both', 'opponent', 'JUDGE']) {
+    assert.throws(() => localConfigFromEnv({ APP_LOCAL_THINK: value }), /APP_LOCAL_THINK에는 judge\(.*\), all\(.*\), none\(.*\)/, value);
   }
 });
 
@@ -249,9 +261,9 @@ test('로컬 출처로 한 턴을 하면 200이고, 가짜 서버가 역할별 �
   assert.equal(turn.status, 200);
   assert.equal(turn.data.reply, '답입니다.');
 
-  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 가고, 기본대로 생각을 끈다.
+  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 가고, 기본대로 판정기만 생각한다.
   assert.deepEqual(ollama.received, [
-    { method: 'POST', path: '/v1/chat/completions', model: JUDGE, reasoning_effort: 'none' },
+    { method: 'POST', path: '/v1/chat/completions', model: JUDGE },
     { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
   ]);
   assert.deepEqual(
@@ -373,7 +385,7 @@ test('APP_MODE=random이면 받아들여 판마다 지시문 방식과 엔진 �
   assert.match(setup.label, /방식 반씩 무작위\(눈가림 비교\)/);
 });
 
-test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 1 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
+test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 judge, all, none 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
   const ollama = await fakeOllama(t, ['other:1b']);
   const cloud = await fakeOllama(t, ['qwen3:8b'], { remote: ['qwen3:8b'] });
   // 방식과 생각 설정이 틀린 경우도 가짜 서버의 주소로 띄운다. 검사가 고장 나도 이 컴퓨터의 Ollama에는 닿지 않는다.
@@ -382,7 +394,8 @@ test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 m
   const thinkUnread = await fakeOllama(t, []);
   const badMode = await devServer({ APP_MODE: 'blind', APP_MODEL: 'local', APP_LOCAL_URL: modeUnread.url });
   const unknown = await devServer({ APP_MODEL: 'openai' });
-  const badThink = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: thinkUnread.url, APP_LOCAL_THINK: 'yes' });
+  // 전에 받던 1도 이제는 받지 않는다.
+  const badThink = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: thinkUnread.url, APP_LOCAL_THINK: '1' });
   // 원격 주소는 예약된 이름(.invalid)으로 둔다. 검사가 고장 나 목록을 물어도 바깥에 닿지 않는다.
   const remote = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: 'https://paid-provider.invalid/v1' });
   const missing = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url });
@@ -391,7 +404,7 @@ test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 m
   // 방식이 틀리면 쓸 수 있는 값을 알린다.
   assert.match(badMode.err, /APP_MODE에는 engine\(.*\)이나 random\(.*\)을 적습니다/);
   assert.match(unknown.err, /APP_MODEL에는 mock/);
-  assert.match(badThink.err, /APP_LOCAL_THINK에는 1만/);
+  assert.match(badThink.err, /APP_LOCAL_THINK에는 judge\(.*\), all\(.*\), none\(.*\)/);
   assert.match(remote.err, /APP_LOCAL_URL에는 이 컴퓨터의 주소만/);
   assert.match(missing.err, /ollama pull qwen3:8b/);
   assert.match(remoteModel.err, /원격 모델/);

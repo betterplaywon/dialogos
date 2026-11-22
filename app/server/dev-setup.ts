@@ -4,8 +4,11 @@
 
 import type { ModelSource } from './budget.ts';
 import { randomMode } from './games.ts';
-import { localConfigFromEnv, localProblem, localSource, mockSource, type Env } from './models.ts';
+import { localConfigFromEnv, localProblem, localSource, mockSource, type Env, type LocalThink } from './models.ts';
 import type { Mode } from './store.ts';
+
+/** 생각 설정마다 첫 줄에 알릴, 생각하는 역할. */
+const THINK_LABELS: Readonly<Record<LocalThink, string>> = { judge: '판정기만', all: '판정기와 상대', none: '끔' };
 
 /** 개발 서버가 환경 변수로 고른 것. */
 export interface DevSetup {
@@ -49,6 +52,6 @@ export async function devSetup(env: Env): Promise<DevSetup> {
   return {
     models,
     pickMode,
-    label: `${mode}, 로컬 모델 ${names}, 생각 ${config.think ? '켬' : '끔'}, 무료: 이 컴퓨터 안의 주소만`,
+    label: `${mode}, 로컬 모델 ${names}, 생각: ${THINK_LABELS[config.think]}, 무료: 이 컴퓨터 안의 주소만`,
   };
 }

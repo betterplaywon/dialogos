@@ -17,32 +17,46 @@ export function mockSource(): ModelSource {
   return { provider: 'mock', create: (role) => createMockModel(role) };
 }
 
+/** 모델이 답하기 전에 생각(추론)하게 둘 역할. APP_LOCAL_THINK의 값이다. judge는 판정기만, all은 판정기와 상대, none은 어느 쪽도 아니다. */
+export type LocalThink = 'judge' | 'all' | 'none';
+
+/** 생각 설정마다 생각하는 역할. 나머지 역할은 요청마다 생각을 끈다(localSource). */
+const THINKING_ROLES: Readonly<Record<LocalThink, readonly ModelRole[]>> = {
+  judge: ['judge'],
+  all: ['judge', 'opponent'],
+  none: [],
+};
+
 /** 로컬 모델의 설정. */
 export interface LocalConfig {
   /** 로컬 모델 서버의 OpenAI 호환 주소(…/v1). 이 컴퓨터의 주소인지는 localSource가 검사한다. */
   url: string;
   /** 역할별 모델 이름. */
   models: Readonly<Record<ModelRole, string>>;
-  /** 모델이 답하기 전에 생각(추론)하게 둘지. 두지 않으면 요청마다 생각을 끈다. */
-  think: boolean;
+  /** 답하기 전에 생각(추론)하게 둘 역할. */
+  think: LocalThink;
 }
 
 /**
  * 로컬 모델의 설정을 환경 변수에서 읽는다. 비어 있으면 기본값이다.
  * 주소의 기본값은 Ollama가 처음부터 여는 주소(127.0.0.1의 11434번)의 OpenAI 호환 경로이고, 모델의 기본값은 qwen3:8b다.
  * 판정기 모델을 따로 적지 않으면 상대와 같은 모델을 쓴다. 메모리(16GB)에 모델 둘을 함께 올리지 않으려는 것이다.
- * 생각은 기본으로 끄고, APP_LOCAL_THINK=1이면 모델의 기본대로 생각하게 둔다(느리다). 그 밖의 값이면 까닭을 알리는 오류를 던진다.
+ * 생각은 기본으로 판정기만 한다(judge). 둘 다 끄면 판정기가 되풀이를 반론으로 판정해 상대가 전제를 거둔 턴이 있었다
+ * (2026-11-22 실측, app/README.md의 '로컬 모델로 쓰기(무료)'). all이면 둘 다, none이면 어느 쪽도 생각하지 않는다.
+ * 그 밖의 값이면 쓸 수 있는 값을 알리는 오류를 던진다.
  */
 export function localConfigFromEnv(env: Env): LocalConfig {
   const opponent = env.APP_LOCAL_MODEL?.trim() || 'qwen3:8b';
-  const think = env.APP_LOCAL_THINK?.trim() || '';
-  if (think !== '' && think !== '1') {
-    throw new Error('APP_LOCAL_THINK에는 1만 적습니다. 1이면 모델이 생각한 뒤 답하고(느립니다), 적지 않으면 생각을 끕니다.');
+  const think = env.APP_LOCAL_THINK?.trim() || 'judge';
+  if (think !== 'judge' && think !== 'all' && think !== 'none') {
+    throw new Error(
+      'APP_LOCAL_THINK에는 judge(판정기만 생각, 기본값), all(판정기와 상대 모두 생각), none(둘 다 생각하지 않음) 가운데 하나를 적습니다. 생각하면 느립니다.',
+    );
   }
   return {
     url: env.APP_LOCAL_URL?.trim() || 'http://127.0.0.1:11434/v1',
     models: { opponent, judge: env.APP_LOCAL_JUDGE_MODEL?.trim() || opponent },
-    think: think === '1',
+    think,
   };
 }
 
@@ -54,8 +68,8 @@ const FREE: Price = { inputUsdPerMTok: 0, outputUsdPerMTok: 0 };
 
 /**
  * 로컬 모델 한 호출의 시간 제한과 다시 부르기. 실측(2026-11-22, Apple M1 16GB, 엔진 방식 6턴)에서 한 호출은 길어야
- * qwen3:8b가 생각을 끄면 19초, 켜면 79초, exaone3.5:7.8b가 45초였다. 쉬던 모델을 메모리에 다시 올리는 호출은 더 걸린다고 보고
- * (추정, 따로 재지 않음) 넉넉히 잡은 값이다.
+ * qwen3:8b가 두 역할 모두 생각을 끄면 19초, 모두 켜면 79초, exaone3.5:7.8b가 45초였다. 판정기만 생각하게 둔 14턴(2026-11-23)에서는
+ * 판정기의 57초였다. 쉬던 모델을 메모리에 다시 올리는 호출은 더 걸린다고 보고(추정, 따로 재지 않음) 넉넉히 잡은 값이다.
  */
 const LOCAL_CALL: ApiOptions = { timeoutMs: 3 * 60_000, maxRetries: 1 };
 
@@ -104,14 +118,16 @@ export function localSource(config: LocalConfig, fetchImpl: FetchLike = fetch): 
   const problem = urlProblem(config.url);
   if (problem) throw new Error(problem);
   const send = noRedirects(fetchImpl);
-  // 생각을 끌 때는 reasoning_effort "none"을 보낸다. Ollama는 생각을 켜고 끄기만 하는 모델(qwen3 등)에서 "none"을 생각 끔으로 받는다
-  // (Ollama 문서 'OpenAI compatibility'). 보내지 않으면 모델의 기본대로 한다.
-  const effort = config.think ? {} : { reasoningEffort: 'none' };
+  // 생각하지 않는 역할의 요청에는 reasoning_effort "none"을 보낸다. Ollama는 생각을 켜고 끄기만 하는 모델(qwen3 등)에서 "none"을
+  // 생각 끔으로 받는다(Ollama 문서 'OpenAI compatibility'). 생각하는 역할의 요청에는 보내지 않아 모델의 기본대로 한다.
+  const thinking = THINKING_ROLES[config.think];
   return {
     provider: 'api',
     prices: { opponent: FREE, judge: FREE },
-    create: (role) =>
-      metered(createApiModel({ baseUrl: config.url, apiKey: NO_KEY, model: config.models[role], ...effort }, send, LOCAL_CALL)),
+    create: (role) => {
+      const effort = thinking.includes(role) ? {} : { reasoningEffort: 'none' };
+      return metered(createApiModel({ baseUrl: config.url, apiKey: NO_KEY, model: config.models[role], ...effort }, send, LOCAL_CALL));
+    },
   };
 }
 
