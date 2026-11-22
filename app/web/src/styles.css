@@ -115,7 +115,8 @@ button:disabled {
 }
 
 button:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -405,9 +406,90 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+/* 음성 줄. 켜기 전에는 단추와 안내를, 켠 뒤에는 말소리와 읽을 글이 가는 곳을 보인다. */
+.voice-bar {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: flex-start;
+  font-size: 0.88rem;
+}
+
+.voice-notes,
+.voice-lines {
+  flex: 1 1 300px;
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.voice-notes {
+  padding-left: 1.2em;
+}
+
+.voice-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.voice-pick select {
+  font: inherit;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 6px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+/* 읽는 중인 말풍선과, 말풍선마다 붙는 듣기 단추. */
+.message.reading {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.message .read {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 1px 10px;
+  font-size: 0.8rem;
+}
+
+/* 듣는 동안의 중간 글과, 듣기의 상태를 알리는 한 줄. 한 줄 자리를 비워 두어 글이 생길 때 화면이 밀리지 않게 한다. */
+.interim {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+
+.voice-status {
+  min-height: 1.45rem;
+  font-size: 0.85rem;
+}
+
+.interim .muted {
+  display: block;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 480px) {
   .pick-opt span {
     font-size: 0.8rem;
     padding: 6px 2px;
+  }
+
+  /* 좁은 화면에서는 글자 수 안내를 한 줄로 두고, 말하기·끝내기·보내기를 그 아래에 함께 둔다. */
+  .composer .actions .muted {
+    flex-basis: 100%;
   }
 }

@@ -2,7 +2,7 @@
 // 배포처에 맞는 저장소(Turso 등)도 이 인터페이스로 붙인다.
 
 import type { ChatMessage, Condition, JudgeDecision, TurnRecord } from '../../eval/src/types.ts';
-import type { EndReason, Lean, SideIndex, Verdict } from './contract.ts';
+import type { EndReason, Lean, SideIndex, TurnInput, Verdict, VoiceTally } from './contract.ts';
 
 /** 상대를 만드는 방식. 판정 실험의 조건 가운데 서비스에서 쓰는 둘이다. */
 export type Mode = Extract<Condition, 'prompt' | 'engine'>;
@@ -11,6 +11,8 @@ export type Mode = Extract<Condition, 'prompt' | 'engine'>;
 export interface TurnLog {
   n: number;
   user: string;
+  /** 사용자가 이 말을 넣은 방식. 스키마 2까지의 턴은 모두 글로 넣었다. */
+  input: TurnInput;
   reply: string;
   decision?: JudgeDecision;
   judge?: TurnRecord['judge'];
@@ -58,6 +60,7 @@ export interface GameSummary {
   cardId: string;
   startLean: Lean | null;
   turns: number;
+  voice: VoiceTally;
   startedAt: string;
   endedAt?: string;
   record?: EndRecord;
@@ -71,6 +74,14 @@ export interface GameStore {
   list(userId: string, limit: number): Promise<GameSummary[]>;
 }
 
+/** 말로 넣은 턴과 그 가운데 고쳐 보낸 턴을 센다. SQLite 저장소의 목록은 같은 값을 SQL로 센다. */
+export function voiceTallyOf(turns: readonly Pick<TurnLog, 'input'>[]): VoiceTally {
+  return {
+    turns: turns.filter((turn) => turn.input !== 'text').length,
+    edited: turns.filter((turn) => turn.input === 'voice-edited').length,
+  };
+}
+
 export function summaryOf(game: GameRecord): GameSummary {
   return {
     id: game.id,
@@ -79,6 +90,7 @@ export function summaryOf(game: GameRecord): GameSummary {
     cardId: game.cardId,
     startLean: game.startLean,
     turns: game.turns.length,
+    voice: voiceTallyOf(game.turns),
     startedAt: game.startedAt,
     ...(game.endedAt ? { endedAt: game.endedAt } : {}),
     ...(game.record ? { record: { ...game.record } } : {}),

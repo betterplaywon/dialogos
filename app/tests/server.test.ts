@@ -194,6 +194,53 @@ test('지시문 방식이면 판정기를 부르지 않는다', async () => {
   assert.equal(saved?.turns[0]?.decision, undefined);
 });
 
+test('턴마다 말을 넣은 방식을 남기고, 판과 목록에서 말로 넣은 턴과 고쳐 보낸 턴을 센다', async () => {
+  const { app, store } = setup({ pickMode: () => 'prompt' });
+  const game = await startQ01(app);
+  assert.deepEqual(game.voice, { turns: 0, edited: 0 });
+  const turns = `/api/games/${game.id}/turns`;
+  const bodies = [
+    // 넣은 방식을 적지 않은 요청은 글로 넣은 턴이다.
+    { text: '글로 쓴 말입니다.' },
+    { text: '말로 한 말입니다', input: 'voice' },
+    { text: '말로 한 뒤 고쳐 보낸 말입니다.', input: 'voice-edited' },
+    { text: '다시 글로 쓴 말입니다.', input: 'text' },
+    { text: '또 말로 한 말입니다', input: 'voice' },
+  ];
+  for (const body of bodies) assert.equal((await call(app, 'POST', turns, { body })).status, 200, JSON.stringify(body));
+
+  const saved = await store.get(game.id);
+  assert.deepEqual(
+    saved?.turns.map((turn) => turn.input),
+    ['text', 'voice', 'voice-edited', 'text', 'voice'],
+  );
+  const view = await call<GameView>(app, 'GET', `/api/games/${game.id}`);
+  assert.deepEqual([view.data.turn, view.data.voice], [5, { turns: 3, edited: 1 }]);
+  const listed = await call<GamesResponse>(app, 'GET', '/api/games');
+  assert.deepEqual(
+    listed.data.games.map((g) => [g.id, g.turn, g.voice]),
+    [[game.id, 5, { turns: 3, edited: 1 }]],
+  );
+  // 판을 끝내고 기록을 남긴 뒤의 판에도 같은 값이 실린다(끝 화면이 이 값을 보인다).
+  await call(app, 'POST', `/api/games/${game.id}/end`);
+  const recorded = await call<GameView>(app, 'POST', `/api/games/${game.id}/record`, { body: { lean: 0, verdict: 'debate' } });
+  assert.deepEqual(recorded.data.voice, { turns: 3, edited: 1 });
+});
+
+test('말을 넣은 방식은 상대와 판정기에게 가지 않아, 같은 말이면 같은 대화가 된다', async () => {
+  const judge = recorder(() => '{"tactic":"other","defeats":null,"reason":"시험"}');
+  const opponent = recorder(() => '답입니다.');
+  const { app } = setup({ models: { opponent, judge } });
+  for (const input of [undefined, 'voice-edited']) {
+    const game = await startQ01(app);
+    const body = { text: '같은 반론입니다.', ...(input ? { input } : {}) };
+    assert.equal((await call(app, 'POST', `/api/games/${game.id}/turns`, { body })).status, 200);
+  }
+  assert.equal(opponent.calls.length, 2);
+  assert.deepEqual(opponent.calls[0], opponent.calls[1]);
+  assert.deepEqual(judge.calls[0], judge.calls[1]);
+});
+
 test('잘못된 요청은 알맞은 상태와 한국어 메시지로 막는다', async () => {
   const { app } = setup();
   const game = await startQ01(app);
@@ -213,6 +260,11 @@ test('잘못된 요청은 알맞은 상태와 한국어 메시지로 막는다',
     [400, call(app, 'POST', turns, { body: { text: '   ' } })],
     [400, call(app, 'POST', turns, { body: { text: 42 } })],
     [400, call(app, 'POST', turns, { body: { text: '가'.repeat(MAX_TEXT_LENGTH + 1) } })],
+    // 말을 넣은 방식은 정한 세 값만 받는다. 없으면 글로 넣은 것이고, 있는데 다른 값이면 막는다.
+    [400, call(app, 'POST', turns, { body: { text: '반론입니다.', input: 'speech' } })],
+    [400, call(app, 'POST', turns, { body: { text: '반론입니다.', input: null } })],
+    [400, call(app, 'POST', turns, { body: { text: '반론입니다.', input: 1 } })],
+    [400, call(app, 'POST', turns, { body: { text: '반론입니다.', input: ['voice'] } })],
     [404, call(app, 'POST', '/api/games/없는판/turns', { body: { text: '반론입니다.' } })],
     [404, call(app, 'GET', '/api/games/없는판')],
     [404, call(app, 'GET', '/api/없는주소')],
@@ -465,7 +517,7 @@ test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할
   const firstStore = new SqliteGameStore(path);
   const first = setup({ store: firstStore }).app;
   const game = await startQ01(first);
-  await call(first, 'POST', `/api/games/${game.id}/turns`, { body: { text: '첫 반론입니다.' } });
+  await call(first, 'POST', `/api/games/${game.id}/turns`, { body: { text: '첫 반론입니다.', input: 'voice-edited' } });
   // 끝내고 기록까지 남긴 다른 판도 다시 띄운 뒤 그대로 보인다.
   const other = (await call<GameView>(first, 'POST', '/api/games', { body: { topicId: 'q01', side: 1, lean: 0 } })).data;
   await call(first, 'POST', `/api/games/${other.id}/end`);
@@ -480,17 +532,21 @@ test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할
   assert.equal(reopened.status, 200);
   assert.equal(reopened.data.turn, 1);
   assert.equal(reopened.data.messages.length, 4);
-  const next = await call<TurnResponse>(second, 'POST', `/api/games/${game.id}/turns`, { body: { text: '둘째 반론입니다.' } });
+  assert.deepEqual(reopened.data.voice, { turns: 1, edited: 1 });
+  const next = await call<TurnResponse>(second, 'POST', `/api/games/${game.id}/turns`, { body: { text: '둘째 반론입니다.', input: 'voice' } });
   assert.deepEqual([next.status, next.data.turn], [200, 2]);
   const saved = await secondStore.get(game.id);
   assert.deepEqual(
-    saved?.turns.map((turn) => [turn.n, turn.user]),
+    saved?.turns.map((turn) => [turn.n, turn.user, turn.input]),
     [
-      [1, '첫 반론입니다.'],
-      [2, '둘째 반론입니다.'],
+      [1, '첫 반론입니다.', 'voice-edited'],
+      [2, '둘째 반론입니다.', 'voice'],
     ],
   );
   assert.equal(saved?.history.length, 6);
+  // 말로 넣은 턴과 고쳐 보낸 턴의 수도 다시 띄운 뒤의 판과 목록에 그대로 실린다.
+  const listed = (await call<GamesResponse>(second, 'GET', '/api/games')).data.games.find((g) => g.id === game.id);
+  assert.deepEqual([listed?.turn, listed?.voice], [2, { turns: 2, edited: 1 }]);
   const recorded = await call<GameView>(second, 'GET', `/api/games/${other.id}`);
   assert.deepEqual(
     [recorded.data.side, recorded.data.startLean, recorded.data.endReason, recorded.data.record],

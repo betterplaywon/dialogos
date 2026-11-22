@@ -20,6 +20,18 @@ export type Verdict = 'debate' | 'lecture';
 /** 판이 끝난 방식. 턴을 모두 썼거나(max-turns), 사용자가 끝내기를 눌렀다(user). */
 export type EndReason = 'max-turns' | 'user';
 
+/**
+ * 한 턴의 말을 넣은 방식. 'voice'는 음성 인식이 적은 글 그대로, 'voice-edited'는 인식된 글을 고쳐서 보냈다.
+ * 한 값으로 두어 '글로 넣었는데 고친 음성' 같은 있을 수 없는 조합을 만들 수 없게 한다.
+ */
+export type TurnInput = 'text' | 'voice' | 'voice-edited';
+
+/** 말로 넣은 턴의 수와, 그 가운데 고쳐 보낸 턴의 수. */
+export interface VoiceTally {
+  turns: number;
+  edited: number;
+}
+
 export interface CharacterView {
   id: string;
   name: string;
@@ -76,6 +88,8 @@ export interface GameView {
   endReason: EndReason | null;
   /** 끝난 판에 남긴 기록. 남기기 전에는 null이고, 화면은 남길 때까지 판을 닫지 않는다. */
   record: EndRecordView | null;
+  /** 이 판에서 말로 넣은 턴과 그 가운데 고쳐 보낸 턴. 음성 인식을 올릴지 정하는 기준을 잰다. */
+  voice: VoiceTally;
 }
 
 /** 지난 판 목록의 한 줄. */
@@ -88,6 +102,7 @@ export interface GameSummaryView {
   maxTurns: number;
   ended: boolean;
   record: EndRecordView | null;
+  voice: VoiceTally;
   startedAt: string;
 }
 
@@ -104,6 +119,8 @@ export interface StartGameRequest {
 
 export interface TurnRequest {
   text: string;
+  /** 말을 넣은 방식. 없으면 'text'다. */
+  input?: TurnInput;
 }
 
 export interface TurnResponse {

@@ -9,6 +9,8 @@ import type {
   SideIndex,
   StartGameRequest,
   TopicsResponse,
+  TurnInput,
+  TurnRequest,
   TurnResponse,
   Verdict,
 } from '../../server/contract.ts';
@@ -54,7 +56,8 @@ export const api = {
   start: (topicId: string, side: SideIndex, lean: Lean) =>
     call<GameView>('/api/games', { topicId, side, lean } satisfies StartGameRequest),
   get: (gameId: string) => call<GameView>(gamePath(gameId)),
-  turn: (gameId: string, text: string) => call<TurnResponse>(`${gamePath(gameId)}/turns`, { text }),
+  turn: (gameId: string, text: string, input: TurnInput) =>
+    call<TurnResponse>(`${gamePath(gameId)}/turns`, { text, input } satisfies TurnRequest),
   end: (gameId: string) => call<GameView>(`${gamePath(gameId)}/end`, {}),
   record: (gameId: string, lean: Lean, verdict: Verdict) =>
     call<GameView>(`${gamePath(gameId)}/record`, { lean, verdict } satisfies EndRecordRequest),

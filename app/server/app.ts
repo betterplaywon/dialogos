@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ErrorResponse, GamesResponse, Provider, TopicsResponse } from './contract.ts';
-import { createGames, GameError, isLean, isSide, isVerdict, LOCAL_USER, type GameDeps } from './games.ts';
+import { createGames, GameError, isLean, isSide, isTurnInput, isVerdict, LOCAL_USER, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
   provider: Provider;
@@ -78,9 +78,12 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/games/:id', async (c) => c.json(await games.get(userOf(c.req.raw), c.req.param('id'))));
 
   app.post('/api/games/:id/turns', async (c) => {
-    const { text } = await readBody(c.req);
+    const { text, input } = await readBody(c.req);
     if (typeof text !== 'string') throw new GameError(400, '보낼 말(text)이 필요합니다.');
-    return c.json(await games.turn(userOf(c.req.raw), c.req.param('id'), text));
+    if (input !== undefined && !isTurnInput(input)) {
+      throw new GameError(400, "말을 넣은 방식(input)은 'text', 'voice', 'voice-edited' 가운데 하나입니다.");
+    }
+    return c.json(await games.turn(userOf(c.req.raw), c.req.param('id'), text, input ?? 'text'));
   });
 
   app.post('/api/games/:id/end', async (c) => c.json(await games.end(userOf(c.req.raw), c.req.param('id'))));
