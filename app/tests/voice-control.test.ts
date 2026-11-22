@@ -748,6 +748,21 @@ test('기기 안 인식을 쓰지 못하면 표시가 남아 있어도 적지 �
   assert.deepEqual([heard[1], packMark.stored], [{ transcript: '네', problem: null }, true]);
 });
 
+test('기억해 둔 목소리의 이름은 켜기 전부터 상태에 실리고, 고르거나 거두면 함께 바뀐다', () => {
+  const { control, speech } = setup({ voices: REMOTE_ONLY_VOICES, remembered: 'Google 한국의' });
+  // 켜자마자 이 목소리로 읽으므로, 화면이 켜기 전에 미리 밝힐 수 있어야 한다.
+  assert.deepEqual([control.getState().on, control.getState().remembered], [false, 'Google 한국의']);
+  control.turnOn(null);
+  speech.emit(REMOTE_ONLY_VOICES, true);
+  control.preferVoice(null);
+  assert.equal(control.getState().remembered, null);
+  control.preferVoice('Google 한국의');
+  control.turnOff();
+  assert.deepEqual([control.getState().on, control.getState().remembered], [false, 'Google 한국의']);
+  // 기억해 둔 것이 없는 브라우저.
+  assert.equal(setup().control.getState().remembered, null);
+});
+
 test('지난번에 고른 목소리로 읽고, 새로 고르면 기억해 두고 다음 읽기부터 쓴다. 읽던 말을 다시 읽지 않는다', async (t) => {
   const { control, synth, remembered } = await turnedOn(t, { remembered: 'Flo (Korean (South Korea))' }, OPENING);
   assert.deepEqual(

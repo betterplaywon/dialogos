@@ -92,6 +92,8 @@ export interface VoiceState<V extends VoiceLike = VoiceLike> {
   voices: readonly V[];
   /** 지금 쓰는 목소리. 'wait'는 목록을 기다리는 중이다. null은 기기 안 한국어 목소리가 없고 사용자가 고른 것도 없다는 뜻이다. */
   voice: V | 'wait' | null;
+  /** 기억해 둔 목소리의 이름(지난번에 고른 것). 고르거나 거둘 때 함께 바뀐다. 음성을 켜기 전에도 실려 있다. */
+  remembered: string | null;
   /** 읽는 중이거나 목록이 오기를 기다리는 요청의 key. */
   reading: string | null;
   speakProblem: SpeakProblem | null;
@@ -125,6 +127,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
   const { recognition, speech, memory, packMark } = ports;
   const speaker = speech ? createSpeaker(speech.synth) : null;
   const listeners = new Set<() => void>();
+  let preferred = memory.load();
   let state: VoiceState<V> = {
     canListen: recognition !== null,
     canSpeak: speech !== null,
@@ -136,12 +139,12 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
     interim: '',
     voices: [],
     voice: speech ? 'wait' : null,
+    remembered: preferred,
     reading: null,
     speakProblem: null,
   };
   let allVoices: readonly V[] = [];
   let settled = false;
-  let preferred = memory.load();
   let unwatch: (() => void) | null = null;
   let session: ListenSession | null = null;
   /** 읽는 중이거나 목소리를 기다리는 요청. 기다리는 요청은 가장 최근 것 하나만 남는다. */
@@ -339,10 +342,10 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
         // 고른 것을 거뒀다. 그 목소리로 읽던 것을 멈춘다.
         // 읽다 생긴 문제의 알림도 지운다. [듣기]를 누르라는 알림인데, 읽을 목소리가 없으면 [듣기]도 없다.
         stopReading();
-        set({ voice, speakProblem: null });
+        set({ voice, remembered: name, speakProblem: null });
         return;
       }
-      set({ voice });
+      set({ voice, remembered: name });
       // 읽을 목소리가 없어 기다리던 요청이 있으면 고른 목소리로 읽는다. 읽는 중인 말은 다시 읽지 않는다.
       // 목록을 화살표로 넘기는 동안 칸마다 다시 읽고, 기기 밖 목소리에 닿으면 읽던 글을 서버로 보내게 되기 때문이다.
       if (awaitingVoice && current && voice !== 'wait' && voice !== null) say(current, voice);

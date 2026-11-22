@@ -434,6 +434,15 @@ function speechNotice(state: VoiceState): string | null {
   return canPickNone(state) ? `${remoteNotice} 목록에서 '고르지 않음'을 고르면 읽지 않습니다.` : remoteNotice;
 }
 
+/**
+ * 켜기 전에 밝히는, 지난번에 고른 목소리. 켜자마자 그 목소리로 읽기 때문이다.
+ * 목소리 목록은 켠 뒤에야 받으므로, 그 목소리가 기기 밖 것인지는 이때 알 수 없다.
+ */
+function rememberedNote(state: VoiceState): string | null {
+  if (!state.canSpeak || !state.remembered) return null;
+  return `지난번에 고른 목소리(${state.remembered})로 읽습니다. 기기 밖 목소리라면 읽을 글이 그 서버로 갑니다.`;
+}
+
 /** 음성 줄. 켜기 전에는 단추와 안내를, 켠 뒤에는 말소리와 읽을 글이 가는 곳을 보인다. */
 function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
   const { state, control } = voice;
@@ -451,6 +460,7 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
     return <p className="voice-bar muted">이 브라우저는 음성 기능을 지원하지 않습니다. 글로 토론할 수 있습니다.</p>;
   }
   if (!state.on) {
+    const remembered = rememberedNote(state);
     return (
       <section className="voice-bar" aria-label="음성" ref={bar}>
         {/* 이 누름이 브라우저가 요구하는 사용자 제스처다. 첫 읽기와 인식 팩 내려받기가 이 안에서 시작된다. */}
@@ -461,6 +471,7 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
           {VOICE_NOTES.map((note) => (
             <li key={note}>{note}</li>
           ))}
+          {remembered && <li>{remembered}</li>}
         </ul>
       </section>
     );
