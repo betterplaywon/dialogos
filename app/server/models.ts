@@ -62,10 +62,17 @@ function metered(model: ChatModel): MeteredModel {
   return { ...model, usage };
 }
 
-function isLoopback(url: string): boolean {
-  if (!URL.canParse(url)) return false;
-  const { protocol, hostname } = new URL(url);
-  return (protocol === 'http:' || protocol === 'https:') && LOOPBACK_HOSTS.has(hostname);
+/** APP_LOCAL_URL이 로컬 출처의 주소가 될 수 없으면 사람이 고칠 것을 알리는 말이고, 될 수 있으면 null이다. */
+function urlProblem(url: string): string | null {
+  const parsed = URL.canParse(url) ? new URL(url) : null;
+  if (!parsed || !(parsed.protocol === 'http:' || parsed.protocol === 'https:') || !LOOPBACK_HOSTS.has(parsed.hostname)) {
+    return 'APP_LOCAL_URL에는 이 컴퓨터의 주소만 적습니다(http나 https, 호스트는 127.0.0.1, localhost, [::1]). 원격 주소와 사설망 주소로는 띄우지 않습니다.';
+  }
+  // fetch는 사용자 정보가 든 주소로 요청을 만들지 않는다. 받아 두면 띄울 때 확인이 닿지 못했다며 Ollama 앱을 켜라고 틀리게 알린다.
+  if (parsed.username || parsed.password) {
+    return 'APP_LOCAL_URL에서 @ 앞의 사용자 정보(이름과 비밀번호)를 빼 주세요. 사용자 정보가 든 주소로는 요청을 보낼 수 없습니다(예: http://127.0.0.1:11434/v1).';
+  }
+  return null;
 }
 
 /**
@@ -78,17 +85,14 @@ function noRedirects(fetchImpl: FetchLike): FetchLike {
 }
 
 /**
- * 로컬 모델의 출처. 주소가 이 컴퓨터(http나 https, 호스트는 127.0.0.1, localhost, [::1])가 아니면 만들지 않는다.
+ * 로컬 모델의 출처. 주소가 이 컴퓨터(http나 https, 호스트는 127.0.0.1, localhost, [::1])가 아니거나 사용자 정보가 들어 있으면 만들지 않는다.
  * 주소 검사는 로컬 출처를 만드는 이 함수에만 둔다. 요청은 넘김을 따라가지 않으므로(noRedirects) 검사한 주소 밖으로 나가지 않는다.
  * 그래서 요금이 드는 원격 주소로 가는 로컬 출처는 생기지 않는다.
  * 실제 모델처럼 부를 때마다 사용량을 원장에 남기지만, 단가가 0이라 비용은 0이고 서비스 비용 상한에 닿지 않는다.
  */
 export function localSource(config: LocalConfig, fetchImpl: FetchLike = fetch): ModelSource {
-  if (!isLoopback(config.url)) {
-    throw new Error(
-      'APP_LOCAL_URL에는 이 컴퓨터의 주소만 적습니다(http나 https, 호스트는 127.0.0.1, localhost, [::1]). 원격 주소와 사설망 주소로는 띄우지 않습니다.',
-    );
-  }
+  const problem = urlProblem(config.url);
+  if (problem) throw new Error(problem);
   const send = noRedirects(fetchImpl);
   return {
     provider: 'api',

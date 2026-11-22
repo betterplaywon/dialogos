@@ -155,6 +155,16 @@ test('로컬 출처는 이 컴퓨터의 주소(http나 https, 127.0.0.1, localho
   ]) {
     assert.throws(() => local(url), /이 컴퓨터의 주소만/, url);
   }
+
+  // 호스트가 이 컴퓨터여도 사용자 정보(이름@, 이름:비밀번호@)가 든 주소는 받지 않는다. fetch는 이런 주소로 요청을 만들지 않으므로,
+  // 안내는 주소가 아니라 사용자 정보를 빼라고 한다.
+  for (const url of ['http://a@127.0.0.1:11434/v1', 'http://a:b@localhost:11434/v1', 'http://:b@[::1]:11434/v1']) {
+    assert.throws(
+      () => local(url),
+      (error: Error) => /사용자 정보/.test(error.message) && !/이 컴퓨터의 주소만/.test(error.message),
+      url,
+    );
+  }
   assert.equal(sent.length, accepted.length);
 });
 
