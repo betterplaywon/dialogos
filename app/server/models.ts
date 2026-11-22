@@ -44,8 +44,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const FREE: Price = { inputUsdPerMTok: 0, outputUsdPerMTok: 0 };
 
 /**
- * 로컬 모델 한 호출의 시간 제한과 다시 부르기. 로컬 모델은 느리고, 쉬던 모델을 메모리에 다시 올리는 호출은 더 걸린다고 보고
- * 넉넉히 잡은 값이다(추정, 재지 않음). 설치 뒤 재서 고친다.
+ * 로컬 모델 한 호출의 시간 제한과 다시 부르기. 실측(2026-11-22, Apple M1 16GB, exaone3.5:7.8b, 엔진 방식 6턴)에서 한 호출은 길어야 45초였다.
+ * 쉬던 모델을 메모리에 다시 올리는 호출은 더 걸린다고 보고(추정, 재지 않음) 넉넉히 잡은 값이다.
  */
 const LOCAL_CALL: ApiOptions = { timeoutMs: 3 * 60_000, maxRetries: 1 };
 
