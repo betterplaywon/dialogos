@@ -1,5 +1,6 @@
 // 개발용: 서버(Hono)와 화면(Vite)을 한 명령으로 띄운다.
-// 모의 모델만 쓴다. .env를 읽지 않으므로 실제 모델을 부르지 않는다.
+// 모델은 APP_MODEL로 고른다. 없으면 모의 모델이고, local이면 이 컴퓨터에서 도는 로컬 모델(Ollama)이다(server/models.ts).
+// .env를 읽지 않는다. 로컬 모델은 이 컴퓨터 안의 주소로만 부르고 단가가 0이라 돈이 들지 않는다.
 // 판은 data/app.sqlite에 남는다. 토론 기록이 들어 있으므로 data/는 커밋하지 않는다.
 // APP_DB_PATH로 다른 파일을 쓰거나, ':memory:'로 파일 없이 메모리에만 둘 수 있다.
 
@@ -9,12 +10,41 @@ import { dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { createApp } from './server/app.ts';
-import { LIMITS } from './server/budget.ts';
+import { LIMITS, type ModelSource } from './server/budget.ts';
 import { randomMode } from './server/games.ts';
-import { mockSource } from './server/models.ts';
+import { localConfigFromEnv, localProblem, localSource, mockSource } from './server/models.ts';
 import { API_PORT } from './server/port.ts';
 import { SqliteGameStore } from './server/sqlite-store.ts';
 import { loadTopics } from './server/topics.ts';
+
+/** 서버를 띄우지 않고 까닭을 알린다. */
+function stop(reason: string): never {
+  console.error(reason);
+  process.exit(1);
+}
+
+/** APP_MODEL로 모델의 출처를 고르고, 서버의 첫 줄에 알릴 이름을 함께 낸다. 고르지 못하면 까닭을 알리고 띄우지 않는다. */
+async function chooseModels(): Promise<{ source: ModelSource; label: string }> {
+  const choice = process.env.APP_MODEL || 'mock';
+  if (choice === 'mock') return { source: mockSource(), label: '모의 모델' };
+  if (choice !== 'local') stop('APP_MODEL에는 mock(모의 모델, 기본값)이나 local(이 컴퓨터의 로컬 모델)을 적습니다.');
+  const config = localConfigFromEnv(process.env);
+  let source: ModelSource;
+  try {
+    // 주소가 이 컴퓨터가 아니면 여기서 멈춘다. 그 주소로는 모델 목록도 묻지 않는다.
+    source = localSource(config);
+  } catch (error) {
+    stop(error instanceof Error ? error.message : String(error));
+  }
+  const problem = await localProblem(config);
+  if (problem) stop(problem);
+  const { opponent, judge } = config.models;
+  const names = opponent === judge ? opponent : `상대 ${opponent}, 판정기 ${judge}`;
+  return { source, label: `로컬 모델 ${names}, 무료: 이 컴퓨터 안의 주소만` };
+}
+
+// 모델을 고르지 못하면 판 파일을 만들지 않고 멈추도록, 저장소보다 먼저 고른다.
+const { source, label } = await chooseModels();
 
 const dbPath = process.env.APP_DB_PATH || fileURLToPath(new URL('../data/app.sqlite', import.meta.url));
 if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
@@ -23,8 +53,8 @@ const where = dbPath === ':memory:' ? '메모리에만' : relative(process.cwd()
 const app = createApp({
   topics: loadTopics(),
   store: new SqliteGameStore(dbPath),
-  models: mockSource(),
-  // 모의 모델은 원장에 남지 않아 비용 상한에 닿지 않지만, 하루 턴 수는 모의 모델에도 센다.
+  models: source,
+  // 모의 모델은 원장에 남지 않고 로컬 모델은 비용이 0이라 비용 상한에 닿지 않는다. 하루 턴 수는 어느 모델에도 센다.
   limits: LIMITS,
   pickMode: randomMode,
   newId: () => crypto.randomUUID(),
@@ -34,7 +64,7 @@ const app = createApp({
 });
 
 serve({ fetch: app.fetch, port: API_PORT, hostname: '127.0.0.1' }, (info) => {
-  console.log(`서버: http://127.0.0.1:${info.port}/api (모의 모델, 판 저장: ${where})`);
+  console.log(`서버: http://127.0.0.1:${info.port}/api (${label}, 판 저장: ${where})`);
 });
 
 const vite = await createServer({ configFile: fileURLToPath(new URL('./web/vite.config.ts', import.meta.url)) });
