@@ -45,8 +45,8 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
       speak(chunk, { onStart, onDone }) {
         const utterance = new SpeechSynthesisUtterance(chunk.text);
         utterance.lang = 'ko-KR';
-        // voice를 비워 두면 브라우저가 목소리를 고른다. 기기 목소리가 오기 전에 그렇게 읽은 문장은 시작이 1.1초 늦고
-        // 낱말 경계 이벤트가 없었다(실측). 원격 목소리로 읽혀 글이 서버로 간 것으로 보인다(추정). 고른 목소리를 항상 넣는다.
+        // voice를 비워 두면 브라우저가 목소리를 고른다. 목록에는 원격 목소리가 기기 목소리보다 약 1.1초 먼저 오므로(실측),
+        // 그때 고른 것은 원격 목소리일 수 있고 그러면 글이 서버로 간다(추정). 그래서 고른 목소리를 항상 넣는다.
         utterance.voice = chunk.voice;
         utterance.rate = chunk.rate;
         utterance.pitch = chunk.pitch;
