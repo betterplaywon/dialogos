@@ -395,10 +395,15 @@ test('판정기 뒤에 상대가 실패하면 500이고, 받은 응답의 양은
 test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으며, 그 뒤로는 서버를 다시 띄울 때까지 누구의 새 판과 턴도 503으로 막는다', async () => {
   const inner = new MemoryGameStore();
   let ledgerDown = true;
+  let ledgerUnreadable = false;
   const store = storeWith(inner, {
     async addSpend(entry) {
       if (ledgerDown) throw new Error('원장 쓰기 실패: 시험용 오류');
       return inner.addSpend(entry);
+    },
+    async totalSpendMicroUsd() {
+      if (ledgerUnreadable) throw new Error('원장 읽기 실패: 시험용 오류');
+      return inner.totalSpendMicroUsd();
     },
   });
   const { source, sent } = steady();
@@ -417,8 +422,15 @@ test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으
   assert.equal(await inner.totalSpendMicroUsd(), 0);
   assert.equal((await inner.get(mine.id))?.turns.length, 0);
 
-  // 원장 쓰기가 다시 되어도 닫힌 채다. 같은 사용자와 다른 사용자의 턴, 새 판을 모두 막고 모델을 부르지 않는다.
+  // 닫혔는지를 가장 먼저 보므로, 저장소가 원장을 읽지도 못하는 동안에도 막는 까닭을 알린다.
+  ledgerUnreadable = true;
+  const unreadable = await turn(app, theirs.id, '저장소가 망가진 동안 b가 보낸 반론입니다.', 'b');
+  assert.equal(unreadable.status, 503);
+  assert.match(unreadable.data.error ?? '', /모델 사용량을 기록하지 못해/);
+
+  // 원장 쓰기와 읽기가 다시 되어도 닫힌 채다. 같은 사용자와 다른 사용자의 턴, 새 판을 모두 막고 모델을 부르지 않는다.
   ledgerDown = false;
+  ledgerUnreadable = false;
   for (const [path, body, user] of [
     [`/api/games/${mine.id}/turns`, { text: '다시 보낸 반론입니다.' }, 'local'],
     [`/api/games/${theirs.id}/turns`, { text: 'b의 반론입니다.' }, 'b'],
