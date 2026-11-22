@@ -43,9 +43,14 @@ type Redirects = Readonly<Record<string, { status: number; location: string }>>;
 /**
  * Ollama처럼 OpenAI 호환 주소(/v1)로 답하는 가짜 서버. 이 컴퓨터(127.0.0.1)에만 열린다.
  * 모델 목록에는 listed만 있다. chat completions는 판정기 모델이면 판정을, 아니면 정해 둔 답을 낸다.
+ * Ollama의 모델 목록(/api/tags)에는 remote에 든 모델을 원격 모델(remote_host, remote_model)로 적는다. native가 false면 그 목록이 없는(404) 서버다.
  * redirects에 적은 경로로 온 요청은 받아 적은 뒤 답 대신 넘긴다.
  */
-async function fakeOllama(t: TestContext, listed: readonly string[], { redirects = {} }: { redirects?: Redirects } = {}) {
+async function fakeOllama(
+  t: TestContext,
+  listed: readonly string[],
+  { remote = [], native = true, redirects = {} }: { remote?: readonly string[]; native?: boolean; redirects?: Redirects } = {},
+) {
   const received: { method?: string; path?: string; model?: string }[] = [];
   const server = createServer((req, res) => {
     let body = '';
@@ -59,6 +64,10 @@ async function fakeOllama(t: TestContext, listed: readonly string[], { redirects
       if (redirect) return res.writeHead(redirect.status, { location: redirect.location }).end();
       if (req.method === 'GET' && req.url === '/v1/models') {
         return json(200, { object: 'list', data: listed.map((id) => ({ id, object: 'model', created: 0, owned_by: 'library' })) });
+      }
+      if (native && req.method === 'GET' && req.url === '/api/tags') {
+        const upstream = (name: string) => (remote.includes(name) ? { remote_model: name, remote_host: 'https://upstream.invalid' } : {});
+        return json(200, { models: listed.map((name) => ({ name, model: name, size: 0, ...upstream(name) })) });
       }
       if (req.method === 'POST' && req.url === '/v1/chat/completions') {
         return json(200, { choices: [{ message: { role: 'assistant', content: model === JUDGE ? DECISION : '답입니다.' } }], usage: USAGE });
@@ -245,12 +254,14 @@ test('로컬 모델 서버가 넘김(redirect)으로 답해도 따라가지 않�
     assert.ok(ollama.received.length > 0 && ollama.received.every((request) => request.path === '/v1/chat/completions'), `${status}`);
   }
 
-  // 띄울 때 확인의 모델 목록 요청을 302로 넘기는 경우.
-  const listMoved = await fakeOllama(t, [OPPONENT, JUDGE], { redirects: { '/v1/models': { status: 302, location: there('/v1/models') } } });
-  const problem = await localProblem(configOf(listMoved.url));
-  assert.deepEqual(elsewhere.received, []);
-  assert.notEqual(problem, null);
-  assert.deepEqual(listMoved.received, [{ method: 'GET', path: '/v1/models' }]);
+  // 띄울 때 확인이 읽는 두 목록(OpenAI 호환 목록과 Ollama의 목록)의 요청을 302로 넘기는 경우.
+  for (const path of ['/v1/models', '/api/tags']) {
+    const listMoved = await fakeOllama(t, [OPPONENT, JUDGE], { redirects: { [path]: { status: 302, location: there(path) } } });
+    const problem = await localProblem(configOf(listMoved.url));
+    assert.deepEqual(elsewhere.received, [], path);
+    assert.notEqual(problem, null, path);
+    assert.ok(listMoved.received.some((request) => request.path === path), path);
+  }
 });
 
 test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없으면 ollama pull을 알리고, 두 역할의 모델이 모두 있으면 문제가 없다', async (t) => {
@@ -261,7 +272,11 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
 
   const ollama = await fakeOllama(t, ['exaone3.5:7.8b', 'other:1b']);
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
-  assert.deepEqual(ollama.received, [{ method: 'GET', path: '/v1/models' }]);
+  // 두 목록(OpenAI 호환 목록과 Ollama의 목록)을 읽기만 하고 모델은 부르지 않는다.
+  assert.deepEqual(ollama.received, [
+    { method: 'GET', path: '/v1/models' },
+    { method: 'GET', path: '/api/tags' },
+  ]);
 
   const judgeMissing = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'qwen3:1.7b' }));
   assert.match(judgeMissing ?? '', /ollama pull qwen3:1\.7b/);
@@ -275,19 +290,42 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
   assert.match(wrongPath ?? '', /모델 목록을 알려 주지 않았습니다\(상태 404\)/);
 });
 
-test('개발 서버는 APP_MODEL이 mock과 local 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없으면 까닭을 알리고 띄우지 않는다', async (t) => {
+test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 원격 모델로 적은 모델이면 이 컴퓨터 밖에서 돈다고 알리고, 그 목록이 없는 OpenAI 호환 서버는 이 확인을 건너뛴다', async (t) => {
+  const ollama = await fakeOllama(t, ['exaone3.5:7.8b', 'gemma4:cloud'], { remote: ['gemma4:cloud'] });
+  const judgeRemote = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'gemma4:cloud' }));
+  assert.match(judgeRemote ?? '', /원격 모델/);
+  assert.match(judgeRemote ?? '', /gemma4:cloud/);
+  // 알리는 것은 원격 모델뿐이다.
+  assert.doesNotMatch(judgeRemote ?? '', /exaone/);
+  // 원격 모델이 아닌 모델만 쓰면 문제가 없다.
+  assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
+  assert.ok(ollama.received.every((request) => request.method === 'GET'));
+
+  // Ollama가 아닌 OpenAI 호환 서버에는 Ollama의 목록이 없다(404). 그런 서버에는 Ollama의 클라우드 모델도 없으므로 모델 목록만 확인한다.
+  const plain = await fakeOllama(t, ['exaone3.5:7.8b'], { native: false });
+  assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: plain.url })), null);
+});
+
+test('개발 서버는 APP_MODEL이 mock과 local 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
   const ollama = await fakeOllama(t, ['other:1b']);
+  const cloud = await fakeOllama(t, ['exaone3.5:7.8b'], { remote: ['exaone3.5:7.8b'] });
   const unknown = await devServer({ APP_MODEL: 'openai' });
   // 원격 주소는 예약된 이름(.invalid)으로 둔다. 검사가 고장 나 목록을 물어도 바깥에 닿지 않는다.
   const remote = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: 'https://paid-provider.invalid/v1' });
   const missing = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url });
+  const remoteModel = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: cloud.url });
 
   assert.match(unknown.err, /APP_MODEL에는 mock/);
   assert.match(remote.err, /APP_LOCAL_URL에는 이 컴퓨터의 주소만/);
   assert.match(missing.err, /ollama pull exaone3\.5:7\.8b/);
-  // 로컬 모델이 없을 때는 모델 목록만 묻고 모델은 부르지 않는다.
+  assert.match(remoteModel.err, /원격 모델/);
+  // 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
   assert.deepEqual(ollama.received, [{ method: 'GET', path: '/v1/models' }]);
-  for (const run of [unknown, remote, missing]) {
+  assert.deepEqual(cloud.received, [
+    { method: 'GET', path: '/v1/models' },
+    { method: 'GET', path: '/api/tags' },
+  ]);
+  for (const run of [unknown, remote, missing, remoteModel]) {
     assert.equal(run.code, 1, run.err);
     assert.doesNotMatch(run.out, /서버:/);
   }

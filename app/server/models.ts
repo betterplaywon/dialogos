@@ -101,8 +101,14 @@ export function localSource(config: LocalConfig, fetchImpl: FetchLike = fetch): 
   };
 }
 
-/** 띄울 때 모델 목록을 기다리는 시간. 목록을 읽는 데는 모델을 올리지 않아 금방 끝난다고 보고 정했다(추정). */
+/** 띄울 때 목록 하나를 기다리는 시간. 목록을 읽는 데는 모델을 올리지 않아 금방 끝난다고 보고 정했다(추정). */
 const CHECK_TIMEOUT_MS = 5_000;
+
+/** 띄울 때 로컬 모델 서버에 닿지 못했거나 넘김(redirect)을 받았을 때의 안내. */
+const UNREACHABLE = [
+  '로컬 모델 서버에 닿지 못했습니다. Ollama 앱을 켠 뒤 다시 띄워 주세요.',
+  'APP_LOCAL_URL로 주소를 바꿨다면 그 주소에서 도는지도 확인해 주세요.',
+].join('\n');
 
 /** OpenAI 호환 모델 목록({ data: [{ id }] })에서 모델 이름을 꺼낸다. 그 꼴이 아니면 null이다. */
 function modelNames(body: unknown): Set<string> | null {
@@ -115,32 +121,61 @@ function modelNames(body: unknown): Set<string> | null {
 }
 
 /**
- * 띄울 때의 확인. OpenAI 호환 모델 목록(GET {주소}/models)으로 로컬 모델 서버에 닿는지와 두 역할의 모델이 있는지 본다.
- * 문제가 없으면 null이고, 있으면 사람이 할 일을 알리는 말이다. 모델은 부르지 않는다.
+ * Ollama의 모델 목록({ models: [{ name, model, remote_host, remote_model }] })에서 원격 모델의 이름을 꺼낸다. 그 꼴이 아니면 null이다.
+ * Ollama 문서('List models')는 remote_host와 remote_model을 원격 모델일 때 있는 칸(모델이 실제로 도는 Ollama 호스트의 주소와 그곳의 모델 이름)으로 적는다.
+ */
+function remoteModelNames(body: unknown): Set<string> | null {
+  if (typeof body !== 'object' || body === null || !('models' in body) || !Array.isArray(body.models)) return null;
+  return new Set(
+    body.models.flatMap((item: unknown) => {
+      if (typeof item !== 'object' || item === null) return [];
+      const { name, model, remote_host: host, remote_model: upstream } = item as Record<string, unknown>;
+      return host || upstream ? [name, model].filter((value) => typeof value === 'string') : [];
+    }),
+  );
+}
+
+/**
+ * 띄울 때의 확인. 문제가 없으면 null이고, 있으면 사람이 할 일을 알리는 말이다. 목록만 읽고 모델은 부르지 않는다.
+ * 1. OpenAI 호환 모델 목록(GET {주소}/models)으로 로컬 모델 서버에 닿는지와 두 역할의 모델이 있는지 본다.
+ * 2. Ollama의 모델 목록(GET /api/tags)이 두 역할의 모델을 원격 모델로 적으면 띄우지 않는다.
  * 주소는 localSource가 검사한 것을 받는다. 개발 서버(dev.ts)는 출처를 만든 뒤에 이 확인을 부른다.
  */
 export async function localProblem(config: LocalConfig, fetchImpl: FetchLike = fetch): Promise<string | null> {
-  let response: Response;
-  try {
-    response = await noRedirects(fetchImpl)(`${config.url.replace(/\/+$/, '')}/models`, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
-  } catch {
-    return [
-      '로컬 모델 서버에 닿지 못했습니다. Ollama 앱을 켠 뒤 다시 띄워 주세요.',
-      'APP_LOCAL_URL로 주소를 바꿨다면 그 주소에서 도는지도 확인해 주세요.',
-    ].join('\n');
-  }
-  const listed = response.ok ? modelNames(await response.json().catch(() => null)) : null;
+  const send = noRedirects(fetchImpl);
+  /** 목록 하나를 GET한다. 닿지 못했거나 넘김을 받았으면 null이다. */
+  const get = (url: string) => send(url, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) }).catch(() => null);
+
+  const listing = await get(`${config.url.replace(/\/+$/, '')}/models`);
+  if (!listing) return UNREACHABLE;
+  const listed = listing.ok ? modelNames(await listing.json().catch(() => null)) : null;
   if (!listed) {
     return [
-      `로컬 모델 서버가 모델 목록을 알려 주지 않았습니다(상태 ${response.status}).`,
+      `로컬 모델 서버가 모델 목록을 알려 주지 않았습니다(상태 ${listing.status}).`,
       'APP_LOCAL_URL에는 OpenAI 호환 주소를 /v1까지 적습니다(기본값 http://127.0.0.1:11434/v1).',
     ].join('\n');
   }
-  const missing = [...new Set(Object.values(config.models))].filter((name) => !listed.has(name));
-  if (missing.length === 0) return null;
+  const wanted = [...new Set(Object.values(config.models))];
+  const missing = wanted.filter((name) => !listed.has(name));
+  if (missing.length > 0) {
+    return [
+      `로컬 모델 서버에 이 모델이 없습니다: ${missing.join(', ')}`,
+      '터미널에서 받은 뒤 다시 띄워 주세요.',
+      ...missing.map((name) => `  ollama pull ${name}`),
+    ].join('\n');
+  }
+
+  // Ollama의 클라우드 모델은 로컬 API로 불러도 Ollama의 클라우드에서 돈다(Ollama 문서 'Cloud'). 클라우드 모델이 이 목록에
+  // 원격 모델로 나오는지는 문서에 적혀 있지 않고 확인하지 못했다(추정). 확실히 막는 길은 Ollama의 클라우드 기능을 끄는 것이다(Ollama FAQ).
+  // 이 목록이 없는 서버(404 등)는 Ollama가 아니어서 Ollama의 클라우드 모델도 없으므로, 이 확인을 건너뛴다.
+  const tags = await get(new URL('/api/tags', config.url).href);
+  if (!tags) return UNREACHABLE;
+  const remote = tags.ok ? remoteModelNames(await tags.json().catch(() => null)) : null;
+  const elsewhere = wanted.filter((name) => remote?.has(name));
+  if (elsewhere.length === 0) return null;
   return [
-    `로컬 모델 서버에 이 모델이 없습니다: ${missing.join(', ')}`,
-    '터미널에서 받은 뒤 다시 띄워 주세요.',
-    ...missing.map((name) => `  ollama pull ${name}`),
+    `로컬 모델 서버의 목록에 이 모델이 원격 모델로 나옵니다: ${elsewhere.join(', ')}`,
+    '원격 모델은 다른 Ollama 호스트(Ollama의 클라우드 등)에서 돌아 대화가 이 컴퓨터 밖으로 나가므로 띄우지 않습니다.',
+    '이 컴퓨터에서 도는 모델을 받아 APP_LOCAL_MODEL(판정기는 APP_LOCAL_JUDGE_MODEL)에 적어 주세요.',
   ].join('\n');
 }
