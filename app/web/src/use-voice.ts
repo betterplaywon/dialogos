@@ -1,7 +1,7 @@
 // 음성 상태를 React에 잇는다. 상태와 동작은 voice-control.ts에 있고, 여기서는 실제 브라우저 객체를 넘기고 구독만 한다.
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { browserRecognition, browserSpeech, browserVoiceMemory } from './browser-voice.ts';
+import { browserPackMark, browserRecognition, browserSpeech, browserVoiceMemory } from './browser-voice.ts';
 import { createVoiceControl, type VoiceControl, type VoiceState } from './voice-control.ts';
 
 export interface Voice {
@@ -13,7 +13,7 @@ export interface Voice {
 /** 화면 전체에서 한 번만 쓴다(App). 판을 바꿔도 음성은 켜진 채로 남고, 페이지를 새로 열면 꺼져 있다. */
 export function useVoice(): Voice {
   const [control] = useState<VoiceControl>(() =>
-    createVoiceControl({ recognition: browserRecognition(), speech: browserSpeech(), memory: browserVoiceMemory() }),
+    createVoiceControl({ recognition: browserRecognition(), speech: browserSpeech(), memory: browserVoiceMemory(), packMark: browserPackMark() }),
   );
   const state = useSyncExternalStore(control.subscribe, control.getState);
 

@@ -7,7 +7,7 @@ import type { GameSummaryView, GameView, Lean, SideIndex, TopicView, Verdict } f
 import { api } from './api.ts';
 import { appendDictation, dictationNotice, turnInputOf, voiceTallyText } from './dictation.ts';
 import { LEAN_STEPS, leanAccessibleName, leanLabel, sideOfLean, VERDICT_LABEL } from './lean.ts';
-import { LISTEN_PROBLEMS, PLACE_NOTICES, type ListenResult } from './listen.ts';
+import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES, type ListenResult } from './listen.ts';
 import { SPEAK_PROBLEMS } from './speak.ts';
 import { sendTurn } from './turn-flow.ts';
 import { useVoice, type Voice } from './use-voice.ts';
@@ -393,7 +393,7 @@ function EndPanel({ game, onRecorded, onLeave }: { game: GameView; onRecorded: (
 
 /** 음성을 켜기 전에 읽는 안내. 말소리와 읽을 글이 어디로 가는지 알린다. */
 const VOICE_NOTES: readonly string[] = [
-  '말소리는 브라우저의 음성 인식이 글로 바꿉니다. 기기 안에서 바꿀 수 있으면 그렇게 하고(처음 한 번 한국어 인식 팩 수십 MB를 내려받습니다), 안 되면 브라우저가 정한 방식으로 바꿉니다. 이때 말소리가 브라우저 회사의 서버(Chrome은 Google, Safari는 Apple, Edge는 Microsoft)로 갈 수 있습니다.',
+  '말소리는 브라우저의 음성 인식이 글로 바꿉니다. 기기 안에서 바꿀 수 있으면 그렇게 하고(처음 한 번 한국어 인식 팩을 내려받습니다. 수십 MB이고, 내려받은 뒤 브라우저를 완전히 종료했다가 다시 열어야 쓸 수 있습니다), 안 되면 브라우저가 정한 방식으로 바꿉니다. 이때 말소리가 브라우저 회사의 서버(Chrome은 Google, Safari는 Apple, Edge는 Microsoft)로 갈 수 있습니다.',
   '상대의 말은 기기 안의 목소리로 읽습니다. 기기 안에 한국어 목소리가 없으면 읽지 않습니다. 기기 밖 목소리는 직접 고른 경우에만 쓰고, 그때는 읽을 글이 그 목소리의 서버로 갑니다.',
   'dialogos 서버는 소리를 받지도 저장하지도 않습니다. 인식된 글은 입력 칸에 넣어 드리고, 고친 뒤 직접 보냅니다.',
 ];
@@ -405,6 +405,8 @@ const LISTENING_HINT = '말을 마치면 [말 마치기]를 누르거나 잠시 
 function recognitionNotice(state: VoiceState): string {
   if (!state.canListen) return '이 브라우저는 음성 인식을 지원하지 않습니다. 글로 입력해 주세요.';
   if (state.blocked) return LISTEN_PROBLEMS[state.blocked].message;
+  // 인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없으면, 기기 안에서 바뀐다고만 하지 않고 브라우저를 다시 열라고 알린다.
+  if (state.packPending) return PACK_PENDING_NOTICE;
   if (state.place === 'device' || state.place === 'unknown') return PLACE_NOTICES[state.place];
   return PREPARING_NOTICE;
 }

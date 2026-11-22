@@ -4,6 +4,7 @@ import {
   LISTEN_PROBLEMS,
   LISTEN_TIMINGS,
   listenOnce,
+  PACK_PENDING_NOTICE,
   PLACE_NOTICES,
   prepareRecognition,
   type ListenProblem,
@@ -333,9 +334,10 @@ function onDevice(install: () => Promise<boolean>, available: () => Promise<stri
 }
 
 const KOREAN_ON_DEVICE = '{"langs":["ko-KR"],"processLocally":true}';
+const NOT_ON_DEVICE = { place: 'unknown', downloaded: false };
 
 test('기기 안 인식 API가 없는 브라우저는 브라우저가 정하는 방식으로 둔다', async () => {
-  assert.equal(await prepareRecognition(null), 'unknown');
+  assert.deepEqual(await prepareRecognition(null), NOT_ON_DEVICE);
 });
 
 test('인식 팩을 설치하고 쓸 수 있다고 확인되면 기기 안 인식이다. install은 기다림 없이 먼저 부른다', async () => {
@@ -346,7 +348,8 @@ test('인식 팩을 설치하고 쓸 수 있다고 확인되면 기기 안 인�
   const pending = prepareRecognition(api);
   // 사용자의 누름 안에서 불려야 내려받기가 시작되므로, 돌아오기 전에 이미 불려 있어야 한다.
   assert.deepEqual(calls, [`install ${KOREAN_ON_DEVICE}`]);
-  assert.equal(await pending, 'device');
+  // install이 바로 끝났다. 인식 팩이 이미 있던 것이다.
+  assert.deepEqual(await pending, { place: 'device', downloaded: false });
   assert.deepEqual(calls, [`install ${KOREAN_ON_DEVICE}`, `available ${KOREAN_ON_DEVICE}`]);
 });
 
@@ -355,7 +358,7 @@ test('설치하지 못했으면 기기 안 인식으로 치지 않는다', async
     async () => false,
     async () => 'available',
   );
-  assert.equal(await prepareRecognition(refused.api), 'unknown');
+  assert.deepEqual(await prepareRecognition(refused.api), NOT_ON_DEVICE);
   assert.deepEqual(refused.calls, [`install ${KOREAN_ON_DEVICE}`]);
 
   // 설치했다고 했지만 쓸 수 있다고 확인되지 않았다.
@@ -364,7 +367,7 @@ test('설치하지 못했으면 기기 안 인식으로 치지 않는다', async
       async () => true,
       async () => availability,
     );
-    assert.equal(await prepareRecognition(unconfirmed.api), 'unknown', availability);
+    assert.deepEqual(await prepareRecognition(unconfirmed.api), NOT_ON_DEVICE, availability);
   }
 });
 
@@ -373,19 +376,93 @@ test('설치나 확인이 예외로 끝나면 기기 안 인식으로 치지 않
     () => Promise.reject(new Error('NotAllowedError')),
     async () => 'available',
   );
-  assert.equal(await prepareRecognition(rejected.api), 'unknown');
+  assert.deepEqual(await prepareRecognition(rejected.api), NOT_ON_DEVICE);
   const thrown = onDevice(
     () => {
       throw new Error('TypeError');
     },
     async () => 'available',
   );
-  assert.equal(await prepareRecognition(thrown.api), 'unknown');
+  assert.deepEqual(await prepareRecognition(thrown.api), NOT_ON_DEVICE);
   const unchecked = onDevice(
     async () => true,
     () => Promise.reject(new Error('NotSupportedError')),
   );
-  assert.equal(await prepareRecognition(unchecked.api), 'unknown');
+  assert.deepEqual(await prepareRecognition(unchecked.api), NOT_ON_DEVICE);
+});
+
+/** 검사가 돌리는 시계. pass(ms)를 기다리면 그만큼 시간이 흐른다(실제로 기다리지 않는다). */
+function fakeClock() {
+  let time = 0;
+  return {
+    now: () => time,
+    async pass(ms: number): Promise<void> {
+      await Promise.resolve();
+      time += ms;
+    },
+  };
+}
+
+test('install이 1초 이상 걸렸으면 인식 팩을 이번에 내려받은 것으로 본다', async () => {
+  // 실측에서 새 사용자 폴더는 6.0~9.4초, 인식 팩이 이미 있는 폴더는 1ms 안이었다.
+  const cases: [number, boolean][] = [
+    [6_000, true],
+    [1_000, true],
+    [999, false],
+    [1, false],
+  ];
+  for (const [tookMs, downloaded] of cases) {
+    const clock = fakeClock();
+    const { api } = onDevice(
+      async () => {
+        await clock.pass(tookMs);
+        return true;
+      },
+      async () => 'available',
+    );
+    assert.deepEqual(await prepareRecognition(api, clock.now), { place: 'device', downloaded }, `${tookMs}ms`);
+  }
+});
+
+test('쓸 수 있는지 확인하느라 걸린 시간은 내려받은 것으로 치지 않는다', async () => {
+  const clock = fakeClock();
+  const { api } = onDevice(
+    async () => true,
+    async () => {
+      await clock.pass(9_000);
+      return 'available';
+    },
+  );
+  assert.deepEqual(await prepareRecognition(api, clock.now), { place: 'device', downloaded: false });
+});
+
+test('install이 오래 걸렸어도 기기 안 인식을 쓰지 못하게 됐으면 내려받았다고 치지 않는다', async () => {
+  const clock = fakeClock();
+  /** 6초 뒤에 outcome으로 끝나는 install. */
+  const slowly = (outcome: () => boolean) => async () => {
+    await clock.pass(6_000);
+    return outcome();
+  };
+  // 설치가 거절됐다.
+  const refused = onDevice(
+    slowly(() => false),
+    async () => 'available',
+  );
+  assert.deepEqual(await prepareRecognition(refused.api, clock.now), NOT_ON_DEVICE);
+  // 설치가 예외로 끝났다.
+  const rejected = onDevice(
+    slowly(() => {
+      throw new Error('NotAllowedError');
+    }),
+    async () => 'available',
+  );
+  assert.deepEqual(await prepareRecognition(rejected.api, clock.now), NOT_ON_DEVICE);
+  // 설치했다고 했지만 쓸 수 있다고 확인되지 않았다.
+  const unconfirmed = onDevice(
+    slowly(() => true),
+    async () => 'downloadable',
+  );
+  assert.deepEqual(await prepareRecognition(unconfirmed.api, clock.now), NOT_ON_DEVICE);
 });
 
 test('다시 눌러도 풀리지 않는 문제만 음성 입력을 끄고, 문제마다 알릴 말이 있다', () => {
@@ -410,4 +487,11 @@ test('기기 안 인식이 준비되지 않은 문제는 음성 입력을 끄지
 test('말소리가 가는 곳을 알리는 말은 기기 안인지, 서버로 갈 수 있는지를 밝힌다', () => {
   assert.match(PLACE_NOTICES.device, /이 기기 안에서/);
   assert.match(PLACE_NOTICES.unknown, /서버로 갈 수 있습니다/);
+});
+
+test('인식 팩을 내려받은 뒤의 안내는 브라우저를 다시 열라고 하고, 이미 다시 연 사람에게도 맞는 말이다', () => {
+  assert.match(PACK_PENDING_NOTICE, /브라우저를 완전히 종료했다가 다시 열어야 말로 입력할 수 있습니다/);
+  assert.match(PACK_PENDING_NOTICE, /그때까지는 글로 입력해 주세요/);
+  // 표시는 브라우저를 다시 연 뒤에도 글이 한 번 올 때까지 남는다.
+  assert.match(PACK_PENDING_NOTICE, /이미 다시 열었다면 \[말하기\]를 눌러 보세요/);
 });

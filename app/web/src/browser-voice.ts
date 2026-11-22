@@ -3,7 +3,7 @@
 // 여기에는 브라우저 객체를 만들고 이벤트를 넘기는 일만 둔다. 이 앱은 소리를 직접 녹음하거나 서버로 보내지 않는다.
 
 import type { OnDevicePort, RecognizerPort } from './listen.ts';
-import type { RecognitionPort, SpeechPort, VoiceMemory } from './voice-control.ts';
+import type { PackMark, RecognitionPort, SpeechPort, VoiceMemory } from './voice-control.ts';
 
 /**
  * 이 저장소의 DOM 타입에는 SpeechRecognition 생성자가 없어, 쓰는 만큼만 적는다.
@@ -130,6 +130,32 @@ export function browserVoiceMemory(): VoiceMemory {
         else window.localStorage.setItem(VOICE_NAME_KEY, name);
       } catch {
         // 남기거나 지우지 못해도 이 페이지에서는 고른 대로 읽는다.
+      }
+    },
+  };
+}
+
+const PACK_PENDING_KEY = 'dialogos.pack-pending';
+
+/**
+ * '인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없다'는 표시를 이 브라우저에 남긴다. 값은 표시 하나뿐이다.
+ * 브라우저를 다시 열어도 남아야 해서 localStorage에 둔다. 저장소를 쓸 수 없어도 화면은 그대로 돈다.
+ */
+export function browserPackMark(): PackMark {
+  return {
+    load() {
+      try {
+        return window.localStorage.getItem(PACK_PENDING_KEY) !== null;
+      } catch {
+        return false;
+      }
+    },
+    save(pending) {
+      try {
+        if (pending) window.localStorage.setItem(PACK_PENDING_KEY, '1');
+        else window.localStorage.removeItem(PACK_PENDING_KEY);
+      } catch {
+        // 남기거나 지우지 못해도 이 페이지에서는 voice-control.ts가 기억한다.
       }
     },
   };

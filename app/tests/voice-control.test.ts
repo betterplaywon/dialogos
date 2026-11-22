@@ -2,10 +2,22 @@ import assert from 'node:assert/strict';
 import { beforeEach, test, type TestContext } from 'node:test';
 import type { ListenResult } from '../web/src/listen.ts';
 import { createVoiceControl, type ReadRequest, type VoiceControl, type VoiceMemory } from '../web/src/voice-control.ts';
-import { fakeOnDevice, FakeRecognition, FakeSpeech, MEASURED_VOICES, REMOTE_ONLY_VOICES, voice, type FakeVoice } from './voice-fakes.ts';
+import {
+  fakeOnDevice,
+  FakePackMark,
+  FakeRecognition,
+  FakeSpeech,
+  MEASURED_VOICES,
+  REMOTE_ONLY_VOICES,
+  voice,
+  type FakeVoice,
+} from './voice-fakes.ts';
 
 const OPENING: ReadRequest = { key: 'g1:1', text: '저는 반대로 생각합니다. 근거는 네 가지입니다.', characterId: 'deontologist' };
 const REPLY: ReadRequest = { key: 'g1:3', text: '그 반론은 받아들입니다.', characterId: 'deontologist' };
+
+/** 새 사용자 폴더에서 잰 install 시간(6.0~9.4초) 가운데 하나. install이 이만큼 걸렸으면 인식 팩을 내려받은 것이다. */
+const DOWNLOAD_MS = 6_000;
 
 /** 약속(promise)에 걸린 일이 모두 돌 때까지 기다린다. */
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -27,6 +39,10 @@ interface Options {
   remembered?: string;
   /** 다른 제어기가 쓰던 저장소. 주면 같은 브라우저에서 페이지를 새로 연 것이 된다. */
   memory?: VoiceMemory;
+  /** 다른 제어기가 쓰던 표시 저장소. 주면 같은 브라우저의 다른 페이지(새로 연 페이지, 다른 탭)가 된다. */
+  packMark?: FakePackMark;
+  /** turnedOn에서 인식 팩 설치(install)에 걸리는 시간. 주지 않으면 바로 끝난다(인식 팩이 이미 있는 브라우저). */
+  installMs?: number;
 }
 
 function setup(options: Options = {}) {
@@ -42,16 +58,36 @@ function setup(options: Options = {}) {
       remembered = name;
     },
   };
+  const packMark = options.packMark ?? new FakePackMark();
+  /** 검사가 돌리는 시계. 제어기는 이것으로 install에 걸린 시간을 잰다. */
+  let clock = 0;
   const control = createVoiceControl({
     recognition: options.recognition === false ? null : recognition,
     speech: options.speech === false ? null : speech,
     memory,
+    packMark,
+    now: () => clock,
   });
   let notified = 0;
   control.subscribe(() => {
     notified += 1;
   });
-  return { control, speech, synth: speech.synth, recognition, device, log, memory, remembered: () => memory.load(), notified: () => notified };
+  return {
+    control,
+    speech,
+    synth: speech.synth,
+    recognition,
+    device,
+    log,
+    memory,
+    packMark,
+    remembered: () => memory.load(),
+    notified: () => notified,
+    /** 시계를 ms만큼 보낸다. */
+    elapse: (ms: number) => {
+      clock += ms;
+    },
+  };
 }
 
 /** 기기 안 한국어 목소리가 없는 브라우저에서 음성을 켜고, 목록이 다 온 뒤 원격 목소리를 골라 기다리던 말을 읽게 한다. */
@@ -67,6 +103,7 @@ function remoteChosen() {
 async function turnedOn(t: TestContext, options: Options = {}, first: ReadRequest | null = null) {
   const made = setup(options);
   made.control.turnOn(first);
+  made.elapse(options.installMs ?? 0);
   made.device.finishInstall(true);
   await settle();
   return { ...made, tick: (ms: number) => t.mock.timers.tick(ms) };
@@ -585,6 +622,130 @@ test('기기 안 인식이 한 번 확인되면 다시 켤 때 설치를 되풀�
   // 소리 없는 첫 읽기와 목소리 구독은 켤 때마다 다시 한다.
   assert.equal(log.filter((entry) => entry === 'prime').length, 2);
   assert.equal(log.filter((entry) => entry === 'watch').length, 2);
+});
+
+test('인식 팩을 내려받았으면 표시를 남기고, 말소리가 아직 글로 바뀐 적이 없다고 적는다. 껐다 켜도 그대로다', async () => {
+  const { control, device, packMark, elapse } = setup();
+  control.turnOn(null);
+  elapse(DOWNLOAD_MS);
+  // 내려받는 동안에는 아직 적지 않는다.
+  assert.deepEqual([control.getState().place, control.getState().packPending, packMark.stored], ['preparing', false, false]);
+  device.finishInstall(true);
+  await settle();
+  assert.deepEqual([control.getState().place, control.getState().packPending, packMark.stored], ['device', true, true]);
+  control.turnOff();
+  // 꺼져 있을 때는 말소리가 가는 곳이 없으므로 적지 않는다.
+  assert.equal(control.getState().packPending, false);
+  control.turnOn(null);
+  assert.deepEqual([control.getState().place, control.getState().packPending], ['device', true]);
+});
+
+test('인식 팩이 이미 있던 브라우저에서는 표시를 남기지 않는다', async (t) => {
+  const { control, packMark } = await turnedOn(t);
+  assert.deepEqual([control.getState().place, control.getState().packPending, packMark.stored], ['device', false, false]);
+});
+
+test('내려받는 중에 음성을 껐어도 표시는 남기고, 다시 켜면 적는다', async () => {
+  const { control, device, packMark, elapse } = setup();
+  control.turnOn(null);
+  control.turnOff();
+  elapse(DOWNLOAD_MS);
+  device.finishInstall(true);
+  await settle();
+  assert.deepEqual([control.getState().on, control.getState().packPending, packMark.stored], [false, false, true]);
+  control.turnOn(null);
+  assert.deepEqual([control.getState().place, control.getState().packPending], ['device', true]);
+});
+
+test('표시가 남아 있으면 페이지를 새로 열어 켜도 그대로 적는다', async (t) => {
+  const first = await turnedOn(t, { installMs: DOWNLOAD_MS });
+  // 같은 브라우저에서 페이지를 새로 열었다. 인식 팩이 이제 있어서 install은 바로 끝난다.
+  const reopened = await turnedOn(t, { packMark: first.packMark });
+  assert.deepEqual([reopened.control.getState().place, reopened.control.getState().packPending], ['device', true]);
+});
+
+test('다른 탭이 인식 팩을 내려받았으면, 먼저 열려 있던 탭도 켤 때 그 표시를 읽는다', async (t) => {
+  const packMark = new FakePackMark();
+  // 이 탭은 인식 팩을 내려받기 전에 열렸다.
+  const earlier = setup({ packMark });
+  await turnedOn(t, { packMark, installMs: DOWNLOAD_MS });
+  earlier.control.turnOn(null);
+  earlier.device.finishInstall(true);
+  await settle();
+  assert.deepEqual([earlier.control.getState().place, earlier.control.getState().packPending], ['device', true]);
+});
+
+test('표시를 남기지 못하는 브라우저에서도 그 페이지에서는 기억한다', async (t) => {
+  const packMark = new FakePackMark();
+  packMark.blocked = true;
+  const { control } = await turnedOn(t, { packMark, installMs: DOWNLOAD_MS });
+  assert.equal(control.getState().packPending, true);
+  control.turnOff();
+  control.turnOn(null);
+  assert.equal(control.getState().packPending, true);
+});
+
+test('표시가 남아 있는 동안 글 없이 끝난 듣기는 말소리가 없었던 것이 아니라 준비되지 않은 것으로 알리고, 음성 입력을 끄지 않는다', async (t) => {
+  const { control, recognition, tick } = await turnedOn(t, { installMs: DOWNLOAD_MS });
+  const heard: ListenResult[] = [];
+  // 인식 팩을 내려받은 세션의 마이크 경로에서 잰 차례: start가 오고, 결과 없이 no-speech와 end가 온다.
+  control.listen((result) => heard.push(result));
+  recognition.last.started();
+  recognition.last.error('no-speech');
+  recognition.last.end();
+  assert.deepEqual(heard, [{ transcript: '', problem: 'not-ready' }]);
+  assert.deepEqual([control.getState().blocked, control.getState().listening, control.getState().packPending], [null, false, true]);
+  // 브라우저가 오류를 내지 않아 앱이 시간 제한(첫 결과 10초)으로 끝낸 듣기도 같다. 표시가 남아 있어도 다시 누를 수 있다.
+  control.listen((result) => heard.push(result));
+  recognition.last.started();
+  tick(10_000);
+  recognition.last.end();
+  assert.deepEqual(heard[1], { transcript: '', problem: 'not-ready' });
+  assert.deepEqual([control.getState().blocked, recognition.created.length], [null, 2]);
+});
+
+test('표시가 남아 있어도 듣기를 막지 않고, 글이 오면 표시를 지운다. 그 뒤로 글 없이 끝난 듣기는 말소리가 없었던 것이다', async (t) => {
+  const { control, recognition, packMark } = await turnedOn(t, { installMs: DOWNLOAD_MS });
+  const heard: ListenResult[] = [];
+  control.listen((result) => heard.push(result));
+  assert.deepEqual([control.getState().listening, recognition.last.processLocally], [true, true]);
+  recognition.last.started();
+  recognition.last.result('거짓말은 옳지 않습니다');
+  // 듣는 동안에는 그대로 둔다. 화면의 안내가 듣는 중에 바뀌지 않게 한다.
+  assert.equal(control.getState().packPending, true);
+  recognition.last.end();
+  assert.deepEqual([...heard], [{ transcript: '거짓말은 옳지 않습니다', problem: null }]);
+  assert.deepEqual([control.getState().packPending, packMark.stored], [false, false]);
+
+  control.listen((result) => heard.push(result));
+  recognition.last.error('no-speech');
+  recognition.last.end();
+  assert.deepEqual(heard[1], { transcript: '', problem: 'no-speech' });
+  // 껐다 켜도, 페이지를 새로 열어도 표시는 돌아오지 않는다.
+  control.turnOff();
+  control.turnOn(null);
+  assert.equal(control.getState().packPending, false);
+  const reopened = await turnedOn(t, { packMark });
+  assert.equal(reopened.control.getState().packPending, false);
+});
+
+test('기기 안 인식을 쓰지 못하면 표시가 남아 있어도 적지 않고, 말소리 없음도 그대로 알린다', async () => {
+  const packMark = new FakePackMark();
+  packMark.stored = true;
+  const { control, recognition } = setup({ onDevice: false, packMark });
+  control.turnOn(null);
+  await settle();
+  assert.deepEqual([control.getState().place, control.getState().packPending], ['unknown', false]);
+  const heard: ListenResult[] = [];
+  control.listen((result) => heard.push(result));
+  recognition.last.error('no-speech');
+  recognition.last.end();
+  assert.deepEqual(heard, [{ transcript: '', problem: 'no-speech' }]);
+  // 브라우저가 정한 방식으로 들은 글은 기기 안 인식이 된다는 증거가 아니다. 표시를 지우지 않는다.
+  control.listen((result) => heard.push(result));
+  recognition.last.result('네');
+  recognition.last.end();
+  assert.deepEqual([heard[1], packMark.stored], [{ transcript: '네', problem: null }, true]);
 });
 
 test('지난번에 고른 목소리로 읽고, 새로 고르면 기억해 두고 다음 읽기부터 쓴다. 읽던 말을 다시 읽지 않는다', async (t) => {

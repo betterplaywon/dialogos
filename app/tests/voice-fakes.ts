@@ -3,7 +3,7 @@
 
 import type { OnDevicePort, RecognizerPort } from '../web/src/listen.ts';
 import type { ChunkEvents, SpeechChunk, SynthPort, VoiceLike } from '../web/src/speak.ts';
-import type { RecognitionPort, SpeechPort } from '../web/src/voice-control.ts';
+import type { PackMark, RecognitionPort, SpeechPort } from '../web/src/voice-control.ts';
 
 export class FakeRecognizer implements RecognizerPort {
   lang = '';
@@ -224,6 +224,22 @@ export class FakeRecognition implements RecognitionPort {
     const recognizer = this.created[this.created.length - 1];
     if (!recognizer) throw new Error('만든 인식기가 없습니다.');
     return recognizer;
+  }
+}
+
+/** 가짜 표시 저장소. '인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없다'는 표시를 브라우저 대신 들고 있다. */
+export class FakePackMark implements PackMark {
+  /** 브라우저에 남아 있는 표시. */
+  stored = false;
+  /** true면 저장이 막힌 브라우저다. 남기지 못하고, 읽으면 표시가 없다고 답한다. */
+  blocked = false;
+
+  load(): boolean {
+    return !this.blocked && this.stored;
+  }
+
+  save(pending: boolean): void {
+    if (!this.blocked) this.stored = pending;
   }
 }
 

@@ -42,10 +42,23 @@ export interface VoiceMemory {
   save(name: string | null): void;
 }
 
+/**
+ * '인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없다'는 표시를 남기는 곳.
+ * 페이지를 새로 열어도, 브라우저를 다시 열어도 남는 곳이어야 한다.
+ */
+export interface PackMark {
+  load(): boolean;
+  /** false면 표시를 지운다. */
+  save(pending: boolean): void;
+}
+
 export interface VoicePorts<V extends VoiceLike> {
   recognition: RecognitionPort | null;
   speech: SpeechPort<V> | null;
   memory: VoiceMemory;
+  packMark: PackMark;
+  /** 흐른 시간을 재는 시계(ms). 인식 팩 설치에 걸린 시간을 잰다. 주지 않으면 실제 시계다. */
+  now?: () => number;
 }
 
 /** 읽어 달라는 요청. */
@@ -65,6 +78,11 @@ export interface VoiceState<V extends VoiceLike = VoiceLike> {
   on: boolean;
   /** 말소리를 글로 바꾸는 곳. 'preparing'은 기기 안 인식을 준비하는 중이다. 꺼져 있거나 음성 인식이 없으면 null이다. */
   place: RecognitionPlace | 'preparing' | null;
+  /**
+   * 인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없다. place가 'device'일 때만 참이다.
+   * 그동안은 기기 안 인식이 되지 않을 수 있다(listen.ts 머리의 실측). 이때도 듣기는 막지 않고, 글이 한 번 오면 거짓이 된다.
+   */
+  packPending: boolean;
   /** 음성 입력을 끄게 한 문제. 한번 생기면 페이지를 새로 열 때까지 남는다. */
   blocked: ListenProblem | null;
   listening: boolean;
@@ -104,7 +122,7 @@ export interface VoiceControl<V extends VoiceLike = VoiceLike> {
 }
 
 export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): VoiceControl<V> {
-  const { recognition, speech, memory } = ports;
+  const { recognition, speech, memory, packMark } = ports;
   const speaker = speech ? createSpeaker(speech.synth) : null;
   const listeners = new Set<() => void>();
   let state: VoiceState<V> = {
@@ -112,6 +130,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
     canSpeak: speech !== null,
     on: false,
     place: null,
+    packPending: false,
     blocked: null,
     listening: false,
     interim: '',
@@ -134,6 +153,8 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
   let onDeviceReady = false;
   /** 진행 중인 기기 안 인식 준비. 껐다 켜도 같은 준비를 기다리고, install을 겹쳐 부르지 않는다. */
   let preparing: Promise<void> | null = null;
+  /** packMark에 남긴 표시를 이 페이지가 아는 대로 적은 것. 저장이 막힌 브라우저에서도 이 페이지에서는 기억한다. */
+  let packMarked = false;
 
   function set(patch: Partial<VoiceState<V>>): void {
     const keys = Object.keys(patch) as (keyof VoiceState<V>)[];
@@ -143,6 +164,18 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
   }
 
   const voiceNow = (): V | 'wait' | null => (speech ? chooseVoice(allVoices, preferred, settled) : null);
+
+  function markPack(pending: boolean): void {
+    packMarked = pending;
+    packMark.save(pending);
+  }
+
+  /** 말소리가 글로 바뀌는 곳을 적는다. 기기 안이면 인식 팩을 내려받은 뒤의 표시도 함께 적는다. */
+  function setPlace(place: VoiceState<V>['place']): void {
+    // 표시는 다른 탭이 남겼을 수도 있다. 기기 안 인식을 쓰게 될 때마다 다시 읽는다.
+    if (place === 'device') packMarked ||= packMark.load();
+    set({ place, packPending: place === 'device' && packMarked });
+  }
 
   function say(request: ReadRequest, voice: V): void {
     if (!speaker) return;
@@ -222,16 +255,18 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
       // 음성 입력이 이 페이지에서 꺼졌으면(blocked) 인식 팩을 준비할 까닭이 없다.
       if (!recognition || state.blocked !== null) return;
       if (onDeviceReady) {
-        set({ place: 'device' });
+        setPlace('device');
         return;
       }
-      set({ place: 'preparing' });
+      setPlace('preparing');
       // 읽기는 이 준비를 기다리지 않는다. 준비가 끝날 때까지는 말하기만 막힌다.
-      preparing ??= prepareRecognition(recognition.onDevice).then((place) => {
+      preparing ??= prepareRecognition(recognition.onDevice, ports.now).then(({ place, downloaded }) => {
         preparing = null;
         if (place === 'device') onDeviceReady = true;
+        // 인식 팩을 이번에 내려받았다. 그사이 음성을 껐어도 표시는 남긴다.
+        if (downloaded) markPack(true);
         // 그사이 껐다가 다시 켰어도, 지금 켜져 있고 준비를 기다리는 중이면 결과를 적는다.
-        if (state.on && state.place === 'preparing') set({ place });
+        if (state.on && state.place === 'preparing') setPlace(place);
       });
     },
 
@@ -248,7 +283,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
       speaker?.stop();
       unwatch?.();
       unwatch = null;
-      set({ on: false, place: null, listening: false, interim: '', reading: null, speakProblem: null });
+      set({ on: false, place: null, packPending: false, listening: false, interim: '', reading: null, speakProblem: null });
       if (heardSoFar && onHeard) onHeard({ transcript: heardSoFar, problem: null });
     },
 
@@ -268,9 +303,20 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
           onDone: (result) => {
             session = null;
             deliver = null;
-            const blocks = result.problem !== null && LISTEN_PROBLEMS[result.problem].blocks;
-            set({ listening: false, interim: '', ...(blocks ? { blocked: result.problem } : {}) });
-            onHeard(result);
+            // 기기 안 인식으로 들은 글이 왔다. 인식이 되는 것이므로 표시를 지운다.
+            const proven = state.packPending && result.transcript !== '';
+            if (proven) markPack(false);
+            // 표시가 남아 있는 동안 글 없이 끝난 듣기는, 말소리가 없었던 것이 아니라 기기 안 인식이 준비되지 않은 것으로 알린다.
+            // 인식 팩을 내려받은 세션의 마이크 경로(가짜 장치)는 start를 내고도 결과 없이 no-speech로 끝났다(실측).
+            const heard: ListenResult = state.packPending && result.problem === 'no-speech' ? { ...result, problem: 'not-ready' } : result;
+            const blocks = heard.problem !== null && LISTEN_PROBLEMS[heard.problem].blocks;
+            set({
+              listening: false,
+              interim: '',
+              ...(proven ? { packPending: false } : {}),
+              ...(blocks ? { blocked: heard.problem } : {}),
+            });
+            onHeard(heard);
           },
         },
       );

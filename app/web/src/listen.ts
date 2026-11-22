@@ -8,6 +8,8 @@
 // 인식 팩을 내려받은 그 브라우저 세션에서는 기기 안 인식이 되지 않았다(실측, 새 사용자 폴더 다섯 개). 브라우저를 다시 띄운 직후 약 20초도 그랬다.
 // - 소리 트랙으로 넣은 듣기는 start 없이 0.2초 안에 aborted와 end로 끝났다(한 번은 30초 동안 아무 이벤트도 없었다).
 //   listenOnce가 start보다 먼저 온 aborted를 'not-ready'로 가른다.
+// - 마이크 경로(가짜 장치)의 듣기는 start를 내고, 결과 없이 no-speech와 end로 끝났다. 이벤트만으로는 말소리가 없던 것과 가를 수 없다.
+//   이 경우는 voice-control.ts가 인식 팩을 내려받은 뒤에 남긴 표시(packPending)로 가른다.
 
 /** 결과 이벤트에서 읽는 것만 적은 모양. 결과마다 첫째 후보의 글을 쓴다. */
 export interface RecognitionResults {
@@ -234,7 +236,7 @@ export function listenOnce(
   };
 }
 
-/** 말소리를 글로 바꾸는 곳. 'device'는 기기 안(확인됨). 'unknown'은 브라우저가 정하며 회사 서버로 갈 수 있다. */
+/** 말소리를 글로 바꾸는 곳. 'device'는 기기 안(브라우저가 쓸 수 있다고 답했다). 'unknown'은 브라우저가 정하며 회사 서버로 갈 수 있다. */
 export type RecognitionPlace = 'device' | 'unknown';
 
 /** 말소리가 어디서 글로 바뀌는지 화면에 알리는 말. */
@@ -242,6 +244,13 @@ export const PLACE_NOTICES: Record<RecognitionPlace, string> = {
   device: '말소리는 이 기기 안에서 글로 바뀝니다.',
   unknown: '말소리는 브라우저가 정한 방식으로 글로 바뀝니다. 브라우저 회사의 서버로 갈 수 있습니다.',
 };
+
+/**
+ * 인식 팩을 내려받은 뒤 아직 말소리가 글로 바뀐 적이 없는 동안, PLACE_NOTICES.device 대신 알리는 말.
+ * 그 표시는 브라우저를 다시 연 뒤에도 글이 한 번 올 때까지 남는다. 그래서 이미 다시 연 사람에게도 맞는 말로 둔다.
+ */
+export const PACK_PENDING_NOTICE =
+  '한국어 인식 팩을 내려받았습니다. 브라우저를 완전히 종료했다가 다시 열어야 말로 입력할 수 있습니다(다시 연 직후에도 잠시 걸립니다. 이미 다시 열었다면 [말하기]를 눌러 보세요). 그때까지는 글로 입력해 주세요. 준비되면 말소리는 이 기기 안에서 글로 바뀝니다.';
 
 export interface OnDeviceOptions {
   langs: string[];
@@ -254,17 +263,31 @@ export interface OnDevicePort {
   install(options: OnDeviceOptions): Promise<boolean>;
 }
 
+/** 기기 안 인식을 준비한 결과. downloaded는 이번 준비에서 인식 팩을 내려받았다는 뜻이고, 기기 안 인식을 쓰게 됐을 때만 참이다. */
+export type PreparedRecognition = { place: 'device'; downloaded: boolean } | { place: 'unknown'; downloaded: false };
+
+/**
+ * install()이 true를 돌려주기까지 이만큼 이상 걸렸으면 인식 팩을 이번에 내려받은 것으로 본다. 걸린 시간으로 가르는 추정이다.
+ * 실측에서 인식 팩이 이미 있는 사용자 폴더는 1ms 안에 끝났고(세 번), 새 사용자 폴더는 6.0~9.4초가 걸렸다(여섯 번).
+ * available()의 답으로는 가를 수 없었다. 인식 팩이 이미 있는 폴더에서도 Chrome을 띄운 지 약 3초 뒤에 물으면 'downloadable'이었다(실측, 두 폴더).
+ */
+const SLOW_INSTALL_MS = 1_000;
+
 /**
  * 한국어 기기 안 인식을 준비한다. 사용자의 누름(제스처) 안에서 불러야 한다.
  * install을 먼저, 다른 것을 기다리지 않고 부른다. 제스처 없이 부르면 내려받기가 거절된다(실측).
+ * now는 흐른 시간을 재는 시계(ms)다. 검사에서 바꾼다.
  */
-export async function prepareRecognition(api: OnDevicePort | null): Promise<RecognitionPlace> {
-  if (!api) return 'unknown';
+export async function prepareRecognition(api: OnDevicePort | null, now: () => number = () => performance.now()): Promise<PreparedRecognition> {
+  const notOnDevice: PreparedRecognition = { place: 'unknown', downloaded: false };
+  if (!api) return notOnDevice;
   const korean: OnDeviceOptions = { langs: ['ko-KR'], processLocally: true };
   try {
-    if (!(await api.install(korean))) return 'unknown';
-    return (await api.available(korean)) === 'available' ? 'device' : 'unknown';
+    const asked = now();
+    if (!(await api.install(korean))) return notOnDevice;
+    const downloaded = now() - asked >= SLOW_INSTALL_MS;
+    return (await api.available(korean)) === 'available' ? { place: 'device', downloaded } : notOnDevice;
   } catch {
-    return 'unknown';
+    return notOnDevice;
   }
 }
