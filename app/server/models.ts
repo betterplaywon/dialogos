@@ -8,7 +8,8 @@ import type { ChatModel } from '../../eval/src/types.ts';
 import type { MeteredModel, ModelSource, Price } from './budget.ts';
 import type { ModelRole } from './store.ts';
 
-type Env = Readonly<Record<string, string | undefined>>;
+/** 설정을 읽는 환경 변수. */
+export type Env = Readonly<Record<string, string | undefined>>;
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /** 모의 모델. 돈이 들지 않아 원장에 남기지 않지만, 하루 턴 수에는 든다. */
