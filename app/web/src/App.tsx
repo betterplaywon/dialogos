@@ -541,7 +541,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [game.messages.length, waiting, game.ended]);
+  }, [game.messages.length, waiting, game.ended, error]);
 
   useEffect(() => {
     // 음성이 켜진 채로 판을 열면 마지막 상대의 말을 읽는다(꺼져 있으면 아무 일도 없다). 끝난 판은 읽지 않는다.
@@ -754,12 +754,13 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
           </div>
         </form>
       )}
-      <div ref={bottom} />
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
+      {/* 맨 아래 표시는 오류 문단보다 뒤에 둔다. 앞에 두면 막힌 턴과 끝내기의 메시지가 화면 바로 아래에 놓인다. */}
+      <div ref={bottom} />
     </section>
   );
 }
