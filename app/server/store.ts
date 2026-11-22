@@ -1,11 +1,33 @@
 // 판을 저장하는 곳의 인터페이스와 메모리 저장소. 파일에 남기는 SQLite 저장소는 sqlite-store.ts에 있다.
 // 배포처에 맞는 저장소(Turso 등)도 이 인터페이스로 붙인다.
 
+import type { DialogueModels } from '../../eval/src/dialogue.ts';
 import type { ChatMessage, Condition, JudgeDecision, TurnRecord } from '../../eval/src/types.ts';
 import type { EndReason, Lean, SideIndex, TurnInput, Verdict, VoiceTally } from './contract.ts';
 
 /** 상대를 만드는 방식. 판정 실험의 조건 가운데 서비스에서 쓰는 둘이다. */
 export type Mode = Extract<Condition, 'prompt' | 'engine'>;
+
+/** 서버가 쓰는 모델의 역할(상대, 판정기). */
+export type ModelRole = keyof DialogueModels;
+
+/** 모델을 한 번 부른 사용량과 비용. 원장에 덧붙이기만 하고 바꾸거나 지우지 않는다. */
+export interface SpendEntry {
+  /** 원장에 남긴 시각(ISO). */
+  at: string;
+  userId: string;
+  gameId: string;
+  role: ModelRole;
+  /** 그 호출의 모델 이름. */
+  model: string;
+  /** 응답을 받은 호출 수. 모델 안에서 다시 부른 것도 센다. 0이면 원장에 남기지 않는다. */
+  calls: number;
+  inputTokens: number;
+  /** 과금되는 출력 토큰(생각 토큰 포함, eval/src/util.ts의 billedOutputTokens). */
+  outputTokens: number;
+  /** 비용. 100만분의 1달러 단위로 올림한 정수다. */
+  costMicroUsd: number;
+}
 
 /** 한 턴의 기록. 판정과 걸린 시간은 서버에만 남고 화면에는 가지 않는다. */
 export interface TurnLog {
@@ -72,6 +94,15 @@ export interface GameStore {
   save(game: GameRecord): Promise<void>;
   /** 한 사용자의 판을 최근에 시작한 것부터 limit개. 시작 시각이 같으면 나중에 만든 판이 먼저다. */
   list(userId: string, limit: number): Promise<GameSummary[]>;
+  /**
+   * 그 사용자가 since(ISO 시각) 이후에 저장한 턴 수. 끝난 판의 턴도 센다.
+   * 턴의 시각과 since는 모두 toISOString()의 UTC 꼴이라, 글자 순서로 견주면 시간 순서와 같다.
+   */
+  countTurnsSince(userId: string, since: string): Promise<number>;
+  /** 모델 사용량 원장에 한 줄을 덧붙인다. */
+  addSpend(entry: SpendEntry): Promise<void>;
+  /** 원장의 비용 합(100만분의 1달러). 처음부터 쌓인 전체다. */
+  totalSpendMicroUsd(): Promise<number>;
 }
 
 /** 말로 넣은 턴과 그 가운데 고쳐 보낸 턴을 센다. SQLite 저장소의 목록은 같은 값을 SQL로 센다. */
@@ -98,12 +129,15 @@ export function summaryOf(game: GameRecord): GameSummary {
 }
 
 /**
- * 메모리 저장소. 서버를 다시 띄우면 판이 사라진다. 검사와, 파일을 남기지 않을 때 쓴다.
+ * 메모리 저장소. 서버를 다시 띄우면 판이 사라진다. 검사에서 쓴다.
+ * 파일 없이 띄우는 개발 서버(APP_DB_PATH=:memory:)는 이 저장소가 아니라 SQLite 저장소를 메모리에 연다.
  * 꺼낼 때와 넣을 때 복사해, 밖에서 고쳐도 저장된 판이 바뀌지 않게 한다.
  * 오래 띄워 두어도 메모리가 계속 늘지 않게, 판이 상한을 넘으면 가장 먼저 만든 판부터 지운다.
  */
 export class MemoryGameStore implements GameStore {
   readonly #games = new Map<string, GameRecord>();
+  /** 원장은 비용 합 하나만 둔다(검사용). */
+  #spentMicroUsd = 0;
 
   constructor(readonly limit = 1000) {}
 
@@ -140,5 +174,22 @@ export class MemoryGameStore implements GameStore {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, limit)
       .map(summaryOf);
+  }
+
+  /** 판들의 턴에서 센다. 상한을 넘어 지운 판의 턴은 세지 않는다. */
+  async countTurnsSince(userId: string, since: string): Promise<number> {
+    let count = 0;
+    for (const game of this.#games.values()) {
+      if (game.userId === userId) count += game.turns.filter((turn) => turn.at >= since).length;
+    }
+    return count;
+  }
+
+  async addSpend(entry: SpendEntry): Promise<void> {
+    this.#spentMicroUsd += entry.costMicroUsd;
+  }
+
+  async totalSpendMicroUsd(): Promise<number> {
+    return this.#spentMicroUsd;
   }
 }

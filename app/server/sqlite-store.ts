@@ -4,7 +4,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { ChatMessage, JudgeDecision } from '../../eval/src/types.ts';
 import type { EndReason, Lean, SideIndex, TurnInput, Verdict } from './contract.ts';
-import type { EndRecord, GameRecord, GameStore, GameSummary, Mode, TurnLog } from './store.ts';
+import type { EndRecord, GameRecord, GameStore, GameSummary, Mode, SpendEntry, TurnLog } from './store.ts';
 
 /**
  * 스키마. 바꿀 때는 끝에 하나를 더하고, 이미 있는 것은 고치지 않는다.
@@ -45,6 +45,18 @@ export const MIGRATIONS: readonly string[] = [
    ALTER TABLE games ADD COLUMN recorded_at TEXT;`,
   // 3: 턴의 말을 넣은 방식. 스키마 2까지는 글 입력뿐이었으므로 그때의 턴은 모두 'text'가 사실과 맞다.
   `ALTER TABLE turns ADD COLUMN input TEXT NOT NULL DEFAULT 'text' CHECK (input IN ('text', 'voice', 'voice-edited'));`,
+  // 4: 모델 사용량 원장. 덧붙이기만 한다. 판이 없어져도 쓴 돈은 남아야 하므로 games를 가리키는 외래 키를 두지 않는다.
+  `CREATE TABLE spend (
+     at TEXT NOT NULL,
+     user_id TEXT NOT NULL,
+     game_id TEXT NOT NULL,
+     role TEXT NOT NULL CHECK (role IN ('opponent', 'judge')),
+     model TEXT NOT NULL,
+     calls INTEGER NOT NULL CHECK (calls > 0),
+     input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+     output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+     cost_micro_usd INTEGER NOT NULL CHECK (cost_micro_usd >= 0)
+   );`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -300,5 +312,36 @@ export class SqliteGameStore implements GameStore {
         ...(record ? { record } : {}),
       };
     });
+  }
+
+  async countTurnsSince(userId: string, since: string): Promise<number> {
+    const row = this.#db
+      .prepare('SELECT COUNT(*) AS turns FROM turns t JOIN games g ON g.id = t.game_id WHERE g.user_id = ? AND t.at >= ?')
+      .get(userId, since) as unknown as { turns: number };
+    return row.turns;
+  }
+
+  async addSpend(entry: SpendEntry): Promise<void> {
+    this.#db
+      .prepare(
+        `INSERT INTO spend (at, user_id, game_id, role, model, calls, input_tokens, output_tokens, cost_micro_usd)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.at,
+        entry.userId,
+        entry.gameId,
+        entry.role,
+        entry.model,
+        entry.calls,
+        entry.inputTokens,
+        entry.outputTokens,
+        entry.costMicroUsd,
+      );
+  }
+
+  async totalSpendMicroUsd(): Promise<number> {
+    const row = this.#db.prepare('SELECT COALESCE(SUM(cost_micro_usd), 0) AS total FROM spend').get() as unknown as { total: number };
+    return row.total;
   }
 }
