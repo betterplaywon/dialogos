@@ -145,9 +145,33 @@ export function createGames(deps: GameDeps) {
     }
   }
 
-  /** 서비스 상한(503)이나 하루 턴 수(429)에 걸리면, 판을 만들거나 모델을 부르기 전에 막는다. */
+  /**
+   * 원장 쓰기가 실패한 적이 있는지. 실패한 호출의 양은 원장에 없어 그 뒤의 원장 합으로는 서비스 상한을 셀 수 없으므로,
+   * 한 번 닫히면 서버를 다시 띄울 때까지 새 판과 턴을 막는다. 판 잠금처럼 서버 하나 안에서만 지켜진다.
+   * 닫히기 전에 상한 확인을 시작한 턴은 막지 않는다. 사용자마다 그런 턴은 하나라(oneTurnPerUser), 기록 없이 나가는 양은 사용자마다 그 한 턴까지다.
+   * 상한을 확인하다 원장을 읽지 못한 것은 닫지 않는다. 그 요청만 실패하고 모델을 부르지 않아 기록 없이 나가는 돈이 없다.
+   */
+  let ledgerClosed = false;
+
+  /** 턴이 원장에 남기는 길. 남기지 못하면 원장을 닫고, 실패는 그대로 던져 그 턴도 실패한다. */
+  const ledger: Pick<GameStore, 'addSpend'> = {
+    async addSpend(entry) {
+      try {
+        await deps.store.addSpend(entry);
+      } catch (error) {
+        if (!ledgerClosed) {
+          ledgerClosed = true;
+          // 실패의 내용은 app.ts가 서버 오류로 남긴다. 요청 헤더와 본문은 남기지 않는다(AGENTS.md 1번).
+          console.error('원장에 남기지 못해, 서버를 다시 띄울 때까지 새 판과 턴을 막습니다. 다시 띄우기 전에 제공사의 사용량과 원장을 맞춰 보세요.');
+        }
+        throw error;
+      }
+    },
+  };
+
+  /** 원장이 닫혔거나(503) 서비스 상한(503), 하루 턴 수(429)에 걸리면, 판을 만들거나 모델을 부르기 전에 막는다. */
   async function checkLimits(userId: string): Promise<void> {
-    const refusal = await limitRefusal(deps.store, deps.limits, userId, deps.now());
+    const refusal = await limitRefusal(deps.store, deps.limits, userId, deps.now(), ledgerClosed);
     if (refusal) throw new GameError(refusal.status, refusal.message);
   }
 
@@ -270,7 +294,7 @@ export function createGames(deps: GameDeps) {
             question: matchup.question,
             card: matchup.card,
             condition: game.mode,
-            models: meteredModels(deps.models, deps.store, { userId, gameId: game.id, now: deps.now }),
+            models: meteredModels(deps.models, ledger, { userId, gameId: game.id, now: deps.now }),
             text,
           });
           const n = game.turns.length + 1;
