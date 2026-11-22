@@ -409,6 +409,15 @@ function recognitionNotice(state: VoiceState): string {
   return PREPARING_NOTICE;
 }
 
+/**
+ * 목소리 목록에 '고르지 않음'을 두는가. 기기 안 한국어 목소리가 없으면 기기 밖 목소리를 직접 골라야 읽는다.
+ * 그때는 고르기 전에도 고른 뒤에도 읽지 않는 쪽을 고를 수 있어야 한다. 기기 안 목소리가 있으면 그것을 고르면 되므로 두지 않는다.
+ * 고른 것 없이 목록을 기다리는 중('wait')에는 기기 목소리가 곧 올 수 있어 목록을 보이지 않는다.
+ */
+function canPickNone(state: VoiceState): boolean {
+  return state.voice !== 'wait' && state.voices.length > 0 && !state.voices.some((item) => item.localService);
+}
+
 /** 상대의 말을 읽는 목소리에 대해 알릴 것. 기기 안 목소리로 읽을 때는 알릴 것이 없다. */
 function speechNotice(state: VoiceState): string | null {
   if (!state.canSpeak) return '이 브라우저는 음성 합성을 지원하지 않아 상대의 말을 읽어 주지 못합니다.';
@@ -418,7 +427,9 @@ function speechNotice(state: VoiceState): string | null {
       ? '기기 안에 한국어 목소리가 없어 읽지 않습니다. 기기 밖 목소리를 고르면 그 목소리로 읽고, 읽을 글이 그 목소리의 서버로 갑니다.'
       : '이 브라우저에는 한국어 목소리가 없어 읽어 주지 못합니다.';
   }
-  return state.voice.localService ? null : '이 목소리는 읽을 글을 기기 밖 서버로 보냅니다.';
+  if (state.voice.localService) return null;
+  const remoteNotice = '이 목소리는 읽을 글을 기기 밖 서버로 보냅니다.';
+  return canPickNone(state) ? `${remoteNotice} 목록에서 '고르지 않음'을 고르면 읽지 않습니다.` : remoteNotice;
 }
 
 /** 음성 줄. 켜기 전에는 단추와 안내를, 켠 뒤에는 말소리와 읽을 글이 가는 곳을 보인다. */
@@ -454,8 +465,9 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
   }
   const chosen = state.voice === 'wait' ? null : state.voice;
   const notice = speechNotice(state);
-  // 고를 것이 있을 때만 목록을 보인다. 기기 안 목소리가 없으면 기기 밖 목소리를 직접 고를 수 있게 보인다.
-  const pickable = chosen ? state.voices.length >= 2 : state.voice === null && state.voices.length >= 1;
+  const pickNone = canPickNone(state);
+  // 고를 것이 있을 때만 목록을 보인다. 기기 안 목소리가 없으면 기기 밖 목소리가 하나뿐이어도 '고르지 않음'과 둘이 된다.
+  const pickable = pickNone || (chosen !== null && state.voices.length >= 2);
   return (
     <section className="voice-bar" aria-label="음성" ref={bar}>
       <div className="voice-lines">
@@ -463,12 +475,9 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
         {pickable && (
           <label className="voice-pick">
             <span>목소리</span>
-            <select value={chosen?.name ?? ''} onChange={(event) => control.preferVoice(event.target.value)}>
-              {!chosen && (
-                <option value="" disabled>
-                  고르지 않음
-                </option>
-              )}
+            {/* 빈 값('고르지 않음')을 고르면 고른 것을 거둔다. */}
+            <select value={chosen?.name ?? ''} onChange={(event) => control.preferVoice(event.target.value || null)}>
+              {pickNone && <option value="">고르지 않음</option>}
               {state.voices.map((item, index) => (
                 <option key={`${index}:${item.name}`} value={item.name}>
                   {item.localService ? item.name : `${item.name} (기기 밖)`}

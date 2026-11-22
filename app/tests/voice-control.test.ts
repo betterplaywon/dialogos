@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, test, type TestContext } from 'node:test';
 import type { ListenResult } from '../web/src/listen.ts';
-import { createVoiceControl, type ReadRequest, type VoiceControl } from '../web/src/voice-control.ts';
+import { createVoiceControl, type ReadRequest, type VoiceControl, type VoiceMemory } from '../web/src/voice-control.ts';
 import { fakeOnDevice, FakeRecognition, FakeSpeech, MEASURED_VOICES, REMOTE_ONLY_VOICES, voice, type FakeVoice } from './voice-fakes.ts';
 
 const OPENING: ReadRequest = { key: 'g1:1', text: '저는 반대로 생각합니다. 근거는 네 가지입니다.', characterId: 'deontologist' };
@@ -25,6 +25,8 @@ interface Options {
   recognition?: boolean;
   /** 지난번에 골라 둔 목소리의 이름. */
   remembered?: string;
+  /** 다른 제어기가 쓰던 저장소. 주면 같은 브라우저에서 페이지를 새로 연 것이 된다. */
+  memory?: VoiceMemory;
 }
 
 function setup(options: Options = {}) {
@@ -34,21 +36,31 @@ function setup(options: Options = {}) {
   const device = fakeOnDevice(log);
   if (options.onDevice !== false) recognition.onDevice = device.api;
   let remembered: string | null = options.remembered ?? null;
+  const memory: VoiceMemory = options.memory ?? {
+    load: () => remembered,
+    save: (name) => {
+      remembered = name;
+    },
+  };
   const control = createVoiceControl({
     recognition: options.recognition === false ? null : recognition,
     speech: options.speech === false ? null : speech,
-    memory: {
-      load: () => remembered,
-      save: (name) => {
-        remembered = name;
-      },
-    },
+    memory,
   });
   let notified = 0;
   control.subscribe(() => {
     notified += 1;
   });
-  return { control, speech, synth: speech.synth, recognition, device, log, remembered: () => remembered, notified: () => notified };
+  return { control, speech, synth: speech.synth, recognition, device, log, memory, remembered: () => memory.load(), notified: () => notified };
+}
+
+/** 기기 안 한국어 목소리가 없는 브라우저에서 음성을 켜고, 목록이 다 온 뒤 원격 목소리를 골라 기다리던 말을 읽게 한다. */
+function remoteChosen() {
+  const made = setup({ voices: REMOTE_ONLY_VOICES });
+  made.control.turnOn(OPENING);
+  made.speech.emit(REMOTE_ONLY_VOICES, true);
+  made.control.preferVoice('Google 한국의');
+  return made;
 }
 
 /** 음성을 켜고 기기 안 인식 준비까지 끝낸다. tick은 가짜 타이머의 시간을 보낸다. */
@@ -199,6 +211,76 @@ test('기기 목소리가 목록이 다 왔다고 본 뒤에 늦게 와도, 그�
     ['Yuna', 'Yuna'],
   );
   assert.equal(control.getState().reading, 'g1:1');
+});
+
+test('고른 원격 목소리를 거두면 기억해 둔 이름을 지우고 읽던 것을 멈춘다. 그 뒤로는 고르기 전처럼 읽지 않다가, 기기 목소리가 오면 기다리던 말을 읽는다', () => {
+  const { control, speech, synth, remembered } = remoteChosen();
+  synth.start(0);
+  assert.deepEqual([remembered(), control.getState().reading], ['Google 한국의', 'g1:1']);
+  const cancels = synth.cancels;
+  control.preferVoice(null);
+  assert.equal(remembered(), null);
+  // 읽히는 중이던 문장을 끊고, 넣어 둔 다음 문장도 대기열에서 뺀다.
+  assert.deepEqual([control.getState().voice, control.getState().reading, synth.cancels, synth.queue()], [null, null, cancels + 1, []]);
+  // 끊긴 읽기의 늦은 이벤트는 문제로 치지 않는다.
+  synth.finish(0, 'interrupted');
+  assert.equal(control.getState().speakProblem, null);
+  // 고르기 전과 같다. 읽을 글을 원격 목소리로 보내지 않고, 다시 고를 수 있게 원격 목소리는 목록에 남는다.
+  control.read(REPLY);
+  assert.deepEqual([control.getState().reading, synth.spoken.length], [null, 2]);
+  assert.deepEqual(
+    control.getState().voices.map((item) => item.name),
+    ['Google 한국의'],
+  );
+  // 기기 목소리가 늦게 오면 기다리던 말을 그 목소리로 읽는다.
+  speech.emit(MEASURED_VOICES, false);
+  assert.deepEqual(
+    synth.spoken.slice(2).map((item) => [item.chunk.text, item.chunk.voice.name]),
+    [['그 반론은 받아들입니다.', 'Yuna']],
+  );
+  assert.equal(control.getState().reading, 'g1:3');
+});
+
+test('원격 목소리로 넣은 문장이 시작하기 전에 고른 것을 거둬도 대기열을 끊지 않고, 넣어 둔 문장이 시작할 때 끊는다', () => {
+  const { control, synth, remembered } = remoteChosen();
+  // 원격 목소리의 시작이 얼마나 늦을 수 있는지는 재지 않았다. 넣은 문장이 시작하기 전에 거둔 것이다.
+  control.preferVoice(null);
+  assert.deepEqual([remembered(), control.getState().reading, synth.cancels], [null, null, 0]);
+  synth.start(0);
+  assert.deepEqual([synth.cancels, synth.queue()], [1, []]);
+});
+
+test('원격 목소리로 읽다 생긴 문제의 알림은 고른 것을 거두면 지운다', () => {
+  const { control, synth } = remoteChosen();
+  // 원격 목소리의 서버에 닿지 못했다.
+  synth.finish(0, 'network');
+  assert.deepEqual([control.getState().reading, control.getState().speakProblem], [null, 'failed']);
+  // 거두면 [듣기]가 사라진다. [듣기]를 누르라는 알림이 남지 않게 한다.
+  control.preferVoice(null);
+  assert.deepEqual([control.getState().voice, control.getState().speakProblem], [null, null]);
+});
+
+test('고른 원격 목소리를 거둔 뒤에는 음성을 껐다 켜도, 페이지를 새로 열어도 원격 목소리로 읽지 않는다', () => {
+  const { control, speech, synth, memory } = remoteChosen();
+  /** 같은 브라우저에서 페이지를 새로 열어 음성을 켜고, 원격 목소리뿐인 목록이 다 올 때까지 읽은 조각의 목소리를 돌려준다. */
+  const reopen = () => {
+    const page = setup({ voices: [], memory });
+    page.control.turnOn(OPENING);
+    page.speech.emit(REMOTE_ONLY_VOICES, false);
+    page.speech.emit(REMOTE_ONLY_VOICES, true);
+    return page.synth.spoken.map((item) => item.chunk.voice.name);
+  };
+  // 거두기 전에는 고른 것이 남아 있어, 새로 연 페이지가 원격 목소리가 오자마자 그 목소리로 읽는다.
+  assert.deepEqual(reopen(), ['Google 한국의', 'Google 한국의']);
+  synth.finish(0);
+  synth.finish(1);
+  control.preferVoice(null);
+  const spoken = synth.spoken.length;
+  control.turnOff();
+  control.turnOn(OPENING);
+  speech.emit(REMOTE_ONLY_VOICES, true);
+  assert.deepEqual([control.getState().voice, control.getState().reading, synth.spoken.length], [null, null, spoken]);
+  assert.deepEqual(reopen(), []);
 });
 
 test('한국어 목소리가 하나도 없으면 읽는 중으로 보이지 않고, 그 뒤의 요청도 읽지 않는다', () => {

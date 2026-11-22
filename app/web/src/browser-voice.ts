@@ -114,7 +114,7 @@ export function browserSpeech(): SpeechPort<SpeechSynthesisVoice> | null {
 
 const VOICE_NAME_KEY = 'dialogos.voice';
 
-/** 고른 목소리의 이름을 이 브라우저에 남긴다. 저장소를 쓸 수 없어도 화면은 그대로 돈다. */
+/** 고른 목소리의 이름을 이 브라우저에 남기고, 고른 것을 거두면 지운다. 저장소를 쓸 수 없어도 화면은 그대로 돈다. */
 export function browserVoiceMemory(): VoiceMemory {
   return {
     load() {
@@ -126,9 +126,10 @@ export function browserVoiceMemory(): VoiceMemory {
     },
     save(name) {
       try {
-        window.localStorage.setItem(VOICE_NAME_KEY, name);
+        if (name === null) window.localStorage.removeItem(VOICE_NAME_KEY);
+        else window.localStorage.setItem(VOICE_NAME_KEY, name);
       } catch {
-        // 남기지 못해도 이 페이지에서는 고른 목소리로 읽는다.
+        // 남기거나 지우지 못해도 이 페이지에서는 고른 대로 읽는다.
       }
     },
   };

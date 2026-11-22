@@ -38,7 +38,8 @@ export interface SpeechPort<V extends VoiceLike> {
 /** 고른 목소리의 이름을 기억하는 곳. */
 export interface VoiceMemory {
   load(): string | null;
-  save(name: string): void;
+  /** null이면 기억해 둔 이름을 지운다. */
+  save(name: string | null): void;
 }
 
 export interface VoicePorts<V extends VoiceLike> {
@@ -95,8 +96,11 @@ export interface VoiceControl<V extends VoiceLike = VoiceLike> {
   /** 읽던 것을 끊고 이 말을 읽는다. 목소리가 아직 정해지지 않았으면 정해질 때 읽는다. */
   read(request: ReadRequest): void;
   stopReading(): void;
-  /** 읽을 목소리를 고른다. 다음 읽기부터 쓰고, 목소리가 없어 기다리던 요청이 있으면 바로 읽는다. */
-  preferVoice(name: string): void;
+  /**
+   * 읽을 목소리를 고른다. 다음 읽기부터 쓰고, 목소리가 없어 기다리던 요청이 있으면 바로 읽는다.
+   * null은 고른 것을 거둔다는 뜻이다. 기억해 둔 이름을 지우고 읽던 것을 멈춘다. 그 뒤로는 고르기 전처럼 기기 안 목소리로만 읽는다.
+   */
+  preferVoice(name: string | null): void;
 }
 
 export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): VoiceControl<V> {
@@ -285,6 +289,13 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
       preferred = name;
       memory.save(name);
       const voice = voiceNow();
+      if (name === null) {
+        // 고른 것을 거뒀다. 그 목소리로 읽던 것을 멈춘다.
+        // 읽다 생긴 문제의 알림도 지운다. [듣기]를 누르라는 알림인데, 읽을 목소리가 없으면 [듣기]도 없다.
+        stopReading();
+        set({ voice, speakProblem: null });
+        return;
+      }
       set({ voice });
       // 읽을 목소리가 없어 기다리던 요청이 있으면 고른 목소리로 읽는다. 읽는 중인 말은 다시 읽지 않는다.
       // 목록을 화살표로 넘기는 동안 칸마다 다시 읽고, 기기 밖 목소리에 닿으면 읽던 글을 서버로 보내게 되기 때문이다.
