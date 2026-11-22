@@ -30,7 +30,8 @@
 
 - 플러그인 pstack(`.claude/settings.json`)이 세션 시작 때 라우팅 규칙을 넣습니다. 파일 여럿을 건드리거나, 설계 선택이 있거나, 원인 모를 문제면 `pstack:poteto-mode` 스킬이 플레이북을 고릅니다. 작은 일은 바로 합니다.
 - 이 저장소에서의 이름: 드라이버 스킬은 프로젝트 `verify`(`.claude/skills/verify`, 판정 실험의 명령을 모의 모델로 돌려 증거를 남깁니다)입니다. 머지 전 검토는 `interrogate`, `thermos`, `/code-review`입니다. 코드를 쓰는 서브에이전트는 worktree에서 일합니다.
-- 플레이북의 PR 단계는 `.agents/playbooks/dialogos-pr.md`, 판정 실험은 `.agents/playbooks/dialogos-eval.md`가 이 저장소 규칙으로 덧씌웁니다.
+- 플레이북의 PR 단계는 `.agents/playbooks/dialogos-pr.md`, 판정 실험은 `.agents/playbooks/dialogos-eval.md`가 이 저장소 규칙으로 덧씌웁니다. 두 파일의 인용문은 설치된 pstack 버전의 문장과 맞아야 합니다. pstack의 `check-playbooks.mjs`가 맞지 않는 인용문을 알리면 추측해 끼워 넣지 않고 이 문서의 규칙을 직접 따릅니다.
+- 주석은 지금처럼 한국어 설명 주석을 둡니다. pstack의 주석 검토(`no-comments`)가 주석을 통째로 지우자고 하면 받지 않고, 틀린 주석과 필요 없는 코드만 고칩니다(2026-11-21 사용자 결정).
 - 역할별 모델은 `~/.claude/pstack-models.md`에 있고 `CLAUDE.local.md`가 불러옵니다. 모델 계열이 Claude 하나라서 "다른 모델의 검토"는 세션 모델과 opus로 합니다.
 - 답변, 보고, PR 본문, 커밋 메시지, 결정 기록은 한국어로 씁니다. 코드 식별자, 명령, 경로는 그대로 둡니다.
 
