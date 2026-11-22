@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from '../server/app.ts';
 import { KRW_PER_USD, LIMITS, type Limits, type ModelSource } from '../server/budget.ts';
 import type { GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
+import { devSetup, type DevSetup } from '../server/dev-setup.ts';
 import { localConfigFromEnv, localProblem, localSource } from '../server/models.ts';
-import { MemoryGameStore, type SpendEntry } from '../server/store.ts';
+import { MemoryGameStore, type Mode, type SpendEntry } from '../server/store.ts';
 import { loadFixtureTopics } from './topic-fixtures.ts';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -97,7 +98,7 @@ class LedgerRecordingStore extends MemoryGameStore {
   }
 }
 
-function serverWith(models: ModelSource, limits: Limits) {
+function serverWith(models: ModelSource, limits: Limits, pickMode: () => Mode = () => 'engine') {
   const store = new LedgerRecordingStore();
   let next = 0;
   const app = createApp({
@@ -105,7 +106,7 @@ function serverWith(models: ModelSource, limits: Limits) {
     store,
     models,
     limits,
-    pickMode: () => 'engine',
+    pickMode,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-22T00:00:00Z'),
   });
@@ -117,6 +118,23 @@ function serverWith(models: ModelSource, limits: Limits) {
     return { status: response.status, data: (await response.json()) as T };
   }
   return { store, call };
+}
+
+/**
+ * 판의 방식을 볼 때 여는 판 수. 방식을 반씩 무작위로 고른다면 이만큼이 모두 엔진 방식일 확률은 2의 -20제곱(100만분의 1쯤)이다.
+ * 그래서 모든 판이 엔진 방식이면 엔진 방식만 고른 것으로 본다.
+ */
+const GAMES = 20;
+
+/** 개발 서버의 설정으로 판을 n개 열고, 저장소에 남은 판마다의 방식을 낸다. 판을 여는 데는 모델을 부르지 않는다. */
+async function modesOf(setup: DevSetup, n: number): Promise<(Mode | undefined)[]> {
+  const { store, call } = serverWith(setup.models, LIMITS, setup.pickMode);
+  const modes: (Mode | undefined)[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const game = await call<GameView>('POST', '/api/games', START_Q01);
+    modes.push((await store.get(game.data.id))?.mode);
+  }
+  return modes;
 }
 
 /** 개발 서버(app/dev.ts)를 env로 띄운다. 스스로 끝나면 종료 코드와 출력을 낸다. 서버가 떠 버리면 10초 뒤 끄고 그 결과를 낸다. */
@@ -203,18 +221,30 @@ test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/
   );
 });
 
-test('생각: 로컬 모델 서버가 받는 요청에는 기본으로 reasoning_effort "none"이 있어 생각을 끄고, APP_LOCAL_THINK=1이면 없으며, 그 밖의 값으로는 설정을 만들지 않는다', async (t) => {
-  const ollama = await fakeOllama(t, [OPPONENT]);
-  const ask = (env: Record<string, string>) =>
-    localSource(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, ...env })).create('opponent').complete(HELLO);
-  await ask({});
-  await ask({ APP_LOCAL_THINK: '1' });
-  assert.deepEqual(ollama.received, [
-    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
-    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT },
-  ]);
-  for (const value of ['0', 'true', 'yes', 'none']) {
-    assert.throws(() => localConfigFromEnv({ APP_LOCAL_THINK: value }), /APP_LOCAL_THINK에는 1만/, value);
+test('생각: APP_LOCAL_THINK를 적지 않거나 judge면 판정기만 생각하고, all이면 둘 다 생각하며, none이면 둘 다 끈다. 생각을 끄는 역할의 요청에만 reasoning_effort "none"이 실리고, 첫 줄이 생각하는 역할을 알린다', async (t) => {
+  const ollama = await fakeOllama(t, [OPPONENT, JUDGE]);
+  /** 그 설정의 개발 서버 출처로 판정기와 상대를 한 번씩 부르고, 가짜 서버가 받은 역할별 reasoning_effort(없으면 '없음')와 첫 줄의 생각 표시를 낸다. 두 역할은 모델 이름으로 가른다. */
+  const thinking = async (env: Record<string, string>) => {
+    const setup = await devSetup({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, APP_LOCAL_JUDGE_MODEL: JUDGE, ...env });
+    const before = ollama.received.length;
+    await setup.models.create('judge').complete(HELLO);
+    await setup.models.create('opponent').complete(HELLO);
+    const effortOf = (model: string) => {
+      const sent = ollama.received.slice(before).filter((request) => request.model === model);
+      assert.equal(sent.length, 1, model);
+      return sent[0]?.reasoning_effort ?? '없음';
+    };
+    return { judge: effortOf(JUDGE), opponent: effortOf(OPPONENT), label: /생각: ([^,]+)/.exec(setup.label)?.[1] };
+  };
+  const judgeOnly = { judge: '없음', opponent: 'none', label: '판정기만' };
+  assert.deepEqual(await thinking({}), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: '' }), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'judge' }), judgeOnly);
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'all' }), { judge: '없음', opponent: '없음', label: '판정기와 상대' });
+  assert.deepEqual(await thinking({ APP_LOCAL_THINK: 'none' }), { judge: 'none', opponent: 'none', label: '끔' });
+  // 그 밖의 값(전에 받던 1 포함)으로는 설정을 만들지 않고, 쓸 수 있는 값을 알린다.
+  for (const value of ['1', '0', 'true', 'both', 'opponent', 'JUDGE']) {
+    assert.throws(() => localConfigFromEnv({ APP_LOCAL_THINK: value }), /APP_LOCAL_THINK에는 judge\(.*\), all\(.*\), none\(.*\)/, value);
   }
 });
 
@@ -231,9 +261,9 @@ test('로컬 출처로 한 턴을 하면 200이고, 가짜 서버가 역할별 �
   assert.equal(turn.status, 200);
   assert.equal(turn.data.reply, '답입니다.');
 
-  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 가고, 기본대로 생각을 끈다.
+  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 가고, 기본대로 판정기만 생각한다.
   assert.deepEqual(ollama.received, [
-    { method: 'POST', path: '/v1/chat/completions', model: JUDGE, reasoning_effort: 'none' },
+    { method: 'POST', path: '/v1/chat/completions', model: JUDGE },
     { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
   ]);
   assert.deepEqual(
@@ -324,31 +354,69 @@ test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 원격 모델로 
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: plain.url })), null);
 });
 
-test('개발 서버는 APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 1 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
+test('개발 서버는 APP_MODE를 적지 않으면 모든 판을 엔진 방식으로 해, 판마다 턴에서 판정기를 부른다. 첫 줄은 엔진 방식이라고 알린다', async (t) => {
+  const ollama = await fakeOllama(t, [OPPONENT, JUDGE]);
+  const setup = await devSetup({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, APP_LOCAL_JUDGE_MODEL: JUDGE });
+  const { call } = serverWith(setup.models, LIMITS, setup.pickMode);
+  for (let i = 0; i < GAMES; i += 1) {
+    const game = await call<GameView>('POST', '/api/games', START_Q01);
+    assert.equal((await call('POST', `/api/games/${game.data.id}/turns`, { text: '첫 반론입니다.' })).status, 200);
+  }
+  // 엔진 방식의 턴은 판정기를 부른 뒤 상대를 부르고, 지시문 방식의 턴은 상대만 부른다.
+  const chats = ollama.received.filter((request) => request.path === '/v1/chat/completions');
+  assert.deepEqual(
+    chats.map((request) => request.model),
+    Array.from({ length: GAMES }, () => [JUDGE, OPPONENT]).flat(),
+  );
+  assert.match(setup.label, /엔진 방식/);
+});
+
+test('APP_MODEL을 적지 않은 모의 모델에서도 APP_MODE를 적지 않으면 모든 판이 엔진 방식이다', async () => {
+  const setup = await devSetup({});
+  assert.equal(setup.models.provider, 'mock');
+  assert.deepEqual(await modesOf(setup, GAMES), Array.from({ length: GAMES }, () => 'engine'));
+  assert.match(setup.label, /엔진 방식, 모의 모델/);
+});
+
+test('APP_MODE=random이면 받아들여 판마다 지시문 방식과 엔진 방식을 무작위로 고르고, 첫 줄이 눈가림 비교라고 알린다', async () => {
+  const setup = await devSetup({ APP_MODE: 'random' });
+  // 반씩 고르면 마흔 판이 모두 한 방식일 확률은 2의 -39제곱(1조분의 2쯤)이다.
+  assert.deepEqual(new Set(await modesOf(setup, 2 * GAMES)), new Set(['prompt', 'engine']));
+  assert.match(setup.label, /방식 반씩 무작위\(눈가림 비교\)/);
+});
+
+test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 judge, all, none 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
   const ollama = await fakeOllama(t, ['other:1b']);
   const cloud = await fakeOllama(t, ['qwen3:8b'], { remote: ['qwen3:8b'] });
-  // 생각 설정이 틀린 경우도 가짜 서버의 주소로 띄운다. 검사가 고장 나도 이 컴퓨터의 Ollama에는 닿지 않는다.
-  const thinkUnread = await fakeOllama(t, ['qwen3:8b']);
+  // 방식과 생각 설정이 틀린 경우도 가짜 서버의 주소로 띄운다. 검사가 고장 나도 이 컴퓨터의 Ollama에는 닿지 않는다.
+  // 가짜 서버의 목록은 비워 둔다. 검사가 고장 나 목록을 물어도 모델이 없어 서버가 뜨지 않는다(포트를 열지 않는다).
+  const modeUnread = await fakeOllama(t, []);
+  const thinkUnread = await fakeOllama(t, []);
+  const badMode = await devServer({ APP_MODE: 'blind', APP_MODEL: 'local', APP_LOCAL_URL: modeUnread.url });
   const unknown = await devServer({ APP_MODEL: 'openai' });
-  const badThink = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: thinkUnread.url, APP_LOCAL_THINK: 'yes' });
+  // 전에 받던 1도 이제는 받지 않는다.
+  const badThink = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: thinkUnread.url, APP_LOCAL_THINK: '1' });
   // 원격 주소는 예약된 이름(.invalid)으로 둔다. 검사가 고장 나 목록을 물어도 바깥에 닿지 않는다.
   const remote = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: 'https://paid-provider.invalid/v1' });
   const missing = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url });
   const remoteModel = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: cloud.url });
 
+  // 방식이 틀리면 쓸 수 있는 값을 알린다.
+  assert.match(badMode.err, /APP_MODE에는 engine\(.*\)이나 random\(.*\)을 적습니다/);
   assert.match(unknown.err, /APP_MODEL에는 mock/);
-  assert.match(badThink.err, /APP_LOCAL_THINK에는 1만/);
+  assert.match(badThink.err, /APP_LOCAL_THINK에는 judge\(.*\), all\(.*\), none\(.*\)/);
   assert.match(remote.err, /APP_LOCAL_URL에는 이 컴퓨터의 주소만/);
   assert.match(missing.err, /ollama pull qwen3:8b/);
   assert.match(remoteModel.err, /원격 모델/);
-  // 생각 설정이 틀리면 아무것도 묻지 않는다. 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
+  // 방식이나 생각 설정이 틀리면 아무것도 묻지 않는다. 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
+  assert.deepEqual(modeUnread.received, []);
   assert.deepEqual(thinkUnread.received, []);
   assert.deepEqual(ollama.received, [{ method: 'GET', path: '/v1/models' }]);
   assert.deepEqual(cloud.received, [
     { method: 'GET', path: '/v1/models' },
     { method: 'GET', path: '/api/tags' },
   ]);
-  for (const run of [unknown, badThink, remote, missing, remoteModel]) {
+  for (const run of [badMode, unknown, badThink, remote, missing, remoteModel]) {
     assert.equal(run.code, 1, run.err);
     assert.doesNotMatch(run.out, /서버:/);
   }
