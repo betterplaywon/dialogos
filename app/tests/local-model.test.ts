@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../server/app.ts';
-import { KRW_PER_USD, type Limits, type ModelSource } from '../server/budget.ts';
+import { KRW_PER_USD, LIMITS, type Limits, type ModelSource } from '../server/budget.ts';
 import type { GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
 import { localConfigFromEnv, localProblem, localSource } from '../server/models.ts';
 import { MemoryGameStore, type SpendEntry } from '../server/store.ts';
@@ -37,11 +37,15 @@ function recordingFetch() {
   return { sent, fetchImpl };
 }
 
+/** 가짜 서버가 답 대신 넘김(redirect)으로 답할 경로와, 넘길 상태와 주소. */
+type Redirects = Readonly<Record<string, { status: number; location: string }>>;
+
 /**
  * Ollama처럼 OpenAI 호환 주소(/v1)로 답하는 가짜 서버. 이 컴퓨터(127.0.0.1)에만 열린다.
  * 모델 목록에는 listed만 있다. chat completions는 판정기 모델이면 판정을, 아니면 정해 둔 답을 낸다.
+ * redirects에 적은 경로로 온 요청은 받아 적은 뒤 답 대신 넘긴다.
  */
-async function fakeOllama(t: TestContext, listed: readonly string[]) {
+async function fakeOllama(t: TestContext, listed: readonly string[], { redirects = {} }: { redirects?: Redirects } = {}) {
   const received: { method?: string; path?: string; model?: string }[] = [];
   const server = createServer((req, res) => {
     let body = '';
@@ -51,6 +55,8 @@ async function fakeOllama(t: TestContext, listed: readonly string[]) {
         res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
       const model = body ? (JSON.parse(body) as { model: string }).model : undefined;
       received.push({ method: req.method, path: req.url, ...(model ? { model } : {}) });
+      const redirect = redirects[req.url ?? ''];
+      if (redirect) return res.writeHead(redirect.status, { location: redirect.location }).end();
       if (req.method === 'GET' && req.url === '/v1/models') {
         return json(200, { object: 'list', data: listed.map((id) => ({ id, object: 'model', created: 0, owned_by: 'library' })) });
       }
@@ -207,6 +213,34 @@ test('로컬 출처로 한 턴을 하면 200이고, 가짜 서버가 역할별 �
   const refused = await call('POST', `/api/games/${game.data.id}/turns`, { text: '셋째 반론입니다.' });
   assert.equal(refused.status, 429);
   assert.equal(ollama.received.length, 4);
+});
+
+test('로컬 모델 서버가 넘김(redirect)으로 답해도 따라가지 않는다: 넘긴 곳은 요청을 받지 않고, 턴은 실패해 판이 그대로이며, 띄울 때 확인은 막힌다', async (t) => {
+  // 넘긴 곳. 이 컴퓨터 밖 주소의 자리에 둔 가짜 서버이고, 받은 요청을 모두 적는다.
+  const elsewhere = await fakeOllama(t, [OPPONENT, JUDGE]);
+  const there = (path: string) => new URL(path, elsewhere.url).href;
+  const configOf = (url: string) => localConfigFromEnv({ APP_LOCAL_URL: url, APP_LOCAL_MODEL: OPPONENT, APP_LOCAL_JUDGE_MODEL: JUDGE });
+
+  // 지시문과 사용자의 글이 실린 chat 요청을 넘기는 경우. 307과 308은 본문을 그대로 넘긴다.
+  for (const status of [307, 308]) {
+    const ollama = await fakeOllama(t, [OPPONENT, JUDGE], { redirects: { '/v1/chat/completions': { status, location: there('/v1/chat/completions') } } });
+    const { store, call } = serverWith(localSource(configOf(ollama.url)), LIMITS);
+    const game = await call<GameView>('POST', '/api/games', START_Q01);
+    const turn = await call('POST', `/api/games/${game.data.id}/turns`, { text: '이 반론은 이 컴퓨터 밖으로 나가면 안 됩니다.' });
+    assert.deepEqual(elsewhere.received, [], `${status}`);
+    assert.equal(turn.status, 500, `${status}`);
+    assert.deepEqual((await call<GameView>('GET', `/api/games/${game.data.id}`)).data, game.data, `${status}`);
+    assert.deepEqual(store.spent, [], `${status}`);
+    // 로컬 모델 서버는 chat 요청을 받아 넘겼다. 넘김이 실제로 일어난 경우다.
+    assert.ok(ollama.received.length > 0 && ollama.received.every((request) => request.path === '/v1/chat/completions'), `${status}`);
+  }
+
+  // 띄울 때 확인의 모델 목록 요청을 302로 넘기는 경우.
+  const listMoved = await fakeOllama(t, [OPPONENT, JUDGE], { redirects: { '/v1/models': { status: 302, location: there('/v1/models') } } });
+  const problem = await localProblem(configOf(listMoved.url));
+  assert.deepEqual(elsewhere.received, []);
+  assert.notEqual(problem, null);
+  assert.deepEqual(listMoved.received, [{ method: 'GET', path: '/v1/models' }]);
 });
 
 test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없으면 ollama pull을 알리고, 두 역할의 모델이 모두 있으면 문제가 없다', async (t) => {

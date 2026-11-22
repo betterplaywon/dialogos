@@ -69,8 +69,18 @@ function isLoopback(url: string): boolean {
 }
 
 /**
+ * 로컬 모델 서버로 가는 요청은 모두 이 fetch로 보낸다(localSource와 localProblem). 넘김(redirect) 응답은 따라가지 않고 그 요청을 실패로 둔다.
+ * 주소 검사는 처음 주소만 본다. fetch의 기본값대로 넘김을 따라가면, 이 컴퓨터의 프로그램이 넘긴 검사하지 않은 곳으로
+ * 지시문과 사용자의 글이 나간다(307과 308은 본문을 그대로 넘긴다).
+ */
+function noRedirects(fetchImpl: FetchLike): FetchLike {
+  return (url, init) => fetchImpl(url, { ...init, redirect: 'error' });
+}
+
+/**
  * 로컬 모델의 출처. 주소가 이 컴퓨터(http나 https, 호스트는 127.0.0.1, localhost, [::1])가 아니면 만들지 않는다.
- * 주소 검사는 로컬 출처를 만드는 이 함수에만 둔다. 그래서 요금이 드는 원격 주소로 가는 로컬 출처는 생기지 않는다.
+ * 주소 검사는 로컬 출처를 만드는 이 함수에만 둔다. 요청은 넘김을 따라가지 않으므로(noRedirects) 검사한 주소 밖으로 나가지 않는다.
+ * 그래서 요금이 드는 원격 주소로 가는 로컬 출처는 생기지 않는다.
  * 실제 모델처럼 부를 때마다 사용량을 원장에 남기지만, 단가가 0이라 비용은 0이고 서비스 비용 상한에 닿지 않는다.
  */
 export function localSource(config: LocalConfig, fetchImpl: FetchLike = fetch): ModelSource {
@@ -79,10 +89,11 @@ export function localSource(config: LocalConfig, fetchImpl: FetchLike = fetch): 
       'APP_LOCAL_URL에는 이 컴퓨터의 주소만 적습니다(http나 https, 호스트는 127.0.0.1, localhost, [::1]). 원격 주소와 사설망 주소로는 띄우지 않습니다.',
     );
   }
+  const send = noRedirects(fetchImpl);
   return {
     provider: 'api',
     prices: { opponent: FREE, judge: FREE },
-    create: (role) => metered(createApiModel({ baseUrl: config.url, apiKey: NO_KEY, model: config.models[role] }, fetchImpl, LOCAL_CALL)),
+    create: (role) => metered(createApiModel({ baseUrl: config.url, apiKey: NO_KEY, model: config.models[role] }, send, LOCAL_CALL)),
   };
 }
 
@@ -107,7 +118,7 @@ function modelNames(body: unknown): Set<string> | null {
 export async function localProblem(config: LocalConfig, fetchImpl: FetchLike = fetch): Promise<string | null> {
   let response: Response;
   try {
-    response = await fetchImpl(`${config.url.replace(/\/+$/, '')}/models`, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
+    response = await noRedirects(fetchImpl)(`${config.url.replace(/\/+$/, '')}/models`, { signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) });
   } catch {
     return [
       '로컬 모델 서버에 닿지 못했습니다. Ollama 앱을 켠 뒤 다시 띄워 주세요.',
