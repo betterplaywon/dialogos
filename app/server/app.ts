@@ -3,11 +3,10 @@
 
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import type { ErrorResponse, GamesResponse, Provider, TopicsResponse } from './contract.ts';
+import type { ErrorResponse, GamesResponse, TopicsResponse } from './contract.ts';
 import { createGames, GameError, isLean, isSide, isTurnInput, isVerdict, LOCAL_USER, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
-  provider: Provider;
   /**
    * 받을 주소(Host). 주면 다른 주소로 들어온 요청을 막는다.
    * 악성 사이트가 자기 주소를 이 컴퓨터(127.0.0.1)로 바꿔 서버를 부르는 공격(DNS 리바인딩)을 막으려는 것이다.
@@ -63,7 +62,7 @@ export function createApp(deps: AppDeps): Hono {
 
   const userOf = deps.userOf ?? (() => LOCAL_USER);
 
-  app.get('/api/topics', (c) => c.json<TopicsResponse>({ provider: deps.provider, topics: games.topics() }));
+  app.get('/api/topics', (c) => c.json<TopicsResponse>({ provider: deps.models.provider, topics: games.topics() }));
 
   app.get('/api/games', async (c) => c.json<GamesResponse>({ games: await games.list(userOf(c.req.raw)) }));
 

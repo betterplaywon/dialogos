@@ -1,9 +1,10 @@
 // 판의 진행. HTTP와 저장 방식에서 떼어 두어, 서버 경로와 검사가 같은 함수를 부른다.
 // 한 턴은 판정 실험과 같은 runTurn이 맡는다. 잰 상대와 배포한 상대가 같은 코드로 답한다.
 
-import { openingState, runTurn, type DialogueModels } from '../../eval/src/dialogue.ts';
+import { openingState, runTurn } from '../../eval/src/dialogue.ts';
 import { DEFAULT_TURNS } from '../../eval/src/script.ts';
 import type { Card, Question } from '../../eval/src/types.ts';
+import { limitRefusal, meteredModels, type Limits, type ModelSource, type Refusal } from './budget.ts';
 import type {
   EndRecordView,
   GameSummaryView,
@@ -64,17 +65,20 @@ export const isTurnInput = (value: unknown): value is TurnInput =>
 export interface GameDeps {
   topics: ReadonlyMap<string, Topic>;
   store: GameStore;
-  models: DialogueModels;
+  /** 모델의 출처. 실제 모델이면 부를 때마다 사용량을 원장에 남긴다(budget.ts). */
+  models: ModelSource;
+  /** 서비스 전체의 비용 상한과 사용자별 하루 턴 수. */
+  limits: Limits;
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
   newId: () => string;
   now: () => Date;
 }
 
-/** 사용자의 요청 때문에 생긴 실패. HTTP 상태와 화면에 보일 말을 함께 둔다. */
+/** 사용자의 요청 때문에 생긴 실패와 상한에 걸린 요청. HTTP 상태와 화면에 보일 말을 함께 둔다. */
 export class GameError extends Error {
   constructor(
-    readonly status: 400 | 404 | 409,
+    readonly status: 400 | 404 | 409 | Refusal['status'],
     message: string,
   ) {
     super(message);
@@ -121,6 +125,30 @@ export function createGames(deps: GameDeps) {
     } finally {
       busy.delete(key);
     }
+  }
+
+  /** 모델을 부르는 턴을 처리하는 중인 사용자. 판 잠금처럼 서버가 하나일 때만 지켜진다. */
+  const turning = new Set<string>();
+
+  /**
+   * 사용자마다 모델을 부르는 턴을 한 번에 하나씩만 처리한다. 상한 확인부터 턴 저장까지 자리를 잡고 있어,
+   * 그사이에 같은 사용자의 다른 판 턴이 상한 확인을 통과하지 못한다. 그래서 하루 턴 수를 넘지 않고,
+   * 서비스 상한을 넘는 양도 사용자마다 진행 중이던 한 턴의 비용까지다.
+   */
+  async function oneTurnPerUser<T>(userId: string, work: () => Promise<T>): Promise<T> {
+    if (turning.has(userId)) throw new GameError(409, '다른 판에 보낸 말의 답을 아직 만들고 있습니다. 그 답이 온 뒤에 다시 보내 주세요.');
+    turning.add(userId);
+    try {
+      return await work();
+    } finally {
+      turning.delete(userId);
+    }
+  }
+
+  /** 서비스 상한(503)이나 하루 턴 수(429)에 걸리면, 판을 만들거나 모델을 부르기 전에 막는다. */
+  async function checkLimits(userId: string): Promise<void> {
+    const refusal = await limitRefusal(deps.store, deps.limits, userId, deps.now());
+    if (refusal) throw new GameError(refusal.status, refusal.message);
   }
 
   function topicOf(game: GameRecord): Topic {
@@ -202,6 +230,7 @@ export function createGames(deps: GameDeps) {
       }
       const matchup = topic.sides[side].matchup;
       if (!matchup) throw new GameError(409, '이 입장으로 토론할 상대가 아직 없습니다.');
+      await checkLimits(userId);
       const state = openingState(matchup.question);
       const game: GameRecord = {
         id: deps.newId(),
@@ -234,33 +263,36 @@ export function createGames(deps: GameDeps) {
         if (game.endedAt) throw new GameError(409, '이미 끝난 판입니다.');
         if (game.turns.length >= MAX_TURNS) throw new GameError(409, `이 판은 ${MAX_TURNS}턴을 모두 마쳤습니다.`);
         const matchup = matchupOf(game);
-        const state = { history: game.history, conceded: new Set(game.conceded) };
-        const outcome = await runTurn(state, {
-          question: matchup.question,
-          card: matchup.card,
-          condition: game.mode,
-          models: deps.models,
-          text,
+        return oneTurnPerUser(userId, async () => {
+          await checkLimits(userId);
+          const state = { history: game.history, conceded: new Set(game.conceded) };
+          const outcome = await runTurn(state, {
+            question: matchup.question,
+            card: matchup.card,
+            condition: game.mode,
+            models: meteredModels(deps.models, deps.store, { userId, gameId: game.id, now: deps.now }),
+            text,
+          });
+          const n = game.turns.length + 1;
+          game.history = state.history;
+          game.conceded = [...state.conceded];
+          game.turns.push({
+            n,
+            user: text,
+            input,
+            reply: outcome.reply,
+            ...(outcome.decision ? { decision: outcome.decision } : {}),
+            ...(outcome.judge ? { judge: outcome.judge } : {}),
+            ms: outcome.ms,
+            at: deps.now().toISOString(),
+          });
+          if (n >= MAX_TURNS) {
+            game.endedAt = deps.now().toISOString();
+            game.endReason = 'max-turns';
+          }
+          await deps.store.save(game);
+          return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined, endReason: game.endReason ?? null };
         });
-        const n = game.turns.length + 1;
-        game.history = state.history;
-        game.conceded = [...state.conceded];
-        game.turns.push({
-          n,
-          user: text,
-          input,
-          reply: outcome.reply,
-          ...(outcome.decision ? { decision: outcome.decision } : {}),
-          ...(outcome.judge ? { judge: outcome.judge } : {}),
-          ms: outcome.ms,
-          at: deps.now().toISOString(),
-        });
-        if (n >= MAX_TURNS) {
-          game.endedAt = deps.now().toISOString();
-          game.endReason = 'max-turns';
-        }
-        await deps.store.save(game);
-        return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined, endReason: game.endReason ?? null };
       });
     },
 

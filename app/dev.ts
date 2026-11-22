@@ -9,8 +9,9 @@ import { dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { createApp } from './server/app.ts';
+import { LIMITS } from './server/budget.ts';
 import { randomMode } from './server/games.ts';
-import { mockModels } from './server/models.ts';
+import { mockSource } from './server/models.ts';
 import { API_PORT } from './server/port.ts';
 import { SqliteGameStore } from './server/sqlite-store.ts';
 import { loadTopics } from './server/topics.ts';
@@ -20,10 +21,11 @@ if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
 const where = dbPath === ':memory:' ? '메모리에만' : relative(process.cwd(), dbPath);
 
 const app = createApp({
-  provider: 'mock',
   topics: loadTopics(),
   store: new SqliteGameStore(dbPath),
-  models: mockModels(),
+  models: mockSource(),
+  // 모의 모델은 원장에 남지 않아 비용 상한에 닿지 않지만, 하루 턴 수는 모의 모델에도 센다.
+  limits: LIMITS,
   pickMode: randomMode,
   newId: () => crypto.randomUUID(),
   now: () => new Date(),

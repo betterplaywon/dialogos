@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import type { DialogueModels } from '../../eval/src/dialogue.ts';
 import { firstUserMessage, openingStatement } from '../../eval/src/script.ts';
 import type { ChatMessage, ChatModel } from '../../eval/src/types.ts';
 import { createApp, type AppDeps } from '../server/app.ts';
+import type { Limits, ModelSource } from '../server/budget.ts';
 import type { GamesResponse, GameView, TopicsResponse, TurnResponse } from '../server/contract.ts';
 import { MAX_TEXT_LENGTH, MAX_TURNS } from '../server/games.ts';
-import { mockModels } from '../server/models.ts';
+import { mockSource } from '../server/models.ts';
 import { SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type Mode, type SpendEntry } from '../server/store.ts';
 import { loadFixtureTopics } from './topic-fixtures.ts';
@@ -37,16 +39,24 @@ function recorder(reply: (messages: ChatMessage[], call: number) => string): Cha
   };
 }
 
+/** 언제나 같은 모델을 내주는 출처. 모의 모델처럼 원장에 남기지 않고, 가짜 모델이 받은 메시지를 모두 적어 두게 한다. */
+function fixedSource(models: DialogueModels): ModelSource {
+  return { provider: 'mock', create: (role) => models[role] };
+}
+
+/** 이 파일의 검사가 상한 값(사용자가 정할 제안값)에 묶이지 않게 한다. 상한의 검사는 budget.test.ts에 있다. */
+const UNLIMITED: Limits = { totalWon: Infinity, userTurnsPerDay: Infinity };
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function setup(overrides: Partial<AppDeps> = {}) {
   let next = 0;
   const store = new MemoryGameStore();
   const app = createApp({
-    provider: 'mock',
     topics,
     store,
-    models: mockModels(),
+    models: mockSource(),
+    limits: UNLIMITED,
     pickMode: (): Mode => 'engine',
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-19T00:00:00Z'),
@@ -125,7 +135,7 @@ test('판을 시작하면 판정 실험과 같은 첫 말과 첫 발언이 나�
 
 test('반대 입장을 지키면 그쪽 카드의 상대와 전제로 시작하고, 상대가 없는 입장은 막는다', async () => {
   const opponent = recorder(() => '답입니다.');
-  const { app, store } = setup({ models: { opponent, judge: recorder(() => '{}') }, pickMode: () => 'prompt' });
+  const { app, store } = setup({ models: fixedSource({ opponent, judge: recorder(() => '{}') }), pickMode: () => 'prompt' });
   const { status, data } = await call<GameView>(app, 'POST', '/api/games', { body: { topicId: 'q01', side: 1, lean: 2 } });
   assert.equal(status, 201);
   assert.deepEqual(data.messages, [
@@ -155,7 +165,7 @@ test('반대 입장을 지키면 그쪽 카드의 상대와 전제로 시작하�
 test('엔진 방식이면 판정기가 먼저 판정하고, 판정과 장부는 서버에만 남는다', async () => {
   const judge = recorder(() => '{"tactic":"argument","defeats":"P1","reason":"시험"}');
   const opponent = recorder(() => 'P1을 거둡니다. 다른 근거는 어떻습니까?');
-  const { app, store } = setup({ models: { opponent, judge } });
+  const { app, store } = setup({ models: fixedSource({ opponent, judge }) });
   const game = await startQ01(app);
 
   const { status, data } = await call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '  반론입니다.  ' } });
@@ -184,7 +194,7 @@ test('엔진 방식이면 판정기가 먼저 판정하고, 판정과 장부는 
 test('지시문 방식이면 판정기를 부르지 않는다', async () => {
   const judge = recorder(() => '{}');
   const opponent = recorder(() => '답입니다.');
-  const { app, store } = setup({ models: { opponent, judge }, pickMode: () => 'prompt' });
+  const { app, store } = setup({ models: fixedSource({ opponent, judge }), pickMode: () => 'prompt' });
   const game = await startQ01(app);
   await call(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '반론입니다.' } });
   assert.equal(judge.calls.length, 0);
@@ -230,7 +240,7 @@ test('턴마다 말을 넣은 방식을 남기고, 판과 목록에서 말로 �
 test('말을 넣은 방식은 상대와 판정기에게 가지 않아, 같은 말이면 같은 대화가 된다', async () => {
   const judge = recorder(() => '{"tactic":"other","defeats":null,"reason":"시험"}');
   const opponent = recorder(() => '답입니다.');
-  const { app } = setup({ models: { opponent, judge } });
+  const { app } = setup({ models: fixedSource({ opponent, judge }) });
   for (const input of [undefined, 'voice-edited']) {
     const game = await startQ01(app);
     const body = { text: '같은 반론입니다.', ...(input ? { input } : {}) };
@@ -345,7 +355,7 @@ test('한 판에서 앞의 턴이 끝나기 전에 온 턴과 끝내기는 막�
       return '답입니다.';
     },
   };
-  const { app, store } = setup({ models: { opponent: slow, judge: recorder(() => '{}') }, pickMode: () => 'prompt' });
+  const { app, store } = setup({ models: fixedSource({ opponent: slow, judge: recorder(() => '{}') }), pickMode: () => 'prompt' });
   const game = await startQ01(app);
   const first = call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '첫 말' } });
   await delay(20);
@@ -474,7 +484,7 @@ test('남의 판이 처리 중이어도 남의 요청은 404이고, 주인의 �
     },
   };
   const { app } = setup({
-    models: { opponent: slow, judge: recorder(() => '{}') },
+    models: fixedSource({ opponent: slow, judge: recorder(() => '{}') }),
     pickMode: () => 'prompt',
     userOf: (request) => request.headers.get('x-test-user') ?? 'local',
   });
@@ -574,7 +584,7 @@ test('모델이 실패하면 판을 바꾸지 않고, 오류의 자세한 내용
       throw new Error('모델 연결 실패: 시험용 오류');
     },
   };
-  const { app, store } = setup({ models: { opponent: broken, judge: recorder(() => '{}') }, pickMode: () => 'prompt' });
+  const { app, store } = setup({ models: fixedSource({ opponent: broken, judge: recorder(() => '{}') }), pickMode: () => 'prompt' });
   const game = await startQ01(app);
   const original = console.error;
   const logged: string[] = [];
