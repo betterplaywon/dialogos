@@ -4,6 +4,10 @@
 // Chrome 157의 기기 안 인식은 소리 트랙으로 넣은 실측에서 말이 끝나도 스스로 확정하지 않았다(22초를 기다려도 확정 결과와 end가 없었다).
 // 실제 마이크에서도 그런지는 확인하지 못했다. 그래서 브라우저가 끝내 주기를 기다리지 않고, 조용해지면 앱이 stop()을 부른다.
 // start 뒤로 아무 이벤트도 오지 않은 적도 있어(실측 네 번, 원인 미확인, 뒤에는 재현되지 않음) end가 오지 않는 경우에 대비해 시간 제한을 둔다.
+//
+// 인식 팩을 내려받은 그 브라우저 세션에서는 기기 안 인식이 되지 않았다(실측, 새 사용자 폴더 다섯 개). 브라우저를 다시 띄운 직후 약 20초도 그랬다.
+// - 소리 트랙으로 넣은 듣기는 start 없이 0.2초 안에 aborted와 end로 끝났다(한 번은 30초 동안 아무 이벤트도 없었다).
+//   listenOnce가 start보다 먼저 온 aborted를 'not-ready'로 가른다.
 
 /** 결과 이벤트에서 읽는 것만 적은 모양. 결과마다 첫째 후보의 글을 쓴다. */
 export interface RecognitionResults {
@@ -32,6 +36,7 @@ export type ListenProblem =
   // 다시 해 볼 수 있는 문제
   | 'no-speech'
   | 'interrupted'
+  | 'not-ready'
   | 'network'
   | 'failed'
   // 다시 눌러도 풀리지 않아, 음성 입력을 끄고 글 입력으로 돌리는 문제
@@ -44,6 +49,11 @@ export type ListenProblem =
 export const LISTEN_PROBLEMS: Record<ListenProblem, { message: string; blocks: boolean }> = {
   'no-speech': { message: '말소리를 듣지 못했습니다. [말하기]를 다시 눌러 말해 주세요.', blocks: false },
   interrupted: { message: '듣기가 중간에 끊겼습니다. [말하기]를 다시 눌러 주세요.', blocks: false },
+  'not-ready': {
+    message:
+      '기기 안 음성 인식이 아직 준비되지 않았습니다. 인식 팩을 내려받은 뒤에는 브라우저를 완전히 종료했다가 다시 열어야 하고, 다시 연 직후에도 잠시 걸립니다. 조금 뒤 [말하기]를 다시 눌러 주세요. 그동안은 글로 입력할 수 있습니다.',
+    blocks: false,
+  },
   network: { message: '음성 인식 서버에 닿지 못했습니다. 다시 해 보거나 글로 입력해 주세요.', blocks: false },
   failed: { message: '음성 인식에 문제가 생겼습니다. 다시 해 보거나 글로 입력해 주세요.', blocks: false },
   'not-allowed': {
@@ -68,6 +78,7 @@ const PROBLEM_OF_ERROR = new Map<string, ListenProblem>([
   ['network', 'network'],
   ['language-not-supported', 'unsupported-language'],
   // 앱이 abort()를 부를 때는 먼저 이벤트를 끊는다. 그래서 여기까지 오는 aborted는 앱이 부르지 않은 것이다.
+  // 기기 안 인식이 start보다 먼저 낸 aborted만은 listenOnce가 'not-ready'로 가른다.
   ['aborted', 'interrupted'],
 ]);
 
@@ -114,6 +125,7 @@ export function listenOnce(
 ): ListenSession {
   const timings = options.timings ?? LISTEN_TIMINGS;
   let phase: 'listening' | 'stopping' | 'done' = 'listening';
+  let started = false;
   let heard = '';
   let failure: ListenProblem | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -180,6 +192,7 @@ export function listenOnce(
   if (options.processLocally) recognizer.processLocally = true;
 
   recognizer.onstart = () => {
+    started = true;
     // 인식기가 실제로 듣기 시작한 때부터 다시 잰다. 마이크 허락 창에 답하느라 늦어진 시간을 빼려는 것이다.
     // 명세는 start를 권한 확인 뒤 듣기 시작할 때 낸다고 한다. 허락 창이 실제로 뜨는 흐름은 이 환경에서 보지 못했다.
     if (phase === 'listening' && heard === '') after(timings.firstResultMs, requestStop);
@@ -196,7 +209,9 @@ export function listenOnce(
   };
   recognizer.onerror = (event) => {
     if (phase === 'done') return;
-    failure ??= PROBLEM_OF_ERROR.get(event.error) ?? 'failed';
+    // 기기 안 인식이 듣기 시작하기도 전에 끊겼으면, 듣다가 끊긴 것이 아니라 아직 준비되지 않은 것이다(파일 머리의 실측).
+    const unready = event.error === 'aborted' && options.processLocally && !started;
+    failure ??= unready ? 'not-ready' : (PROBLEM_OF_ERROR.get(event.error) ?? 'failed');
     // 오류 뒤에는 end가 온다. 오지 않는 경우에 대비해 stop() 뒤와 같은 시간만 기다린다.
     phase = 'stopping';
     after(timings.stopMs, giveUp);

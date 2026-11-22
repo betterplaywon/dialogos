@@ -200,6 +200,48 @@ test('인식기의 오류 코드를 문제로 옮긴다', (t) => {
   }
 });
 
+test('기기 안 인식이 듣기 시작하기도 전에 끊기면, 중간에 끊긴 것이 아니라 아직 준비되지 않은 것이다', (t) => {
+  const { recognizer, done } = listen(t, { processLocally: true });
+  // 인식 팩을 내려받은 브라우저 세션에서 소리 트랙으로 잰 차례: start 없이 aborted와 end만 온다.
+  recognizer.error('aborted');
+  assert.deepEqual(done, []);
+  recognizer.end();
+  assert.deepEqual(done, [{ transcript: '', problem: 'not-ready' }]);
+});
+
+test('기기 안 인식이 듣기 시작한 뒤에 끊기면 중간에 끊긴 것이다', (t) => {
+  const { recognizer, done } = listen(t, { processLocally: true });
+  recognizer.started();
+  recognizer.error('aborted');
+  recognizer.end();
+  assert.deepEqual(done, [{ transcript: '', problem: 'interrupted' }]);
+});
+
+test('기기 안 인식이 아니면 듣기 시작하기 전에 끊겨도 중간에 끊긴 것으로 둔다', (t) => {
+  const { recognizer, done } = listen(t, { processLocally: false });
+  recognizer.error('aborted');
+  recognizer.end();
+  assert.deepEqual(done, [{ transcript: '', problem: 'interrupted' }]);
+});
+
+test('앱이 끊은 기기 안 인식은 듣기 시작하기 전이어도 준비되지 않은 것으로 치지 않는다', (t) => {
+  // 10초 동안 start도 결과도 없어 stop을 불렀고, 3초 뒤에도 끝나지 않아 앱이 끊었다.
+  const timedOut = listen(t, { processLocally: true });
+  timedOut.tick(10_000);
+  timedOut.tick(3_000);
+  assert.deepEqual(timedOut.recognizer.calls, ['start', 'stop', 'abort']);
+  timedOut.recognizer.error('aborted');
+  timedOut.recognizer.end();
+  assert.deepEqual(timedOut.done, [{ transcript: '', problem: 'no-speech' }]);
+
+  // 듣기를 버렸다.
+  const dropped = listen(t, { processLocally: true });
+  dropped.session.cancel();
+  dropped.recognizer.error('aborted');
+  dropped.recognizer.end();
+  assert.deepEqual(dropped.done, []);
+});
+
 test('오류로 끝나도 그때까지 들은 글은 남긴다', (t) => {
   const { recognizer, done } = listen(t);
   recognizer.result('거짓말은 옳지');
@@ -357,6 +399,12 @@ test('다시 눌러도 풀리지 않는 문제만 음성 입력을 끄고, 문�
     // 음성 입력을 끄는 문제는 글로 입력하라고 알리고, 나머지는 다시 해 보라고 알린다.
     assert.match(row.message, row.blocks ? /음성 입력을 껐습니다.*글로 입력해 주세요/ : /다시/, problem);
   }
+});
+
+test('기기 안 인식이 준비되지 않은 문제는 음성 입력을 끄지 않고, 브라우저를 다시 열라고 알린다', () => {
+  const row = LISTEN_PROBLEMS['not-ready'];
+  assert.equal(row.blocks, false);
+  assert.match(row.message, /준비되지 않았습니다.*브라우저를 완전히 종료했다가 다시 열어야.*글로 입력/);
 });
 
 test('말소리가 가는 곳을 알리는 말은 기기 안인지, 서버로 갈 수 있는지를 밝힌다', () => {
