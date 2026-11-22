@@ -12,7 +12,7 @@ import { createServer } from 'vite';
 import { createApp } from './server/app.ts';
 import { LIMITS, type ModelSource } from './server/budget.ts';
 import { randomMode } from './server/games.ts';
-import { localConfigFromEnv, localProblem, localSource, mockSource } from './server/models.ts';
+import { localConfigFromEnv, localProblem, localSource, mockSource, type LocalConfig } from './server/models.ts';
 import { API_PORT } from './server/port.ts';
 import { SqliteGameStore } from './server/sqlite-store.ts';
 import { loadTopics } from './server/topics.ts';
@@ -28,10 +28,11 @@ async function chooseModels(): Promise<{ source: ModelSource; label: string }> {
   const choice = process.env.APP_MODEL || 'mock';
   if (choice === 'mock') return { source: mockSource(), label: '모의 모델' };
   if (choice !== 'local') stop('APP_MODEL에는 mock(모의 모델, 기본값)이나 local(이 컴퓨터의 로컬 모델)을 적습니다.');
-  const config = localConfigFromEnv(process.env);
+  let config: LocalConfig;
   let source: ModelSource;
   try {
-    // 주소가 이 컴퓨터가 아니면 여기서 멈춘다. 그 주소로는 모델 목록도 묻지 않는다.
+    // 설정이 틀렸거나 주소가 이 컴퓨터가 아니면 여기서 멈춘다. 그 주소로는 모델 목록도 묻지 않는다.
+    config = localConfigFromEnv(process.env);
     source = localSource(config);
   } catch (error) {
     stop(error instanceof Error ? error.message : String(error));
@@ -40,7 +41,7 @@ async function chooseModels(): Promise<{ source: ModelSource; label: string }> {
   if (problem) stop(problem);
   const { opponent, judge } = config.models;
   const names = opponent === judge ? opponent : `상대 ${opponent}, 판정기 ${judge}`;
-  return { source, label: `로컬 모델 ${names}, 무료: 이 컴퓨터 안의 주소만` };
+  return { source, label: `로컬 모델 ${names}, 생각 ${config.think ? '켬' : '끔'}, 무료: 이 컴퓨터 안의 주소만` };
 }
 
 // 모델을 고르지 못하면 판 파일을 만들지 않고 멈추도록, 저장소보다 먼저 고른다.

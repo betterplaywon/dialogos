@@ -51,15 +51,15 @@ async function fakeOllama(
   listed: readonly string[],
   { remote = [], native = true, redirects = {} }: { remote?: readonly string[]; native?: boolean; redirects?: Redirects } = {},
 ) {
-  const received: { method?: string; path?: string; model?: string }[] = [];
+  const received: { method?: string; path?: string; model?: string; reasoning_effort?: string }[] = [];
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
     req.on('end', () => {
       const json = (status: number, value: unknown) =>
         res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value));
-      const model = body ? (JSON.parse(body) as { model: string }).model : undefined;
-      received.push({ method: req.method, path: req.url, ...(model ? { model } : {}) });
+      const { model, reasoning_effort } = body ? (JSON.parse(body) as { model?: string; reasoning_effort?: string }) : {};
+      received.push({ method: req.method, path: req.url, ...(model ? { model } : {}), ...(reasoning_effort !== undefined ? { reasoning_effort } : {}) });
       const redirect = redirects[req.url ?? ''];
       if (redirect) return res.writeHead(redirect.status, { location: redirect.location }).end();
       if (req.method === 'GET' && req.url === '/v1/models') {
@@ -177,7 +177,7 @@ test('로컬 출처는 이 컴퓨터의 주소(http나 https, 127.0.0.1, localho
   assert.equal(sent.length, accepted.length);
 });
 
-test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/v1, 모델은 exaone3.5:7.8b이고, 판정기는 따로 적지 않으면 상대와 같은 모델이다', async () => {
+test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/v1, 모델은 qwen3:8b이고, 판정기는 따로 적지 않으면 상대와 같은 모델이다', async () => {
   const modelsOf = async (env: Record<string, string>) => {
     const { sent, fetchImpl } = recordingFetch();
     const source = localSource(localConfigFromEnv(env), fetchImpl);
@@ -185,19 +185,37 @@ test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/
     await source.create('judge').complete(HELLO);
     return sent;
   };
-  const defaultCall = { url: 'http://127.0.0.1:11434/v1/chat/completions', model: 'exaone3.5:7.8b' };
+  const defaultCall = { url: 'http://127.0.0.1:11434/v1/chat/completions', model: 'qwen3:8b' };
   assert.deepEqual(await modelsOf({}), [defaultCall, defaultCall]);
   // 빈 값은 적지 않은 것과 같다.
-  assert.deepEqual(await modelsOf({ APP_LOCAL_URL: ' ', APP_LOCAL_MODEL: '', APP_LOCAL_JUDGE_MODEL: '' }), [defaultCall, defaultCall]);
+  assert.deepEqual(
+    await modelsOf({ APP_LOCAL_URL: ' ', APP_LOCAL_MODEL: '', APP_LOCAL_JUDGE_MODEL: '', APP_LOCAL_THINK: '' }),
+    [defaultCall, defaultCall],
+  );
   // 상대 모델만 바꾸면 판정기도 따라가고, 판정기 모델을 적으면 그 모델을 쓴다.
   assert.deepEqual(
-    (await modelsOf({ APP_LOCAL_MODEL: 'qwen3:8b' })).map((request) => request.model),
-    ['qwen3:8b', 'qwen3:8b'],
+    (await modelsOf({ APP_LOCAL_MODEL: 'exaone3.5:7.8b' })).map((request) => request.model),
+    ['exaone3.5:7.8b', 'exaone3.5:7.8b'],
   );
   assert.deepEqual(
-    (await modelsOf({ APP_LOCAL_MODEL: 'qwen3:8b', APP_LOCAL_JUDGE_MODEL: 'qwen3:1.7b' })).map((request) => request.model),
-    ['qwen3:8b', 'qwen3:1.7b'],
+    (await modelsOf({ APP_LOCAL_MODEL: 'exaone3.5:7.8b', APP_LOCAL_JUDGE_MODEL: 'qwen3:1.7b' })).map((request) => request.model),
+    ['exaone3.5:7.8b', 'qwen3:1.7b'],
   );
+});
+
+test('생각: 로컬 모델 서버가 받는 요청에는 기본으로 reasoning_effort "none"이 있어 생각을 끄고, APP_LOCAL_THINK=1이면 없으며, 그 밖의 값으로는 설정을 만들지 않는다', async (t) => {
+  const ollama = await fakeOllama(t, [OPPONENT]);
+  const ask = (env: Record<string, string>) =>
+    localSource(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, ...env })).create('opponent').complete(HELLO);
+  await ask({});
+  await ask({ APP_LOCAL_THINK: '1' });
+  assert.deepEqual(ollama.received, [
+    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
+    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT },
+  ]);
+  for (const value of ['0', 'true', 'yes', 'none']) {
+    assert.throws(() => localConfigFromEnv({ APP_LOCAL_THINK: value }), /APP_LOCAL_THINK에는 1만/, value);
+  }
 });
 
 test('로컬 출처로 한 턴을 하면 200이고, 가짜 서버가 역할별 모델 이름으로 요청을 받으며, 원장에는 그 호출의 토큰이 남고 비용은 0이다', async (t) => {
@@ -213,10 +231,10 @@ test('로컬 출처로 한 턴을 하면 200이고, 가짜 서버가 역할별 �
   assert.equal(turn.status, 200);
   assert.equal(turn.data.reply, '답입니다.');
 
-  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 간다.
+  // 엔진 방식은 판정기를 부른 뒤 상대를 부른다. 둘 다 설정한 주소의 chat completions로 가고, 기본대로 생각을 끈다.
   assert.deepEqual(ollama.received, [
-    { method: 'POST', path: '/v1/chat/completions', model: JUDGE },
-    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT },
+    { method: 'POST', path: '/v1/chat/completions', model: JUDGE, reasoning_effort: 'none' },
+    { method: 'POST', path: '/v1/chat/completions', model: OPPONENT, reasoning_effort: 'none' },
   ]);
   assert.deepEqual(
     store.spent.map(({ role, model, calls, inputTokens, outputTokens, costMicroUsd }) => ({ role, model, calls, inputTokens, outputTokens, costMicroUsd })),
@@ -270,7 +288,7 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
   await gone.close();
   assert.match((await localProblem(localConfigFromEnv({ APP_LOCAL_URL: gone.url }))) ?? '', /Ollama 앱을 켠 뒤/);
 
-  const ollama = await fakeOllama(t, ['exaone3.5:7.8b', 'other:1b']);
+  const ollama = await fakeOllama(t, ['qwen3:8b', 'other:1b']);
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
   // 두 목록(OpenAI 호환 목록과 Ollama의 목록)을 읽기만 하고 모델은 부르지 않는다.
   assert.deepEqual(ollama.received, [
@@ -280,7 +298,7 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
 
   const judgeMissing = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'qwen3:1.7b' }));
   assert.match(judgeMissing ?? '', /ollama pull qwen3:1\.7b/);
-  assert.doesNotMatch(judgeMissing ?? '', /ollama pull exaone3\.5:7\.8b/);
+  assert.doesNotMatch(judgeMissing ?? '', /ollama pull qwen3:8b/);
 
   const bothMissing = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: 'a:1b', APP_LOCAL_JUDGE_MODEL: 'b:1b' }));
   assert.match(bothMissing ?? '', /ollama pull a:1b\n {2}ollama pull b:1b/);
@@ -291,41 +309,46 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
 });
 
 test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 원격 모델로 적은 모델이면 이 컴퓨터 밖에서 돈다고 알리고, 그 목록이 없는 OpenAI 호환 서버는 이 확인을 건너뛴다', async (t) => {
-  const ollama = await fakeOllama(t, ['exaone3.5:7.8b', 'gemma4:cloud'], { remote: ['gemma4:cloud'] });
+  const ollama = await fakeOllama(t, ['qwen3:8b', 'gemma4:cloud'], { remote: ['gemma4:cloud'] });
   const judgeRemote = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'gemma4:cloud' }));
   assert.match(judgeRemote ?? '', /원격 모델/);
   assert.match(judgeRemote ?? '', /gemma4:cloud/);
   // 알리는 것은 원격 모델뿐이다.
-  assert.doesNotMatch(judgeRemote ?? '', /exaone/);
+  assert.doesNotMatch(judgeRemote ?? '', /qwen3:8b/);
   // 원격 모델이 아닌 모델만 쓰면 문제가 없다.
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
   assert.ok(ollama.received.every((request) => request.method === 'GET'));
 
   // Ollama가 아닌 OpenAI 호환 서버에는 Ollama의 목록이 없다(404). 그런 서버에는 Ollama의 클라우드 모델도 없으므로 모델 목록만 확인한다.
-  const plain = await fakeOllama(t, ['exaone3.5:7.8b'], { native: false });
+  const plain = await fakeOllama(t, ['qwen3:8b'], { native: false });
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: plain.url })), null);
 });
 
-test('개발 서버는 APP_MODEL이 mock과 local 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
+test('개발 서버는 APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 1 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
   const ollama = await fakeOllama(t, ['other:1b']);
-  const cloud = await fakeOllama(t, ['exaone3.5:7.8b'], { remote: ['exaone3.5:7.8b'] });
+  const cloud = await fakeOllama(t, ['qwen3:8b'], { remote: ['qwen3:8b'] });
+  // 생각 설정이 틀린 경우도 가짜 서버의 주소로 띄운다. 검사가 고장 나도 이 컴퓨터의 Ollama에는 닿지 않는다.
+  const thinkUnread = await fakeOllama(t, ['qwen3:8b']);
   const unknown = await devServer({ APP_MODEL: 'openai' });
+  const badThink = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: thinkUnread.url, APP_LOCAL_THINK: 'yes' });
   // 원격 주소는 예약된 이름(.invalid)으로 둔다. 검사가 고장 나 목록을 물어도 바깥에 닿지 않는다.
   const remote = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: 'https://paid-provider.invalid/v1' });
   const missing = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: ollama.url });
   const remoteModel = await devServer({ APP_MODEL: 'local', APP_LOCAL_URL: cloud.url });
 
   assert.match(unknown.err, /APP_MODEL에는 mock/);
+  assert.match(badThink.err, /APP_LOCAL_THINK에는 1만/);
   assert.match(remote.err, /APP_LOCAL_URL에는 이 컴퓨터의 주소만/);
-  assert.match(missing.err, /ollama pull exaone3\.5:7\.8b/);
+  assert.match(missing.err, /ollama pull qwen3:8b/);
   assert.match(remoteModel.err, /원격 모델/);
-  // 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
+  // 생각 설정이 틀리면 아무것도 묻지 않는다. 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
+  assert.deepEqual(thinkUnread.received, []);
   assert.deepEqual(ollama.received, [{ method: 'GET', path: '/v1/models' }]);
   assert.deepEqual(cloud.received, [
     { method: 'GET', path: '/v1/models' },
     { method: 'GET', path: '/api/tags' },
   ]);
-  for (const run of [unknown, remote, missing, remoteModel]) {
+  for (const run of [unknown, badThink, remote, missing, remoteModel]) {
     assert.equal(run.code, 1, run.err);
     assert.doesNotMatch(run.out, /서버:/);
   }
