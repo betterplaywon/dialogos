@@ -1,56 +1,66 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendDictation, dictationNotice, turnInputOf, voiceTallyText } from '../web/src/dictation.ts';
+import { takeDictation, turnInputOf, voiceTallyText } from '../web/src/dictation.ts';
 
-test('인식된 글을 빈 입력 칸에는 그대로, 글이 있으면 공백 하나를 두고 끝에 붙인다', () => {
-  assert.deepEqual(appendDictation('', '거짓말은 옳지 않습니다', 1000), { draft: '거짓말은 옳지 않습니다', added: '거짓말은 옳지 않습니다', cut: false });
-  assert.deepEqual(appendDictation('제 생각에는', '거짓말은 옳지 않습니다', 1000), {
-    draft: '제 생각에는 거짓말은 옳지 않습니다',
-    added: '거짓말은 옳지 않습니다',
-    cut: false,
+test('들은 글을 빈 입력 칸에 넣고, 이 턴의 인식 조각에 더한다', () => {
+  assert.deepEqual(takeDictation('', [], '거짓말은 옳지 않습니다', 1000), {
+    draft: '거짓말은 옳지 않습니다',
+    segments: ['거짓말은 옳지 않습니다'],
+    notice: '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
   });
-  // 입력 칸이 공백이나 줄바꿈으로 끝나면 공백을 더 넣지 않는다.
-  assert.equal(appendDictation('제 생각에는 ', '그렇습니다', 1000).draft, '제 생각에는 그렇습니다');
-  assert.equal(appendDictation('첫 줄\n', '둘째 줄', 1000).draft, '첫 줄\n둘째 줄');
+});
+
+test('다시 말하면 입력 칸의 글을 새로 들은 글로 바꾼다(이어 붙이지 않는다)', () => {
+  const first = takeDictation('', [], '첫째', 1000);
+  assert.deepEqual(takeDictation(first.draft, first.segments, '둘째', 1000), {
+    draft: '둘째',
+    segments: ['첫째', '둘째'],
+    notice: '입력 칸의 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.',
+  });
+  // 직접 쓴 글도 바꾼다.
+  assert.equal(takeDictation('직접 쓴 글', [], '말한 글', 1000).draft, '말한 글');
+  // 공백뿐인 입력 칸은 빈 칸으로 보고 '바꿨다'고 알리지 않는다.
+  assert.match(takeDictation('  \n', [], '말한 글', 1000).notice ?? '', /입력 칸에 넣었습니다/);
+});
+
+test('앞서 인식된 글을 다시 말해 바꾼 턴은 고친 턴이고, 직접 쓴 글을 말로 바꾼 턴은 말로 넣은 턴이다', () => {
+  const first = takeDictation('', [], '알아듣기 어렵게 적힌 글', 1000);
+  const again = takeDictation(first.draft, first.segments, '거짓말은 옳지 않습니다', 1000);
+  assert.equal(turnInputOf(again.draft, again.segments), 'voice-edited');
+  const typed = takeDictation('직접 쓴 글', [], '거짓말은 옳지 않습니다', 1000);
+  assert.equal(turnInputOf(typed.draft, typed.segments), 'voice');
 });
 
 test('인식된 글의 앞뒤 공백은 떼고, 안의 이어진 공백은 하나로 줄인다', () => {
-  assert.deepEqual(appendDictation('', '  거짓말은   옳지\n않습니다 ', 1000), {
-    draft: '거짓말은 옳지 않습니다',
-    added: '거짓말은 옳지 않습니다',
-    cut: false,
-  });
+  assert.equal(takeDictation('', [], '  거짓말은   옳지\n않습니다 ', 1000).draft, '거짓말은 옳지 않습니다');
 });
 
-test('인식된 글이 비었으면 입력 칸을 그대로 둔다', () => {
+test('들은 글이 없으면 입력 칸과 조각을 그대로 두고 알리지 않는다', () => {
   for (const transcript of ['', '   ', '\n']) {
-    assert.deepEqual(appendDictation('쓰던 글', transcript, 1000), { draft: '쓰던 글', added: '', cut: false });
+    assert.deepEqual(takeDictation('쓰던 글', ['쓰던 글'], transcript, 1000), { draft: '쓰던 글', segments: ['쓰던 글'], notice: null });
   }
 });
 
-test('글자 수 상한을 넘는 부분은 자르고, 실제로 들어간 글만 돌려준다', () => {
-  // '쓰던 글'(4자)과 공백 하나 뒤에 5자가 남는다.
-  assert.deepEqual(appendDictation('쓰던 글', '가나다라마바사', 10), { draft: '쓰던 글 가나다라마', added: '가나다라마', cut: true });
+test('글자 수 상한을 넘는 부분은 자르고 그렇게 알린다', () => {
+  assert.deepEqual(takeDictation('쓰던 글', [], '가나다라마바사', 5), {
+    draft: '가나다라마',
+    segments: ['가나다라마'],
+    notice: '인식한 글이 길어 앞부분만 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
+  });
   // 자른 끝이 공백이면 그 공백은 넣지 않는다.
-  assert.deepEqual(appendDictation('', '가나 다라', 3), { draft: '가나', added: '가나', cut: true });
+  assert.equal(takeDictation('', [], '가나 다라', 3).draft, '가나');
   // 꼭 맞게 들어가면 잘린 것이 아니다.
-  assert.deepEqual(appendDictation('', '가나다', 3), { draft: '가나다', added: '가나다', cut: false });
+  assert.match(takeDictation('', [], '가나다', 3).notice ?? '', /입력 칸에 넣었습니다/);
   // 두 칸짜리 글자(이모지)의 반쪽만 들어가게 자르지 않는다.
-  assert.deepEqual(appendDictation('', '가😀', 2), { draft: '가', added: '가', cut: true });
+  assert.equal(takeDictation('', [], '가😀', 2).draft, '가');
+  // 한 글자도 들어가지 못하면 입력 칸과 조각을 그대로 둔다.
+  assert.deepEqual(takeDictation('쓰던 글', [], '😀가', 1), { draft: '쓰던 글', segments: [], notice: '인식한 글을 입력 칸에 넣지 못했습니다.' });
 });
 
-test('자리가 없으면 아무것도 붙이지 않는다(사이 공백도)', () => {
-  assert.deepEqual(appendDictation('가나다라마', '바사', 5), { draft: '가나다라마', added: '', cut: true });
-  // 공백 하나가 들어갈 자리뿐이면 공백만 붙이지 않는다.
-  assert.deepEqual(appendDictation('가나다라', '바사', 5), { draft: '가나다라', added: '', cut: true });
-  assert.deepEqual(appendDictation('이미 넘친 글', '바사', 3), { draft: '이미 넘친 글', added: '', cut: true });
-});
-
-test('듣기가 끝나면 입력 칸에 한 일을 알리고, 자리가 없어 잘렸으면 그렇게 알린다', () => {
-  assert.match(dictationNotice(appendDictation('', '그렇습니다', 1000)) ?? '', /입력 칸에 넣었습니다/);
-  assert.match(dictationNotice(appendDictation('', '가나다라마', 3)) ?? '', /앞부분만 넣었습니다/);
-  assert.match(dictationNotice(appendDictation('가나다', '라마', 3)) ?? '', /넣지 못했습니다/);
-  assert.equal(dictationNotice(appendDictation('쓰던 글', '  ', 1000)), null);
+test('받은 조각 목록은 바꾸지 않는다', () => {
+  const segments = ['첫째'];
+  takeDictation('첫째', segments, '둘째', 1000);
+  assert.deepEqual(segments, ['첫째']);
 });
 
 test('인식된 조각이 없으면 글로 넣은 턴이다', () => {
@@ -85,7 +95,7 @@ test('인식된 글을 지우고 다시 썼으면 고친 턴이다', () => {
   assert.equal(turnInputOf('', ['알아듣기 어렵게 적힌 글']), 'voice-edited');
 });
 
-test('여러 번에 나눠 말한 것은 차례대로 남아 있으면 말로 넣은 턴이다', () => {
+test('조각이 여럿이면 모두 들어간 차례대로 남아 있어야 말로 넣은 턴이다', () => {
   const segments = ['거짓말은 옳지 않습니다', '약속이 성립하지 않기 때문입니다'];
   assert.equal(turnInputOf('거짓말은 옳지 않습니다. 약속이 성립하지 않기 때문입니다.', segments), 'voice');
   // 조각의 차례를 바꿔 놓았으면 고친 것이다.
@@ -99,7 +109,7 @@ test('인식된 글을 둔 채 앞뒤와 사이에 글로 덧붙인 것은 고�
   assert.equal(turnInputOf('제 생각은 이렇습니다. 거짓말은 옳지 않습니다', ['거짓말은 옳지 않습니다']), 'voice');
   // 말한 뒤 글로 덧붙였다.
   assert.equal(turnInputOf('거짓말은 옳지 않습니다. 반례가 있습니까?', ['거짓말은 옳지 않습니다']), 'voice');
-  // 두 번 말한 사이에 글을 끼웠다.
+  // 두 조각 사이에 글을 끼웠다.
   assert.equal(turnInputOf('거짓말은 옳지 않습니다. 그리고 약속이 무너집니다.', ['거짓말은 옳지 않습니다', '약속이 무너집니다']), 'voice');
 });
 

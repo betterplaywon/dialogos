@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { GameSummaryView, GameView, Lean, SideIndex, TopicView, Verdict } from '../../server/contract.ts';
 import { api } from './api.ts';
-import { appendDictation, dictationNotice, turnInputOf, voiceTallyText } from './dictation.ts';
+import { takeDictation, turnInputOf, voiceTallyText } from './dictation.ts';
 import { LEAN_STEPS, leanAccessibleName, leanLabel, sideOfLean, VERDICT_LABEL } from './lean.ts';
 import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES, type ListenResult } from './listen.ts';
 import { SPEAK_PROBLEMS } from './speak.ts';
@@ -599,16 +599,14 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
     }
   }
 
-  /** 듣기가 끝났다. 들은 글을 입력 칸 끝에 붙이고 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다. */
+  /** 듣기가 끝났다. 들은 글로 입력 칸의 글을 바꾸고(takeDictation) 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다. */
   function onHeard(result: ListenResult) {
-    const appended = appendDictation(latestDraft.current, result.transcript, game.maxTextLength);
-    if (appended.added) {
-      segments.current = [...segments.current, appended.added];
-      changeDraft(appended.draft);
-    }
+    const taken = takeDictation(latestDraft.current, segments.current, result.transcript, game.maxTextLength);
+    segments.current = taken.segments;
+    if (taken.draft !== latestDraft.current) changeDraft(taken.draft);
     // 음성 입력을 끄는 문제는 음성 줄이 이유를 보인다. 같은 말을 두 곳에서 알리지 않는다.
     const problem = result.problem !== null && !LISTEN_PROBLEMS[result.problem].blocks ? LISTEN_PROBLEMS[result.problem].message : null;
-    setHeardNotice([dictationNotice(appended), problem].filter((notice) => notice !== null).join(' '));
+    setHeardNotice([taken.notice, problem].filter((notice) => notice !== null).join(' '));
   }
 
   function toggleListening() {
