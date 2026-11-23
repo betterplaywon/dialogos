@@ -195,7 +195,7 @@ test('로컬 출처는 이 컴퓨터의 주소(http나 https, 127.0.0.1, localho
   assert.equal(sent.length, accepted.length);
 });
 
-test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/v1, 모델은 qwen3:8b이고, 판정기는 따로 적지 않으면 상대와 같은 모델이다', async () => {
+test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/v1, 모델은 qwen3:14b이고, 판정기는 따로 적지 않으면 상대와 같은 모델이다', async () => {
   const modelsOf = async (env: Record<string, string>) => {
     const { sent, fetchImpl } = recordingFetch();
     const source = localSource(localConfigFromEnv(env), fetchImpl);
@@ -203,7 +203,7 @@ test('기본값: 주소는 Ollama가 처음부터 여는 http://127.0.0.1:11434/
     await source.create('judge').complete(HELLO);
     return sent;
   };
-  const defaultCall = { url: 'http://127.0.0.1:11434/v1/chat/completions', model: 'qwen3:8b' };
+  const defaultCall = { url: 'http://127.0.0.1:11434/v1/chat/completions', model: 'qwen3:14b' };
   assert.deepEqual(await modelsOf({}), [defaultCall, defaultCall]);
   // 빈 값은 적지 않은 것과 같다.
   assert.deepEqual(
@@ -318,7 +318,7 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
   await gone.close();
   assert.match((await localProblem(localConfigFromEnv({ APP_LOCAL_URL: gone.url }))) ?? '', /Ollama 앱을 켠 뒤/);
 
-  const ollama = await fakeOllama(t, ['qwen3:8b', 'other:1b']);
+  const ollama = await fakeOllama(t, ['qwen3:14b', 'other:1b']);
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
   // 두 목록(OpenAI 호환 목록과 Ollama의 목록)을 읽기만 하고 모델은 부르지 않는다.
   assert.deepEqual(ollama.received, [
@@ -328,7 +328,7 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
 
   const judgeMissing = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'qwen3:1.7b' }));
   assert.match(judgeMissing ?? '', /ollama pull qwen3:1\.7b/);
-  assert.doesNotMatch(judgeMissing ?? '', /ollama pull qwen3:8b/);
+  assert.doesNotMatch(judgeMissing ?? '', /ollama pull qwen3:14b/);
 
   const bothMissing = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: 'a:1b', APP_LOCAL_JUDGE_MODEL: 'b:1b' }));
   assert.match(bothMissing ?? '', /ollama pull a:1b\n {2}ollama pull b:1b/);
@@ -339,18 +339,18 @@ test('띄울 때 확인: 닿지 못하면 Ollama 앱을 켜라고, 모델이 없
 });
 
 test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 원격 모델로 적은 모델이면 이 컴퓨터 밖에서 돈다고 알리고, 그 목록이 없는 OpenAI 호환 서버는 이 확인을 건너뛴다', async (t) => {
-  const ollama = await fakeOllama(t, ['qwen3:8b', 'gemma4:cloud'], { remote: ['gemma4:cloud'] });
+  const ollama = await fakeOllama(t, ['qwen3:14b', 'gemma4:cloud'], { remote: ['gemma4:cloud'] });
   const judgeRemote = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url, APP_LOCAL_JUDGE_MODEL: 'gemma4:cloud' }));
   assert.match(judgeRemote ?? '', /원격 모델/);
   assert.match(judgeRemote ?? '', /gemma4:cloud/);
   // 알리는 것은 원격 모델뿐이다.
-  assert.doesNotMatch(judgeRemote ?? '', /qwen3:8b/);
+  assert.doesNotMatch(judgeRemote ?? '', /qwen3:14b/);
   // 원격 모델이 아닌 모델만 쓰면 문제가 없다.
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url })), null);
   assert.ok(ollama.received.every((request) => request.method === 'GET'));
 
   // Ollama가 아닌 OpenAI 호환 서버에는 Ollama의 목록이 없다(404). 그런 서버에는 Ollama의 클라우드 모델도 없으므로 모델 목록만 확인한다.
-  const plain = await fakeOllama(t, ['qwen3:8b'], { native: false });
+  const plain = await fakeOllama(t, ['qwen3:14b'], { native: false });
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: plain.url })), null);
 });
 
@@ -387,7 +387,7 @@ test('APP_MODE=random이면 받아들여 판마다 지시문 방식과 엔진 �
 
 test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 judge, all, none 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {
   const ollama = await fakeOllama(t, ['other:1b']);
-  const cloud = await fakeOllama(t, ['qwen3:8b'], { remote: ['qwen3:8b'] });
+  const cloud = await fakeOllama(t, ['qwen3:14b'], { remote: ['qwen3:14b'] });
   // 방식과 생각 설정이 틀린 경우도 가짜 서버의 주소로 띄운다. 검사가 고장 나도 이 컴퓨터의 Ollama에는 닿지 않는다.
   // 가짜 서버의 목록은 비워 둔다. 검사가 고장 나 목록을 물어도 모델이 없어 서버가 뜨지 않는다(포트를 열지 않는다).
   const modeUnread = await fakeOllama(t, []);
@@ -406,7 +406,7 @@ test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 m
   assert.match(unknown.err, /APP_MODEL에는 mock/);
   assert.match(badThink.err, /APP_LOCAL_THINK에는 judge\(.*\), all\(.*\), none\(.*\)/);
   assert.match(remote.err, /APP_LOCAL_URL에는 이 컴퓨터의 주소만/);
-  assert.match(missing.err, /ollama pull qwen3:8b/);
+  assert.match(missing.err, /ollama pull qwen3:14b/);
   assert.match(remoteModel.err, /원격 모델/);
   // 방식이나 생각 설정이 틀리면 아무것도 묻지 않는다. 로컬 모델이 없을 때는 모델 목록만 묻고, 원격 모델이면 두 목록만 묻는다. 모델은 부르지 않는다.
   assert.deepEqual(modeUnread.received, []);

@@ -39,14 +39,15 @@ export interface LocalConfig {
 
 /**
  * 로컬 모델의 설정을 환경 변수에서 읽는다. 비어 있으면 기본값이다.
- * 주소의 기본값은 Ollama가 처음부터 여는 주소(127.0.0.1의 11434번)의 OpenAI 호환 경로이고, 모델의 기본값은 qwen3:8b다.
+ * 주소의 기본값은 Ollama가 처음부터 여는 주소(127.0.0.1의 11434번)의 OpenAI 호환 경로이고, 모델의 기본값은 qwen3:14b다.
+ * qwen3:8b는 판정기가 버티라고 판정한 턴에도 말로는 물러서는 일이 많아 14b를 기본으로 둔다(2026-11-23 실측, app/README.md의 '한계').
  * 판정기 모델을 따로 적지 않으면 상대와 같은 모델을 쓴다. 메모리(16GB)에 모델 둘을 함께 올리지 않으려는 것이다.
  * 생각은 기본으로 판정기만 한다(judge). 둘 다 끄면 판정기가 되풀이를 반론으로 판정해 상대가 전제를 거둔 턴이 있었다
  * (2026-11-22 실측, app/README.md의 '로컬 모델로 쓰기(무료)'). all이면 둘 다, none이면 어느 쪽도 생각하지 않는다.
  * 그 밖의 값이면 쓸 수 있는 값을 알리는 오류를 던진다.
  */
 export function localConfigFromEnv(env: Env): LocalConfig {
-  const opponent = env.APP_LOCAL_MODEL?.trim() || 'qwen3:8b';
+  const opponent = env.APP_LOCAL_MODEL?.trim() || 'qwen3:14b';
   const think = env.APP_LOCAL_THINK?.trim() || 'judge';
   if (think !== 'judge' && think !== 'all' && think !== 'none') {
     throw new Error(
@@ -69,7 +70,8 @@ const FREE: Price = { inputUsdPerMTok: 0, outputUsdPerMTok: 0 };
 /**
  * 로컬 모델 한 호출의 시간 제한과 다시 부르기. 실측(2026-11-22, Apple M1 16GB, 엔진 방식 6턴)에서 한 호출은 길어야
  * qwen3:8b가 두 역할 모두 생각을 끄면 19초, 모두 켜면 79초, exaone3.5:7.8b가 45초였다. 판정기만 생각하게 둔 14턴(2026-11-23)에서는
- * 판정기의 57초였다. 쉬던 모델을 메모리에 다시 올리는 호출은 더 걸린다고 보고(추정, 따로 재지 않음) 넉넉히 잡은 값이다.
+ * qwen3:8b가 판정기의 57초였다. qwen3:14b는 모델을 메모리에 올리며 시작한 첫 턴의 판정기가 68초, 내렸다가 다시 올린 13턴의 판정기가 84초였다.
+ * 그보다 넉넉히 잡은 값이다.
  */
 const LOCAL_CALL: ApiOptions = { timeoutMs: 3 * 60_000, maxRetries: 1 };
 
