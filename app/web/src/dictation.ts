@@ -44,8 +44,8 @@ const lettersOf = (text: string): string => text.normalize('NFC').replace(/[^\p{
  * 모든 조각이 보낼 글 안에 들어간 차례대로, 겹치지 않게 그대로 남아 있으면 'voice'다.
  * 낱말을 고쳤거나 인식된 글을 지우고 다시 썼으면 'voice-edited'다.
  * 인식된 글을 둔 채 앞뒤에 글로 덧붙인 것은 고친 것이 아니다.
- * 다시 말해 앞 조각을 바꿨으면 입력 칸에는 새 조각만 남는다. 앞 조각을 손으로 다시 써 넣지 않는 한 두 조각이 겹치지 않고
- * 차례대로 남지 않으므로 고친 것이다. 같은 말을 다시 했거나 새 조각이 앞 조각을 품어도 그렇다.
+ * 다시 말해 앞 조각을 바꿨으면 입력 칸에는 새 조각만 남는다. 앞 조각을 새 조각 앞에 손으로 다시 써 넣지 않는 한
+ * 두 조각이 겹치지 않고 차례대로 남지 않으므로 고친 것이다. 같은 말을 다시 했거나 새 조각이 앞 조각을 품어도 그렇다.
  */
 export function turnInputOf(sent: string, segments: readonly string[]): TurnInput {
   const spoken = segments.map(lettersOf).filter((segment) => segment !== '');
