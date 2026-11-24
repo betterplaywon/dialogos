@@ -457,7 +457,13 @@ function VoiceBar({ voice, onTurnOn }: { voice: Voice; onTurnOn: () => void }) {
   }, [state.on]);
 
   if (!state.canListen && !state.canSpeak) {
-    return <p className="voice-bar muted">이 브라우저는 음성 기능을 지원하지 않습니다. 글로 토론할 수 있습니다.</p>;
+    return (
+      <p className="voice-bar muted">
+        {voice.embedded
+          ? '이 창은 앱 안에 들어 있는 브라우저라 음성 기능을 쓸 수 없습니다. Chrome에서 이 주소를 열면 음성으로 토론할 수 있습니다. 지금은 글로 토론할 수 있습니다.'
+          : '이 브라우저는 음성 기능을 지원하지 않습니다. 글로 토론할 수 있습니다.'}
+      </p>
+    );
   }
   if (!state.on) {
     const remembered = rememberedNote(state);
