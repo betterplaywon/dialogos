@@ -53,16 +53,26 @@
 
 **묻지 않고 합니다.** 이미 내려진 결정 안의 구현, 버그 수정, 리팩터링, 검사, 문서 뼈대, 도구 수정, 커밋, 브랜치 push, PR 열기, 리뷰 코멘트 처리, CI 재실행, 아래 조건을 채운 머지.
 
-**머지 조건.** CI 녹색, 코드를 쓰지 않은 에이전트가 `verify`로 검증한 PASS, 사람이 머지하는 경로를 건드리지 않음. 셋을 모두 채워야 합니다. 사람이 머지하는 경로를 건드린 PR은 merge-ready로 보고하고 멈춥니다(가드 훅이 머지를 막습니다).
+**머지 조건.** CI 녹색, 코드를 쓰지 않은 에이전트가 `verify`로 검증한 PASS(그 head SHA에 대해), 사람이 머지하는 경로를 건드리지 않음. 셋을 모두 채워야 합니다. 머지는 그 head를 `--match-head-commit`으로 못박습니다. 사람이 머지하는 경로를 건드린 PR은 merge-ready로 보고하고 멈춥니다(가드 훅이 머지를 막습니다).
+
+PR 리뷰는 독립 검증이 맡습니다(2026-11-26 사용자 결정). 사람의 리뷰를 기다리지 않습니다. 아래 경로를 건드린 PR은 독립 검증이 PR의 약속과 함께 그 줄의 것을 더 보고, 판정 댓글에 본 것을 적습니다. 하나라도 어기면 FAIL입니다.
+
+| 독립 검증이 더 보는 경로 | 더 보는 것 |
+| --- | --- |
+| `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준, 질문, 대본이 바뀌었다면 그 사용자 결정이 PR 1번에 있는지 |
+| `app/topics/*.json` | 주제 카드의 글(상대의 전제와 타당한 반론)이 바뀌었다면 그 사용자 결정이 있는지 |
+| `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정, 통과 판정 계산이 결정 없이 바뀌지 않았는지, 고정해 둔 검사(지시문 해시 등)를 결정 없이 고치지 않았는지 |
+| `eval/src/providers/api.ts` | 키를 출력하거나 남기지 않는지, `--confirm` 없이 돈이 드는 호출로 가는 길이 없는지 |
+| `package.json`, `package-lock.json` | 새 의존성과 설치 스크립트, `check`와 `test`가 검사를 빼거나 약하게 하지 않았는지 |
+| `.env.example`, `.gitignore` | `.env`, `runs/`, `notes/`가 계속 커밋되지 않는지 |
+| `README.md` | 공개 문서: 수치가 실측인지, 사용자가 쓸 과정 글의 본문을 대신 쓰지 않았는지 |
+| `.claude/`(아래 표 밖), `.agents/`, `.github/`(아래 표 밖) | 검증과 규칙을 약하게 하지 않았는지 |
 
 | 사람이 머지하는 경로 | 까닭 |
 | --- | --- |
-| `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준 |
-| `app/topics/*.json` | 서비스 주제 카드의 글(상대의 전제와 타당한 반론). 2026-11-19 사용자 결정 |
-| `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정 도구, 통과 판정 계산 |
-| `eval/src/providers/api.ts` | 돈이 드는 연결, 키 다루기 |
-| `package.json`, `package-lock.json`, `.env.example`, `.gitignore` | 의존성, `.env`를 읽는 위치, 커밋하지 않을 것 |
-| `README.md`, `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.agents/`, `.github/` | 공개 문서, 규칙, 에이전트 장치, CI |
+| `.claude/hooks/`, `.claude/settings.json` | 가드와 훅, 권한. 에이전트가 고쳐 스스로 머지하면 자기 제약을 풀 수 있다 |
+| `.github/workflows/` | CI. 머지 조건의 하나다 |
+| `CLAUDE.md`, `AGENTS.md` | 에이전트의 규칙과 이 자율 범위 |
 
 **멈추고 사용자에게 묻습니다.** 아직 내려지지 않은 제품·설계 결정(묻기 전에 개념과 선택지별 장단점을 먼저 설명합니다), 확정된 결정과 통과 기준의 변경, 실제 모델 호출, 비밀값과 키, GitHub 설정, 데이터와 브랜치 삭제, 배포, 외부 발행. 되돌릴 수 있는 일은 묻지 않고 하고 결과를 보고합니다.
 
@@ -86,7 +96,7 @@
 | main 직접 커밋·push 금지, 커밋 제목 형식, 커밋 작성자는 noreply 주소, 커밋 전 `npm run check` | 같은 훅 |
 | 커밋 메시지(`-F` 파일 포함), 커밋할 변경, push할 커밋의 변경, PR과 이슈의 글에 비밀값, 이메일, 전화번호, 금칙어 금지 | 같은 훅(금칙어 목록은 `notes/forbidden-words.txt`) |
 | 한 명령 안에서 스테이지에 올리고 커밋하기, 커밋하고 push하기 금지(가드는 실행 전에 한 번만 본다) | 같은 훅 |
-| 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 녹색이 아닌 머지 금지 | 같은 훅 |
+| 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 녹색이 아닌 머지, head를 못박지 않은 머지 금지 | 같은 훅 |
 | 저장소 설정, 비밀, 워크플로우, 릴리스 변경 금지 | 같은 훅 |
 | PR 단계와 판정 실험의 진행 | `.agents/playbooks/`(앵커는 pstack의 `check-playbooks.mjs`가 검사) |
 | 형식 검사와 검사 | CI verify(필수 체크 등록은 사용자 몫) |
