@@ -337,10 +337,10 @@ VS Code처럼 앱 안에 들어 있는 브라우저에서는 음성을 켜지 �
 | `web/src/speak.ts` | 읽을 글 나누기, 한국어 목소리 고르기, 캐릭터별 속도와 높낮이, 읽기 제어기(검사 있음) |
 | `web/src/voice-control.ts` | 음성의 상태(켜고 끄기, 듣기, 읽기)를 한곳에 묶습니다. 브라우저 객체를 포트로 받아 가짜 객체로 검사합니다 |
 | `web/src/browser-voice.ts` | 실제 브라우저의 음성 인식과 음성 합성을 그 포트에 잇습니다. 브라우저의 음성 타입은 여기에만 있습니다 |
-| `web/src/embedded-browser.ts` | 앱 안에 들어 있는 브라우저(Electron)인지 User-Agent로 가립니다(검사 있음) |
-| `web/src/use-voice.ts` | 음성의 상태를 React에 잇습니다. 앱 안의 브라우저에는 음성 기능을 넘기지 않습니다 |
+| `web/src/embedded-browser.ts` | 앱 안에 들어 있는 브라우저(Electron)인지 User-Agent로 가리고, 그런 브라우저에서는 음성 인식과 합성을 만들지 않습니다(검사 있음) |
+| `web/src/use-voice.ts` | 음성의 상태를 React에 잇습니다. 음성 인식과 합성은 `embedded-browser.ts`의 가림을 거쳐 받습니다 |
 | `dev.ts` | 개발 명령(`npm run app:dev`). `server/dev-setup.ts`가 고른 설정으로 서버와 화면을 띄우고, 고르지 못하면 띄우지 않습니다(검사 있음) |
-| `tests/` | 서버, 비용 상한, 로컬 모델, 한 턴 보내기, 음성 로직의 검사. `npm test`에 들어 있습니다. 브라우저에 붙는 두 파일(`browser-voice.ts`, `use-voice.ts`)과 화면은 타입 검사만 받습니다 |
+| `tests/` | 서버, 비용 상한, 로컬 모델, 한 턴 보내기, 음성 로직, 앱 안의 브라우저 가림의 검사. `npm test`에 들어 있습니다. 브라우저에 붙는 두 파일(`browser-voice.ts`, `use-voice.ts`)과 화면은 타입 검사만 받습니다. 그래서 `use-voice.ts`가 가림을 거쳐 음성 기능을 받는지는 검사가 보지 않습니다 |
 
 ## 주소
 
