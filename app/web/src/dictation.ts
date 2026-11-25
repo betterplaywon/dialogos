@@ -13,27 +13,50 @@ export interface Dictation {
   notice: string | null;
 }
 
-/**
- * 들은 글로 입력 칸의 글을 바꾼다. 다시 말하면 이어 붙이지 않고 새로 들은 글로 바꾼다(2026-11-23 사용자 결정).
- * 들은 글의 앞뒤 공백은 떼고 안의 이어진 공백은 하나로 줄이며, maxLength를 넘는 부분은 자른다.
- * 들은 글이 없거나 한 글자도 들어가지 못하면 입력 칸과 조각을 그대로 둔다. 잘못 눌러 쓰던 글을 잃지 않게 하려는 것이다.
- * 조각은 바뀐 앞 조각도 남긴다. 그래서 앞서 인식된 글을 다시 말해 바꾼 턴은 turnInputOf가 고친 턴으로 센다.
- */
-export function takeDictation(draft: string, segments: readonly string[], transcript: string, maxLength: number): Dictation {
-  const heard = transcript.trim().replace(/\s+/g, ' ');
-  // 자른 끝에 공백이나, 두 칸짜리 글자(이모지 등)의 앞 반쪽만 남지 않게 한다.
-  const text = heard
-    .slice(0, Math.max(0, maxLength))
+/** 들은 글을 room 글자 안으로 자른다. 자른 끝에 공백이나, 두 칸짜리 글자(이모지 등)의 앞 반쪽만 남지 않게 한다. */
+const cutTo = (text: string, room: number): string =>
+  text
+    .slice(0, Math.max(0, room))
     .replace(/[\uD800-\uDBFF]$/, '')
     .trimEnd();
-  if (!text) return { draft, segments: [...segments], notice: heard ? '인식한 글을 입력 칸에 넣지 못했습니다.' : null };
-  const notice =
-    text.length < heard.length
-      ? '인식한 글이 길어 앞부분만 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.'
-      : draft.trim()
-        ? '입력 칸의 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.'
+
+/**
+ * 들은 글을 입력 칸에 넣는다(2026-11-24 사용자 결정).
+ * - 입력 칸이 이 턴의 마지막 인식 조각 그대로면(손대지 않았으면) 새로 들은 글로 바꾼다. 다시 말해도 글이 쌓이지 않는다.
+ * - 직접 쓰거나 고친 글이 있으면 지우지 않고 끝에 붙인다. 빈 칸(공백뿐인 칸도)이면 그대로 넣는다.
+ * - appendOnly면 바꾸지 않고 붙인다. 듣는 중에 음성을 끄면 알림 줄이 사라지므로, 그때 바꾸면 쓰던 글이 알림 없이 사라진다.
+ * 들은 글의 앞뒤 공백은 떼고 안의 이어진 공백은 하나로 줄이며, 남은 자리를 넘는 부분은 자른다.
+ * 들은 글이 없거나 한 글자도 들어가지 못하면 입력 칸과 조각을 그대로 둔다.
+ * 조각은 바뀐 앞 조각도 남긴다. 그래서 앞서 인식된 글을 다시 말해 바꾼 턴은 turnInputOf가 고친 턴으로 센다.
+ */
+export function takeDictation(
+  draft: string,
+  segments: readonly string[],
+  transcript: string,
+  maxLength: number,
+  options: { appendOnly?: boolean } = {},
+): Dictation {
+  const heard = transcript.trim().replace(/\s+/g, ' ');
+  if (!heard) return { draft, segments: [...segments], notice: null };
+  const replace = !options.appendOnly && segments.length > 0 && draft === segments[segments.length - 1];
+  // 바꾸거나 빈 칸에 넣을 때는 앞 글을 두지 않는다. 붙일 때는 사이에 공백 하나를 둔다(앞 글이 공백으로 끝나면 두지 않는다).
+  const base = replace || draft.trim() === '' ? '' : draft;
+  const gap = base === '' || /\s$/.test(base) ? '' : ' ';
+  const text = cutTo(heard, maxLength - base.length - gap.length);
+  if (!text) {
+    return { draft, segments: [...segments], notice: base ? '입력 칸이 가득 차 인식한 글을 넣지 못했습니다.' : '인식한 글을 입력 칸에 넣지 못했습니다.' };
+  }
+  const cut = text.length < heard.length;
+  const notice = cut
+    ? base
+      ? '입력 칸이 가득 차 인식한 글의 앞부분만 붙였습니다. 고친 뒤 보내 주세요.'
+      : '인식한 글이 길어 앞부분만 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.'
+    : replace
+      ? '앞서 인식한 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.'
+      : base
+        ? '쓰던 글은 두고 인식한 글을 끝에 붙였습니다. 고친 뒤 보내 주세요.'
         : '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.';
-  return { draft: text, segments: [...segments, text], notice };
+  return { draft: base + gap + text, segments: [...segments, text], notice };
 }
 
 /** 견줄 때는 글자와 숫자만 남긴다. 인식된 글에는 문장 부호가 원래 없어, 공백과 부호만 손본 것은 고친 것으로 치지 않는다. */

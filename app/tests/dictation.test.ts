@@ -8,22 +8,43 @@ test('들은 글을 빈 입력 칸에 넣고, 이 턴의 인식 조각에 더한
     segments: ['거짓말은 옳지 않습니다'],
     notice: '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
   });
+  // 공백뿐인 입력 칸은 빈 칸으로 본다.
+  assert.equal(takeDictation('  \n', [], '말한 글', 1000).draft, '말한 글');
 });
 
-test('다시 말하면 입력 칸의 글을 새로 들은 글로 바꾼다(이어 붙이지 않는다)', () => {
+test('입력 칸이 직전에 인식된 글 그대로면, 다시 말할 때 새로 들은 글로 바꾼다', () => {
   const first = takeDictation('', [], '첫째', 1000);
   assert.deepEqual(takeDictation(first.draft, first.segments, '둘째', 1000), {
     draft: '둘째',
     segments: ['첫째', '둘째'],
-    notice: '입력 칸의 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.',
+    notice: '앞서 인식한 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.',
   });
-  // 직접 쓴 글도 바꾼다.
-  assert.equal(takeDictation('직접 쓴 글', [], '말한 글', 1000).draft, '말한 글');
-  // 공백뿐인 입력 칸은 빈 칸으로 보고 '바꿨다'고 알리지 않는다.
-  assert.match(takeDictation('  \n', [], '말한 글', 1000).notice ?? '', /입력 칸에 넣었습니다/);
 });
 
-test('앞서 인식된 글을 다시 말해 바꾼 턴은 고친 턴이고, 직접 쓴 글을 말로 바꾼 턴은 말로 넣은 턴이다', () => {
+test('직접 쓰거나 고친 글이 있으면 지우지 않고 끝에 붙인다', () => {
+  assert.deepEqual(takeDictation('제 생각에는', [], '거짓말은 옳지 않습니다', 1000), {
+    draft: '제 생각에는 거짓말은 옳지 않습니다',
+    segments: ['거짓말은 옳지 않습니다'],
+    notice: '쓰던 글은 두고 인식한 글을 끝에 붙였습니다. 고친 뒤 보내 주세요.',
+  });
+  // 인식된 글을 손본 뒤(문장 부호 하나라도) 다시 말하면 붙인다.
+  const first = takeDictation('', [], '첫째', 1000);
+  assert.equal(takeDictation(`${first.draft}.`, first.segments, '둘째', 1000).draft, '첫째. 둘째');
+  // 직접 쓴 글 뒤에 붙인 뒤에는 입력 칸이 마지막 조각과 다르므로, 또 말해도 직접 쓴 글을 지우지 않는다.
+  const appended = takeDictation('제 생각에는', [], '첫째', 1000);
+  assert.equal(takeDictation(appended.draft, appended.segments, '둘째', 1000).draft, '제 생각에는 첫째 둘째');
+  // 입력 칸이 공백이나 줄바꿈으로 끝나면 공백을 더 넣지 않는다.
+  assert.equal(takeDictation('제 생각에는 ', [], '그렇습니다', 1000).draft, '제 생각에는 그렇습니다');
+  assert.equal(takeDictation('첫 줄\n', [], '둘째 줄', 1000).draft, '첫 줄\n둘째 줄');
+});
+
+test('음성을 끄면서 넘긴 글(appendOnly)은 직전 인식 글이라도 바꾸지 않고 끝에 붙인다', () => {
+  const first = takeDictation('', [], '첫째', 1000);
+  assert.equal(takeDictation(first.draft, first.segments, '둘째', 1000, { appendOnly: true }).draft, '첫째 둘째');
+  assert.equal(takeDictation('직접 쓴 글', [], '들은 글', 1000, { appendOnly: true }).draft, '직접 쓴 글 들은 글');
+});
+
+test('앞서 인식된 글을 다시 말해 바꾼 턴은 고친 턴이고, 직접 쓴 글 뒤에 말로 붙인 턴은 말로 넣은 턴이다', () => {
   const first = takeDictation('', [], '알아듣기 어렵게 적힌 글', 1000);
   const again = takeDictation(first.draft, first.segments, '거짓말은 옳지 않습니다', 1000);
   assert.equal(turnInputOf(again.draft, again.segments), 'voice-edited');
@@ -42,10 +63,17 @@ test('들은 글이 없으면 입력 칸과 조각을 그대로 두고 알리지
 });
 
 test('글자 수 상한을 넘는 부분은 자르고 그렇게 알린다', () => {
-  assert.deepEqual(takeDictation('쓰던 글', [], '가나다라마바사', 5), {
+  // 빈 칸에 넣거나 바꿀 때는 들은 글이 길어서 잘린다.
+  assert.deepEqual(takeDictation('', [], '가나다라마바사', 5), {
     draft: '가나다라마',
     segments: ['가나다라마'],
     notice: '인식한 글이 길어 앞부분만 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
+  });
+  // 붙일 때는 남은 자리만큼 들어간다. '쓰던 글'(4자)과 공백 하나 뒤에 5자가 남는다.
+  assert.deepEqual(takeDictation('쓰던 글', [], '가나다라마바사', 10), {
+    draft: '쓰던 글 가나다라마',
+    segments: ['가나다라마'],
+    notice: '입력 칸이 가득 차 인식한 글의 앞부분만 붙였습니다. 고친 뒤 보내 주세요.',
   });
   // 자른 끝이 공백이면 그 공백은 넣지 않는다.
   assert.equal(takeDictation('', [], '가나 다라', 3).draft, '가나');
@@ -53,8 +81,14 @@ test('글자 수 상한을 넘는 부분은 자르고 그렇게 알린다', () =
   assert.match(takeDictation('', [], '가나다', 3).notice ?? '', /입력 칸에 넣었습니다/);
   // 두 칸짜리 글자(이모지)의 반쪽만 들어가게 자르지 않는다.
   assert.equal(takeDictation('', [], '가😀', 2).draft, '가');
-  // 한 글자도 들어가지 못하면 입력 칸과 조각을 그대로 둔다.
-  assert.deepEqual(takeDictation('쓰던 글', [], '😀가', 1), { draft: '쓰던 글', segments: [], notice: '인식한 글을 입력 칸에 넣지 못했습니다.' });
+});
+
+test('한 글자도 들어가지 못하면 입력 칸과 조각을 그대로 두고 그렇게 알린다', () => {
+  // 붙일 자리가 없다. 사이 공백 하나만 들어갈 자리여도 공백만 붙이지 않는다.
+  assert.deepEqual(takeDictation('가나다라마', [], '바사', 5), { draft: '가나다라마', segments: [], notice: '입력 칸이 가득 차 인식한 글을 넣지 못했습니다.' });
+  assert.deepEqual(takeDictation('가나다라', [], '바사', 5), { draft: '가나다라', segments: [], notice: '입력 칸이 가득 차 인식한 글을 넣지 못했습니다.' });
+  // 빈 칸인데 첫 글자가 두 칸짜리라 한 칸에 들어가지 못한다.
+  assert.deepEqual(takeDictation('', [], '😀가', 1), { draft: '', segments: [], notice: '인식한 글을 입력 칸에 넣지 못했습니다.' });
 });
 
 test('받은 조각 목록은 바꾸지 않는다', () => {

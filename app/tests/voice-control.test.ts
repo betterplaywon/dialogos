@@ -580,14 +580,15 @@ test('끄면 듣기와 읽기를 멈추고 목소리 구독을 그만두며, 준
   assert.deepEqual([control.getState().reading, synth.spoken.length], [null, spoken]);
 });
 
-test('듣는 중에 끄면 인식기를 끊고, 그때까지 들은 글은 버리지 않고 한 번 넘긴다', async (t) => {
+test('듣는 중에 끄면 인식기를 끊고, 그때까지 들은 글은 버리지 않고 끄면서 넘긴 글이라고 표시해 한 번 넘긴다', async (t) => {
   const { control, recognition } = await turnedOn(t);
   const heard: ListenResult[] = [];
   control.listen((result) => heard.push(result));
   recognition.last.result('거짓말은 결과가');
   control.turnOff();
   assert.deepEqual(recognition.last.calls, ['start', 'abort']);
-  assert.deepEqual(heard, [{ transcript: '거짓말은 결과가', problem: null }]);
+  // 화면은 이 표시(turnedOff)를 보고 입력 칸의 글을 바꾸지 않고 끝에 붙인다(dictation.ts의 appendOnly).
+  assert.deepEqual(heard, [{ transcript: '거짓말은 결과가', problem: null, turnedOff: true }]);
   // 끊긴 인식기가 늦게 낸 이벤트로 다시 넘기지 않는다.
   recognition.last.end();
   assert.equal(heard.length, 1);

@@ -7,11 +7,11 @@ import type { GameSummaryView, GameView, Lean, SideIndex, TopicView, Verdict } f
 import { api } from './api.ts';
 import { takeDictation, turnInputOf, voiceTallyText } from './dictation.ts';
 import { LEAN_STEPS, leanAccessibleName, leanLabel, sideOfLean, VERDICT_LABEL } from './lean.ts';
-import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES, type ListenResult } from './listen.ts';
+import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES } from './listen.ts';
 import { SPEAK_PROBLEMS } from './speak.ts';
 import { sendTurn } from './turn-flow.ts';
 import { useVoice, type Voice } from './use-voice.ts';
-import type { ReadRequest, VoiceState } from './voice-control.ts';
+import type { Heard, ReadRequest, VoiceState } from './voice-control.ts';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
@@ -605,9 +605,14 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
     }
   }
 
-  /** 듣기가 끝났다. 들은 글로 입력 칸의 글을 바꾸고(takeDictation) 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다. */
-  function onHeard(result: ListenResult) {
-    const taken = takeDictation(latestDraft.current, segments.current, result.transcript, game.maxTextLength);
+  /**
+   * 듣기가 끝났다. 들은 글을 입력 칸에 넣고(takeDictation) 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다.
+   * 음성을 끄면서 넘긴 글이면 알림이 보이지 않으므로 입력 칸의 글을 바꾸지 않고 끝에 붙인다.
+   */
+  function onHeard(result: Heard) {
+    const taken = takeDictation(latestDraft.current, segments.current, result.transcript, game.maxTextLength, {
+      appendOnly: result.turnedOff === true,
+    });
     segments.current = taken.segments;
     if (taken.draft !== latestDraft.current) changeDraft(taken.draft);
     // 음성 입력을 끄는 문제는 음성 줄이 이유를 보인다. 같은 말을 두 곳에서 알리지 않는다.
