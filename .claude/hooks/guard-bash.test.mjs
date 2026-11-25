@@ -162,24 +162,58 @@ test('커밋할 변경에 금칙어나 비밀값이 있으면 막는다', (t) =>
   assert.equal(verdict('git commit -m "docs: 추가"', { cwd: dir }), 'allow');
 });
 
-test('사람이 머지하는 경로(주제 카드의 글 포함)를 건드린 PR의 머지는 막는다', (t) => {
+test('가드와 훅, 권한, CI, 규칙 문서를 건드린 PR의 머지만 막는다', (t) => {
   // gh 대신 정해 둔 PR 정보를 내는 가짜 gh를 PATH 앞에 둔다. 실제 GitHub에는 묻지 않는다.
   const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-gh-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\ncat "$FAKE_GH_JSON"\n', { mode: 0o755 });
-  const merge = (changed) => {
+  const merge = (changed, head = '--match-head-commit abc1234') => {
     const json = path.join(dir, `${changed.replace(/\W/g, '_')}.json`);
     const checks = [{ name: 'verify', conclusion: 'SUCCESS' }];
     writeFileSync(json, JSON.stringify({ files: [{ path: changed }], isDraft: false, state: 'OPEN', statusCheckRollup: checks }));
-    return guard('gh pr merge 7 --merge', { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
+    return guard(`gh pr merge 7 --merge ${head}`, { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
   };
-  for (const changed of ['app/topics/s01.json', 'eval/questions/q01.json', '.claude/hooks/guard-bash.mjs', 'CLAUDE.md']) {
+  const humanMerge = [
+    '.claude/hooks/guard-bash.mjs',
+    '.claude/hooks/_shared.mjs',
+    '.claude/hooks/on-stop.mjs',
+    '.claude/settings.json',
+    '.github/workflows/ci.yml',
+    'CLAUDE.md',
+    'AGENTS.md',
+  ];
+  for (const changed of humanMerge) {
     const result = merge(changed);
     assert.equal(result.verdict, 'block', changed);
     assert.match(result.reason, /사람이 머지하는 경로/, changed);
   }
-  for (const changed of ['app/topics/README.md', 'app/server/topics.ts', 'app/README.md']) {
+  // 2026-11-26 사용자 결정으로 독립 검증이 사람 몫의 검토를 더해 보고 에이전트가 머지하는 경로.
+  const agentMerge = [
+    'eval/rubric.md',
+    'eval/questions/q01.json',
+    'app/topics/s01.json',
+    'eval/src/prompts.ts',
+    'eval/src/providers/api.ts',
+    'package.json',
+    '.gitignore',
+    'README.md',
+    '.claude/skills/verify/SKILL.md',
+    '.agents/playbooks/dialogos-pr.md',
+    '.github/pull_request_template.md',
+    'app/server/topics.ts',
+    'app/README.md',
+  ];
+  for (const changed of agentMerge) {
     assert.equal(merge(changed).verdict, 'allow', changed);
+  }
+  assert.equal(merge('app/README.md', '--match-head-commit=abc1234').verdict, 'allow');
+});
+
+test('머지는 검증한 head를 --match-head-commit으로 못박아야 한다', () => {
+  for (const command of ['gh pr merge 7 --merge', 'gh pr merge 7 -m']) {
+    const result = guard(command);
+    assert.equal(result.verdict, 'block', command);
+    assert.match(result.reason, /--match-head-commit/, command);
   }
 });
 

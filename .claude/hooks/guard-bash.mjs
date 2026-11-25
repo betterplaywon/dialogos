@@ -28,30 +28,9 @@ function globToRegExp(glob) {
   return new RegExp(`${re}$`);
 }
 
-// 사람이 머지하는 경로: 실험 설계와 측정 도구, 서비스 주제 카드의 글, 돈이 드는 연결, 의존성과 명령, 비밀값 경계, 공개 문서, 규칙과 에이전트 장치.
-const SENSITIVE = [
-  'eval/README.md',
-  'eval/rubric.md',
-  'eval/cards/**',
-  'eval/questions/**',
-  'app/topics/*.json',
-  'eval/src/prompts.ts',
-  'eval/src/script.ts',
-  'eval/src/metrics.ts',
-  'eval/src/labeler.ts',
-  'eval/src/human.ts',
-  'eval/src/providers/api.ts',
-  'package.json',
-  'package-lock.json',
-  '.env.example',
-  '.gitignore',
-  'README.md',
-  'AGENTS.md',
-  'CLAUDE.md',
-  '.claude/**',
-  '.agents/**',
-  '.github/**',
-].map(globToRegExp);
+// 사람이 머지하는 경로: 에이전트가 할 수 있는 일을 정하고 지키는 파일(가드와 훅, 권한, CI, 규칙 문서).
+// 에이전트가 이 파일을 고쳐 스스로 머지하면 자기 제약을 풀 수 있다. 그 밖의 경로는 독립 검증이 사람 몫의 검토를 더해 본다(CLAUDE.md '자율 범위').
+const SENSITIVE = ['.claude/hooks/**', '.claude/settings.json', '.github/workflows/**', 'CLAUDE.md', 'AGENTS.md'].map(globToRegExp);
 
 const COMMIT_SUBJECT = /^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([a-z0-9,./-]+\))?!?: \S/;
 
@@ -335,6 +314,9 @@ function checkMerge(words) {
   if (words.includes('--admin')) return '--admin 머지 금지(보호 규칙 우회).';
   if (['--squash', '--rebase', '-s', '-r'].some((f) => words.includes(f))) return '이 저장소는 merge commit만 쓴다: gh pr merge <번호> --merge';
   if (!words.includes('--merge') && !words.includes('-m')) return '머지 방식을 밝힌다: gh pr merge <번호> --merge';
+  // 독립 검증의 판정은 한 head에 대한 것이다. 검증 뒤에 커밋이 더해지면 GitHub이 머지를 거절하게 head를 못박는다.
+  if (!words.some((w) => w === '--match-head-commit' || w.startsWith('--match-head-commit=')))
+    return '검증한 head로 머지한다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>';
   const number = prNumber(words);
   if (!number) return 'PR 번호를 알 수 없다. gh pr merge <번호> --merge';
   const info = ghJson(['pr', 'view', String(number), '--json', 'files,isDraft,state,statusCheckRollup']);
