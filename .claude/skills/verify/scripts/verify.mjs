@@ -49,7 +49,7 @@ console.log(`verify ${feature}: ${journey.title}\n증거: ${h.rel}/`);
 // 비동기 'error' 이벤트로 오는데, 받는 곳이 없으면 node가 닫기 없이 그 자리에서 끝나 앱과 Chrome, 임시 폴더가 남는다. 받아서 버린다.
 for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {});
 
-// Ctrl+C, 끄기, 터미널 닫기, 잡히지 않은 오류로 멈춰도 여정이 띄운 앱과 Chrome을 닫은 뒤에 끝낸다.
+// Ctrl+C, Ctrl+\, 끄기, 터미널 닫기, 잡히지 않은 오류로 멈춰도 여정이 띄운 앱과 Chrome을 닫은 뒤에 끝낸다.
 // 닫기는 한 번만 돌고(h.close()가 같은 닫기를 돌려준다), 닫는 동안 온 신호와 오류는 기다리라고만 알린다.
 // 그것으로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 앱과 Chrome마다 많아야 5초 기다린다.
 // SIGKILL처럼 잡을 수 없는 신호로 끝나면 닫지 못한다(SKILL.md의 '아직 못 하는 것').
@@ -74,7 +74,7 @@ function stop(reason, failure) {
     .finally(() => process.exit(failure ? failure.exitCode : (process.exitCode ?? 0)));
 }
 // 결과를 적은 뒤에 온 신호는 결과를 바꾸지 않는다.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
   process.on(signal, () => stop(signal, finished ? null : { exitCode: 130 }));
 }
 // 이벤트에서 던진 오류는 아래 여정의 try에 잡히지 않는다. 언제 오든 이 실행은 실패다.
