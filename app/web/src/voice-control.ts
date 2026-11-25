@@ -101,7 +101,7 @@ export interface VoiceState<V extends VoiceLike = VoiceLike> {
 
 /**
  * 화면에 넘기는 들은 글. 음성을 끄면서 넘긴 것이면 turnedOff가 true다.
- * 그때는 음성 줄과 알림이 사라지므로, 화면은 입력 칸의 글을 바꾸지 않고 끝에 붙인다(dictation.ts의 appendOnly).
+ * 그때는 듣기 알림 줄이 그려지지 않으므로(state.on이 false), 화면은 입력 칸의 글을 바꾸지 않고 끝에 붙인다(dictation.ts의 appendOnly).
  */
 export type Heard = ListenResult & { turnedOff?: true };
 

@@ -29,7 +29,6 @@ const before: GameView = {
   voice: { turns: 0, edited: 0, redone: 0 },
 };
 
-/** 글로만 넣은 턴. */
 const TYPED: TurnEntry = { input: 'text', redone: 0 };
 
 /** 서버에 저장된 판. turns개의 턴이 들어 있다. */

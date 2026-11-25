@@ -67,7 +67,7 @@ const promptTurn: TurnLog = {
   at: '2026-11-19T00:01:00.000Z',
 };
 
-/** 넣은 방식만 다른 턴 넷: 글, 말 그대로(두 번 다시 말함), 말을 고쳐서, 말 그대로. */
+/** 넣은 방식과 다시 말한 횟수만 다른 턴 넷: 글, 말 그대로(두 번 다시 말함), 말을 고쳐서, 말 그대로. */
 const mixedInputTurns: TurnLog[] = (['text', 'voice', 'voice-edited', 'voice'] as const).map((input, index) => ({
   ...promptTurn,
   n: index + 1,

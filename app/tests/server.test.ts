@@ -585,7 +585,7 @@ test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할
     ],
   );
   assert.equal(saved?.history.length, 6);
-  // 말로 넣은 턴과 고쳐 보낸 턴의 수도 다시 띄운 뒤의 판과 목록에 그대로 실린다.
+  // 말로 넣은 턴, 고쳐 보낸 턴, 다시 말한 턴의 수도 다시 띄운 뒤의 판과 목록에 그대로 실린다.
   const listed = (await call<GamesResponse>(second, 'GET', '/api/games')).data.games.find((g) => g.id === game.id);
   assert.deepEqual([listed?.turn, listed?.voice], [2, { turns: 2, edited: 1, redone: 0 }]);
   const recorded = await call<GameView>(second, 'GET', `/api/games/${other.id}`);
