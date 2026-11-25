@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { browserPackMark, browserRecognition, browserSpeech, browserVoiceMemory } from './browser-voice.ts';
-import { isEmbeddedBrowser } from './embedded-browser.ts';
+import { gateVoice } from './embedded-browser.ts';
 import { createVoiceControl, type VoiceControl, type VoiceState } from './voice-control.ts';
 
 export interface Voice {
@@ -15,15 +15,12 @@ export interface Voice {
 
 /** 화면 전체에서 한 번만 쓴다(App). 판을 바꿔도 음성은 켜진 채로 남고, 페이지를 새로 열면 꺼져 있다. */
 export function useVoice(): Voice {
-  const [embedded] = useState(() => isEmbeddedBrowser(navigator.userAgent));
+  // 인식과 합성은 gateVoice를 거쳐서만 만든다. 앱 안의 브라우저에서 음성 서비스를 불렀다가 페이지가 강제로 닫힌 일이 있다(embedded-browser.ts).
+  const [{ embedded, ...ports }] = useState(() =>
+    gateVoice(navigator.userAgent, { recognition: browserRecognition, speech: browserSpeech }),
+  );
   const [control] = useState<VoiceControl>(() =>
-    createVoiceControl({
-      // 앱 안의 브라우저에는 음성 기능을 넘기지 않는다. 불렀다가 페이지가 강제로 닫힌 일이 있다(embedded-browser.ts).
-      recognition: embedded ? null : browserRecognition(),
-      speech: embedded ? null : browserSpeech(),
-      memory: browserVoiceMemory(),
-      packMark: browserPackMark(),
-    }),
+    createVoiceControl({ ...ports, memory: browserVoiceMemory(), packMark: browserPackMark() }),
   );
   const state = useSyncExternalStore(control.subscribe, control.getState);
 
