@@ -252,7 +252,7 @@ VS Code처럼 앱 안에 들어 있는 브라우저에서는 음성을 켜지 �
 - **앱 안의 브라우저.**
   - 페이지가 닫힌 원인은 추정입니다. Electron에 Chrome의 음성 서비스가 없다고 보지만, 어느 호출에서 닫혔는지는 가르지 않았습니다.
   - 페이지가 닫힌 것을 본 곳은 VS Code 1.129.0(Electron 42.6.0) 안의 브라우저 하나입니다. 고친 화면(단추 없이 Chrome 안내)은 그 브라우저에서 아직 보지 않았습니다. 독립 검증이 음성 줄을 서버에서 그려 확인했습니다.
-  - VS Code 안의 브라우저에서 기기 흉내를 켜면 User-Agent가 바뀌어 가리지 못합니다(VS Code의 코드를 읽고 추론).
+  - VS Code 안의 브라우저에서 기기 흉내 막대를 켜기만 해서는 User-Agent가 그대로라 가려집니다. 준비된 기기(iPhone 15 Pro, iPhone SE, Pixel 8, iPad Mini)를 고르면 그 User-Agent에 `Electron/`이 없어 가리지 못합니다. User-Agent를 직접 넣어도 넣은 값에 `Electron/`이 없으면 마찬가지입니다. 한 번 고른 기기는 기억되어, 막대를 껐다 다시 켜면 그 기기의 User-Agent가 됩니다. 모두 VS Code 1.129.0의 코드를 읽고 한 추론입니다.
   - 다른 Electron 앱, User-Agent에서 `Electron/`을 지운 앱, Electron이 아닌 앱 안 브라우저(휴대폰 메신저의 브라우저 등)는 확인하지 못했습니다.
 
 ## 비용 상한
