@@ -1,8 +1,9 @@
 // verify 스킬의 공용 도우미: 실제 모델을 부를 수 없는 실행 환경, eval 명령 실행과 기록, 앱과 Chrome 띄우기, 단계 기록, 증거 폴더.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launchChrome } from './browser.mjs';
@@ -183,9 +184,15 @@ export function createHarness(feature, title, options) {
       throw new Error(`앱이 30초 안에 뜨지 않았다(${log}): ${tail}`);
     },
 
-    /** 창 없는 Chrome을 증거 폴더의 새 사용자 폴더(chrome-profile/)로 띄운다. 화면 사진도 증거 폴더에 남는다. */
+    /**
+     * 창 없는 Chrome을 이번 실행만의 새 사용자 폴더로 띄운다. 화면 사진은 증거 폴더에 남는다.
+     * 사용자 폴더는 증거가 아니고 실행마다 약 17MB라, 증거 폴더(지우지 않는 runs/) 대신 OS 임시 폴더에 두고 닫을 때 지운다.
+     */
     async browser() {
-      const page = await launchChrome({ profileDir: file('chrome-profile'), shotsDir: dir });
+      const profileDir = mkdtempSync(path.join(tmpdir(), 'dialogos-verify-chrome-'));
+      const removeProfile = () => rmSync(profileDir, { recursive: true, force: true });
+      closers.push(removeProfile);
+      const page = await launchChrome({ profileDir, shotsDir: dir });
       closers.push(page.close);
       return page;
     },

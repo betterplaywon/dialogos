@@ -84,7 +84,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `cmd-NN-<명령>.txt`: 실행한 명령, 종료 코드, 걸린 시간, 출력 전체.
 - eval이 쓴 파일: `transcripts.jsonl`, `labels.jsonl`, `meta.json`, `results.md`, `results.json`, `sample.csv`(사람 칸을 채운 것), `sample.key.json`.
 - `dialogue-<질문>-<조건>-<반복>.md`: 사람이 읽는 대화록. 턴마다 종류, 사용자의 말, 판정기의 결정(엔진만), 상대의 답, 채점기 라벨.
-- 화면 여정: `shot-NN-<단계>.png`(화면 사진), `app-NN.sqlite`(판 파일), `cmd-NN-app.txt`(앱을 띄운 명령과 출력), `chrome-profile/`(이번 실행만의 Chrome 사용자 폴더, 약 17MB).
+- 화면 여정: `shot-NN-<단계>.png`(화면 사진), `app-NN.sqlite`(판 파일), `cmd-NN-app.txt`(앱을 띄운 명령과 출력). Chrome 사용자 폴더는 증거가 아니라 OS 임시 폴더에 두고 닫을 때 지운다.
 - `result.json`: 단계 목록과 결과, 파일 목록.
 
 증거의 기준:

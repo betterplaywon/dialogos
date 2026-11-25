@@ -1,5 +1,5 @@
 // 화면 여정이 쓰는 실제 Chrome. 의존성 없이 DevTools 프로토콜(CDP)로 몬다.
-// 창 없는 Chrome을 증거 폴더 안의 새 사용자 폴더로 띄워, 사용자의 Chrome과 그 설정을 건드리지 않는다.
+// 창 없는 Chrome을 이번 실행만의 새 사용자 폴더(lib.mjs가 OS 임시 폴더에 만들고 닫을 때 지움)로 띄워, 사용자의 Chrome과 그 설정을 건드리지 않는다.
 // 누르기와 쓰기는 사람이 하는 길(마우스 이벤트, 글자 입력)로 보내고, 화면에 보이는 것은 글로 읽어 확인한다.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
