@@ -4,14 +4,15 @@
 // 그래서 인식이 틀려 손댄 턴만 고친 턴으로 세도록, 글자와 숫자만 놓고 견준다.
 // 고친 턴은 마지막 인식 글로 세고, 다시 말한 횟수는 따로 남긴다(2026-11-24 사용자 결정). 다시 말한 까닭(인식이 틀림, 쉼에 끊김,
 // 생각이 바뀜)은 가릴 수 없어, 고친 턴에 넣지 않고 따로 세어 둘을 나눠 볼 수 있게 한다.
+// 인식된 글을 손으로 모두 지운 뒤 말한 것도 다시 말한 것으로 센다(2026-11-25 사용자 결정).
 
 import type { TurnEntry, TurnInput, VoiceTally } from '../../server/contract.ts';
 
 /** 한 턴의 받아쓰기 기록. 보낼 때 넣은 방식과 다시 말한 횟수를 정한다(turnEntryOf). */
 export interface TurnDictation {
-  /** 보낼 글에 남아 있어야 할 인식 조각. 다시 말해 바꾼 조각은 뺀다. */
+  /** 보낼 글에 남아 있어야 할 인식 조각. 다시 말해 바꾸거나, 인식된 글을 손으로 모두 지운 뒤 다시 말하면 앞선 조각은 뺀다. */
   readonly segments: readonly string[];
-  /** 앞서 인식된 글을 다시 말해 바꾼 횟수. */
+  /** 앞서 인식된 글을 다시 말해 바꾸거나, 손으로 모두 지운 뒤 다시 말한 횟수. */
   readonly redone: number;
 }
 
@@ -36,9 +37,10 @@ const cutTo = (text: string, room: number): string =>
 /**
  * 들은 글을 입력 칸에 넣는다(2026-11-24 사용자 결정).
  * - 입력 칸이 이 턴의 마지막 인식 조각 그대로면(손대지 않았으면) 새로 들은 글로 바꾼다. 다시 말해도 글이 쌓이지 않는다.
- *   바뀐 조각은 기록에서 빼고 다시 말한 횟수를 하나 올린다.
  * - 직접 쓰거나 고친 글이 있으면 지우지 않고 끝에 붙인다. 빈 칸(공백뿐인 칸도)이면 그대로 넣는다.
  * - appendOnly면 바꾸지 않고 붙인다. 듣는 중에 음성을 끄면 알림 줄이 사라지므로, 그때 바꾸면 쓰던 글이 알림 없이 사라진다.
+ * 바꾸거나 빈 칸에 넣으면 앞선 조각은 입력 칸에 남지 않으므로 기록에서 빼고, 앞선 조각이 있었으면 다시 말한 횟수를 하나 올린다.
+ * 그래서 인식된 글을 손으로 모두 지운 뒤 말한 것도 다시 말한 것으로 센다(2026-11-25 사용자 결정).
  * 들은 글의 앞뒤 공백은 떼고 안의 이어진 공백은 하나로 줄이며, 남은 자리를 넘는 부분은 자른다.
  * 들은 글이 없거나 한 글자도 들어가지 못하면 입력 칸과 기록을 그대로 둔다.
  */
@@ -69,9 +71,10 @@ export function takeDictation(
       : base
         ? '쓰던 글은 두고 인식한 글을 끝에 붙였습니다. 고친 뒤 보내 주세요.'
         : '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.';
-  const next: TurnDictation = replace
-    ? { segments: [...turn.segments.slice(0, -1), text], redone: turn.redone + 1 }
-    : { segments: [...turn.segments, text], redone: turn.redone };
+  const next: TurnDictation =
+    base === ''
+      ? { segments: [text], redone: turn.redone + (turn.segments.length > 0 ? 1 : 0) }
+      : { segments: [...turn.segments, text], redone: turn.redone };
   return { draft: base + gap + text, turn: next, notice };
 }
 
@@ -83,7 +86,8 @@ const lettersOf = (text: string): string => text.normalize('NFC').replace(/[^\p{
  * 모든 조각이 보낼 글 안에 들어간 차례대로, 겹치지 않게 그대로 남아 있으면 'voice'다.
  * 낱말을 고쳤거나 인식된 글을 지우고 다시 썼으면 'voice-edited'다.
  * 인식된 글을 둔 채 앞뒤에 글로 덧붙인 것은 고친 것이 아니다.
- * 다시 말해 바꾼 조각은 takeDictation이 조각에서 빼므로 여기서 세지 않는다. 고친 턴은 마지막 인식 글로 센다.
+ * 다시 말해 바꾼 조각과, 인식된 글을 손으로 모두 지운 뒤 다시 말했을 때의 앞선 조각은 takeDictation이 조각에서 빼므로 여기서 세지 않는다.
+ * 고친 턴은 마지막 인식 글로 센다.
  */
 export function turnInputOf(sent: string, segments: readonly string[]): TurnInput {
   const spoken = segments.map(lettersOf).filter((segment) => segment !== '');

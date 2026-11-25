@@ -30,10 +30,16 @@ function makers() {
   return { made, make };
 }
 
+// VS Code가 아닌 Electron 앱의 꼴. 앱 이름은 꼴을 보이려고 지어낸 것이다. 가림이 VS Code만 보도록 좁아지면 이 꼴에서 실패한다.
+const OTHER_ELECTRON =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ExampleApp/3.2.1 Chrome/148.0.0.0 Electron/42.6.0 Safari/537.36';
+
 test('Electron으로 만든 앱 안의 브라우저(VS Code 등)에서는 인식과 합성을 만들지 않는다', () => {
-  const { made, make } = makers();
-  assert.deepEqual(gateVoice(VS_CODE, make), { embedded: true, recognition: null, speech: null });
-  assert.deepEqual(made, []);
+  for (const userAgent of [VS_CODE, OTHER_ELECTRON]) {
+    const { made, make } = makers();
+    assert.deepEqual(gateVoice(userAgent, make), { embedded: true, recognition: null, speech: null }, userAgent);
+    assert.deepEqual(made, [], userAgent);
+  }
 });
 
 test('Chrome, Edge, Safari, Firefox에서는 인식과 합성을 한 번씩 만들어 그대로 넘긴다', () => {
