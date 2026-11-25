@@ -1,11 +1,15 @@
 // 서버 주소를 부르는 함수. 실패하면 서버가 보낸 한국어 메시지를 담은 ApiError를 던진다.
 
 import type {
+  DeleteMemoryResponse,
+  EditMemoryRequest,
   EndRecordRequest,
   ErrorResponse,
   GamesResponse,
   GameView,
   Lean,
+  MemoriesResponse,
+  MemoryView,
   SideIndex,
   StartGameRequest,
   TopicsResponse,
@@ -49,6 +53,7 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 }
 
 const gamePath = (gameId: string) => `/api/games/${encodeURIComponent(gameId)}`;
+const memoryPath = (memoryId: string) => `/api/memories/${encodeURIComponent(memoryId)}`;
 
 export const api = {
   topics: () => call<TopicsResponse>('/api/topics'),
@@ -61,4 +66,9 @@ export const api = {
   end: (gameId: string) => call<GameView>(`${gamePath(gameId)}/end`, {}),
   record: (gameId: string, lean: Lean, verdict: Verdict) =>
     call<GameView>(`${gamePath(gameId)}/record`, { lean, verdict } satisfies EndRecordRequest),
+  /** 내 기억(최근 것부터 100개). topicId를 주면 그 주제만. */
+  memories: (topicId?: string) =>
+    call<MemoriesResponse>(topicId === undefined ? '/api/memories' : `/api/memories?topicId=${encodeURIComponent(topicId)}`),
+  editMemory: (memoryId: string, text: string) => call<MemoryView>(`${memoryPath(memoryId)}/edit`, { text } satisfies EditMemoryRequest),
+  deleteMemory: (memoryId: string) => call<DeleteMemoryResponse>(`${memoryPath(memoryId)}/delete`, {}),
 };
