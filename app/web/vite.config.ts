@@ -7,7 +7,8 @@ import { portsFromEnv } from '../server/port.ts';
 
 const webRoot = fileURLToPath(new URL('.', import.meta.url));
 const nodeModules = fileURLToPath(new URL('../../node_modules', import.meta.url));
-// 개발 서버(app/dev.ts)와 같은 환경 변수를 같은 함수로 읽는다. 값이 틀리면 개발 서버가 먼저 멈춘다.
+// 개발 서버(app/dev.ts)와 같은 환경 변수를 같은 함수로 읽는다. app:dev에서는 값이 틀리면 dev.ts의 devSetup이 먼저 멈추고,
+// 이 파일만 읽는 app:build는 여기서 같은 오류로 멈춘다.
 const ports = portsFromEnv(process.env);
 
 export default defineConfig({

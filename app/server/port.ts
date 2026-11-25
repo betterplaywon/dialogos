@@ -10,7 +10,7 @@ export interface DevPorts {
 }
 
 /** 환경 변수를 적지 않았을 때의 포트. */
-export const DEFAULT_PORTS: DevPorts = { api: 8787, web: 5173 };
+const DEFAULT_PORTS: DevPorts = { api: 8787, web: 5173 };
 
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;

@@ -2,7 +2,7 @@
 // 창 없는 Chrome을 이번 실행만의 새 사용자 폴더(lib.mjs가 OS 임시 폴더에 만들고 닫을 때 지움)로 띄워, 사용자의 Chrome과 그 설정을 건드리지 않는다.
 // 누르기와 쓰기는 사람이 하는 길(마우스 이벤트, 글자 입력)로 보내고, 화면에 보이는 것은 글로 읽어 확인한다.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const CHROME_CANDIDATES = [
@@ -41,8 +41,6 @@ const buttonExpr = (text) =>
  * 돌려주는 page의 close()는 Chrome을 닫고 프로세스가 끝날 때까지 기다린다. 여러 번 불러도 된다.
  */
 export async function launchChrome({ profileDir, shotsDir, width = 900, height = 1200 }) {
-  mkdirSync(profileDir, { recursive: true });
-  mkdirSync(shotsDir, { recursive: true });
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const chrome = spawn(
     chromePath(),
@@ -53,7 +51,7 @@ export async function launchChrome({ profileDir, shotsDir, width = 900, height =
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
-      // macOS 키체인을 묻지 않게 하고, 업데이트·동기화 같은 바깥 요청을 줄인다.
+      // macOS 키체인과 Linux 키링을 묻지 않게 하고, 업데이트·동기화 같은 바깥 요청을 줄이고, 소리를 끈다.
       '--use-mock-keychain',
       '--password-store=basic',
       '--disable-background-networking',
@@ -171,8 +169,8 @@ export async function launchChrome({ profileDir, shotsDir, width = 900, height =
   }
 
   /**
-   * 요소의 가운데를 마우스로 누른다. 요소가 나타나기를 5초까지 기다리고, 화면 안으로 굴려 위치가 멈춘 뒤,
-   * 그 자리에 실제로 그 요소가 있는지 보고 누른다.
+   * 요소의 가운데를 마우스로 누른다. 요소가 나타나기를 5초까지 기다리고, 화면 안으로 굴리고 위치가 잇달아 같게 나올 때까지
+   * (많아야 20번) 본 뒤, 그 자리에 그 요소가 있는지 보고 누른다.
    */
   async function clickAt(elementExpr, what) {
     let box = null;
@@ -247,10 +245,10 @@ export async function launchChrome({ profileDir, shotsDir, width = 900, height =
     choose: (name, index) =>
       clickAt(`document.querySelectorAll('input[name=${JSON.stringify(name)}]')[${index}]?.closest('label')`, `${name}의 ${index + 1}번째 칸`),
 
-    /** 입력 칸(selector)에 글을 친다. replace면 있던 글을 모두 고른 뒤 친다(덮어씀). 아니면 끝에 이어 친다. */
-    async type(selector, text, { replace = false } = {}) {
+    /** 입력 칸(selector)을 눌러 글 끝에 이어 친다. */
+    async type(selector, text) {
       await clickAt(`document.querySelector(${JSON.stringify(selector)})`, `입력 칸 ${selector}`);
-      await evaluate(`(() => { const t = document.querySelector(${JSON.stringify(selector)}); t.focus(); ${replace ? 't.select();' : 't.setSelectionRange(t.value.length, t.value.length);'} })()`);
+      await evaluate(`(() => { const t = document.querySelector(${JSON.stringify(selector)}); t.focus(); t.setSelectionRange(t.value.length, t.value.length); })()`);
       await send('Input.insertText', { text });
     },
 

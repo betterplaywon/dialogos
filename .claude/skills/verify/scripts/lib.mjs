@@ -50,7 +50,7 @@ async function freePorts(n) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pad = (n) => String(n).padStart(2, '0');
-/** 터미널 색 코드를 뗀 글. Vite의 출력에 들어 있다. */
+/** 터미널 색 코드를 뗀 글. Vite는 출력이 파이프여도 CI나 FORCE_COLOR가 있으면 색 코드를 넣는다. */
 const plain = (text) => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 export function stamp(now = new Date()) {
@@ -89,7 +89,7 @@ export function createHarness(feature, title, options) {
   const startedAt = new Date();
   let commands = 0;
   const file = (name) => path.join(dir, name);
-  /** 여정이 띄운 것(앱, Chrome)을 닫는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
+  /** 여정이 띄우거나 만든 것(앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
   const closers = [];
 
   return {
@@ -144,8 +144,8 @@ export function createHarness(feature, title, options) {
 
       const writeLog = (end) => {
         const lines = [
-          `$ APP_PORT=${api} APP_WEB_PORT=${web} APP_DB_PATH=${path.relative(ROOT, file(dbName))} npm run app:dev`,
-          '(.env를 읽지 않고, APP_*와 모델 연결 정보를 지운 환경에서 실행. 모델은 모의 모델)',
+          `$ APP_PORT=${api} APP_WEB_PORT=${web} APP_DB_PATH=${path.relative(ROOT, file(dbName))} node --import tsx app/dev.ts`,
+          '(npm run app:dev와 같은 진입점. .env를 읽지 않고, APP_*와 모델 연결 정보를 지운 환경에서 실행. 모델은 모의 모델)',
           `${end} · ${Date.now() - started}ms`,
           '',
           '--- 출력 ---',

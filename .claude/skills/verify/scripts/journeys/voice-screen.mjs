@@ -1,6 +1,6 @@
 // 음성으로 한 판의 입력 칸 규칙을 화면에서 확인한다: 켜기 → 말하기 → 다시 말하기 → 손댄 뒤 말하기 → 보내기 → 듣는 중에 끄기
 // → 보내기 → 앱 안 브라우저(VS Code)의 안내. 브라우저의 음성 인식과 음성 합성만 가짜로 바꾼다(브라우저 API 경계의 모의).
-// 가짜 인식기는 여정이 정한 글을 정한 때 내고, 가짜 합성기는 받은 글을 적어 두기만 한다. 실제 마이크와 소리는 쓰지 않는다.
+// 가짜 인식기는 여정이 정한 글을 정한 때 내고, 가짜 합성기는 받은 글을 적고, 소리 없이 start와 end를 낸다. 실제 마이크와 소리는 쓰지 않는다.
 // 단계 id와 기대값은 features/voice-screen.md에 있다.
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -155,7 +155,7 @@ export async function run(h) {
   let app;
   let page;
   const fake = () => page.evaluate('window.__fakeVoice.log');
-  /** 합성기에 간 글(빈 첫 읽기를 뺀 것)을 from번째부터 이은 것. */
+  /** 합성기에 간 글을 from번째 것부터 이어 글자와 숫자만 남긴 것. */
   const spokenSince = async (from) => letters((await fake()).spoken.slice(from).map((u) => u.text).join(''));
   const draft = () => page.value('#draft');
   const turnRow = (n) => {
