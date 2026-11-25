@@ -7,7 +7,7 @@ import type { ModelSource } from '../server/budget.ts';
 import type { GameView, GamesResponse, Lean, MemoriesResponse, MemoryView, PassedMemoryView, TurnResponse } from '../server/contract.ts';
 import { devSetup } from '../server/dev-setup.ts';
 import type { Topic } from '../server/games.ts';
-import { memoriesOf } from '../server/memory.ts';
+import { MAX_MEMORY_TEXT, memoriesOf, type MemoryRecord } from '../server/memory.ts';
 import { SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type EndRecord, type GameRecord, type TurnLog } from '../server/store.ts';
 import { loadFixtureTopics } from './topic-fixtures.ts';
@@ -395,6 +395,45 @@ test('기억 고치기는 제어 문자를 지우고 한 줄로 만든 뒤 1~200
   const folded = await call<MemoryView>('POST', edit, { text: '가\n\n\n'.repeat(100) });
   assert.deepEqual([folded.status, folded.data.text], [200, `${'가 '.repeat(99)}가`]);
   assert.equal((await call<MemoryView>('POST', edit, { text: '가'.repeat(200) })).status, 200);
+});
+
+test('기억 글자 수는 코드 포인트로 센다: 이모지 200자는 받고 201자는 받지 않는다', async (t) => {
+  for (const store of [new MemoryGameStore(), new SqliteGameStore(':memory:')]) {
+    t.after(() => (store instanceof SqliteGameStore ? store.close() : undefined));
+    const { call, playQ01, memoriesOfUser } = server({ store });
+    await call('POST', `/api/games/${await playQ01()}/record`, { lean: 1, verdict: 'debate' });
+    const [first] = await memoriesOfUser();
+    if (!first) throw new Error('기억이 없습니다.');
+    const edit = `/api/memories/${first.id}/edit`;
+    // UTF-16 단위(.length)로 세면 400자라 받지 않았을 글이다. SQLite의 length()도 코드 포인트로 센다.
+    const emoji = '😀'.repeat(MAX_MEMORY_TEXT);
+    const accepted = await call<MemoryView>('POST', edit, { text: emoji });
+    assert.deepEqual([accepted.status, accepted.data.text], [200, emoji]);
+    assert.equal((await call('POST', edit, { text: `${emoji}😀` })).status, 400);
+    assert.equal((await memoriesOfUser())[0]?.text, emoji);
+  }
+});
+
+test('기억 목록은 최근 100개까지이고, 주제를 골라도 같다', async () => {
+  const store = new MemoryGameStore();
+  const { memoriesOfUser } = server({ store });
+  const game = recorded({ turns: [turn(1, '첫 말입니다.')] }, -1);
+  await store.create(game);
+  // 만든 시각이 1분씩 늦어지는 기억 101개. 가장 이른 m0이 빠져야 한다.
+  const many: MemoryRecord[] = Array.from({ length: 101 }, (_, i) => ({
+    id: `m${i}`,
+    userId: 'local',
+    gameId: game.id,
+    topicId: game.topicId,
+    side: game.side,
+    kind: 'claim',
+    text: `기억 ${i}`,
+    createdAt: new Date(Date.UTC(2026, 10, 25, 0, i)).toISOString(),
+  }));
+  await store.save(game, many);
+  const newest = Array.from({ length: 100 }, (_, i) => `m${100 - i}`);
+  assert.deepEqual((await memoriesOfUser()).map((m) => m.id), newest);
+  assert.deepEqual((await memoriesOfUser('local', `?topicId=${game.topicId}`)).map((m) => m.id), newest);
 });
 
 test('남의 기억은 목록에 나오지 않고, 고치거나 지우면 없는 기록(404)이다', async () => {

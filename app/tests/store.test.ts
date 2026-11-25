@@ -444,6 +444,20 @@ for (const [name, open] of stores) {
     assert.deepEqual(sortedIds(await store.findMemories('someone-else', ['g2-y', 'g4-z'])), ['g4-z']);
   });
 
+  test(`${name} 저장소: 기억을 지워도 그 판의 턴은 그대로 남는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    const game = recordedAt('g1', '2026-11-19T01:00:00.000Z', { turns: [engineTurn, unreadableTurn] });
+    await store.create({ ...game, endedAt: undefined, endReason: undefined, record: undefined });
+    await store.save(game, memoriesFor(game, ['claim', 'ground']));
+    const before = await store.get('g1');
+    assert.equal(before?.turns.length, 2);
+    for (const id of ['g1-z', 'g1-y']) assert.equal(await store.deleteMemory('local', id), true);
+    assert.deepEqual(await store.listMemories('local', { limit: 10 }), []);
+    assert.deepEqual(await store.get('g1'), before);
+    assert.equal(await store.countTurnsSince('local', '2026-11-19T00:00:00.000Z'), 2);
+  });
+
   test(`${name} 저장소: 기억을 넣지 못하면 끝 기록과 판의 변경도 남지 않는다`, async (t) => {
     const store = open();
     t.after(() => store.close?.());
@@ -469,6 +483,23 @@ for (const [name, open] of stores) {
     assert.deepEqual(idsOf(await store.listMemories('local', { limit: 1 })), ['g5-z']);
   });
 }
+
+test('메모리 저장소: 판이 상한을 넘어 가장 먼저 만든 판을 지우면 그 판의 기억도 함께 지운다', async () => {
+  const store = new MemoryGameStore(2);
+  for (const [id, at] of [
+    ['g1', '2026-11-19T01:00:00.000Z'],
+    ['g2', '2026-11-19T02:00:00.000Z'],
+  ] as const) {
+    const game = recordedAt(id, at);
+    await store.create({ ...game, endedAt: undefined, endReason: undefined, record: undefined });
+    await store.save(game, memoriesFor(game, ['claim', 'shift']));
+  }
+  assert.deepEqual(idsOf(await store.listMemories('local', { limit: 10 })), ['g2-z', 'g2-y', 'g1-z', 'g1-y']);
+  await store.create(sample({ id: 'g3' }));
+  assert.equal(await store.get('g1'), undefined);
+  assert.deepEqual(idsOf(await store.listMemories('local', { limit: 10 })), ['g2-z', 'g2-y']);
+  assert.deepEqual(await store.findMemories('local', ['g1-z', 'g1-y']), []);
+});
 
 test('메모리 저장소와 SQLite 저장소는 같은 기억과 고치기, 지우기에 같은 목록을 같은 차례로 낸다', async (t) => {
   const inMemory = new MemoryGameStore();
