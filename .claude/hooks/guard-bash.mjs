@@ -28,9 +28,10 @@ function globToRegExp(glob) {
   return new RegExp(`${re}$`);
 }
 
-// 사람이 머지하는 경로: 에이전트가 할 수 있는 일을 정하고 지키는 파일(가드와 훅, 권한, CI, 규칙 문서).
-// 에이전트가 이 파일을 고쳐 스스로 머지하면 자기 제약을 풀 수 있다. 그 밖의 경로는 독립 검증이 사람 몫의 검토를 더해 본다(CLAUDE.md '자율 범위').
-const SENSITIVE = ['.claude/hooks/**', '.claude/settings.json', '.github/workflows/**', 'CLAUDE.md', 'AGENTS.md'].map(globToRegExp);
+// 사람이 머지하는 경로: 에이전트가 할 수 있는 일을 정하고 지키는 파일(가드와 훅, 권한과 로컬 설정, CI와 npm 설정, 규칙 문서).
+// 에이전트가 이 파일을 고쳐 스스로 머지하면 자기 제약을 풀 수 있다. 로컬 설정은 훅을 끌 수 있고, npm 설정은 게이트(npm run check)를 돌리는 셸을 바꿀 수 있다.
+// 그 밖의 경로는 독립 검증이 사람 몫의 검토를 더해 본다(CLAUDE.md '자율 범위').
+const SENSITIVE = ['.claude/hooks/**', '.claude/settings*.json', '.github/workflows/**', '.npmrc', 'CLAUDE.md', 'AGENTS.md'].map(globToRegExp);
 
 const COMMIT_SUBJECT = /^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([a-z0-9,./-]+\))?!?: \S/;
 
@@ -92,13 +93,6 @@ function toplevel() {
   return git(['rev-parse', '--show-toplevel'], cwd);
 }
 
-function packageName(dir) {
-  try {
-    return JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).name;
-  } catch {
-    return null;
-  }
-}
 
 function ghJson(args) {
   const out = run('gh', args, { cwd, timeout: 30_000 });
@@ -295,13 +289,19 @@ function checkGhApi(seg, words) {
   return publicTextProblem(command);
 }
 
+// gh pr merge에서 값을 하나 더 받는 옵션. 그 값은 PR을 가리키는 자리 인자가 아니다.
+const MERGE_VALUE_FLAGS = new Set(['--match-head-commit', '-t', '--subject', '-b', '--body', '-F', '--body-file', '-A', '--author-email', '-R', '--repo']);
+
+// 머지할 PR은 글자 그대로의 번호나 PR 주소로만 받는다. 브랜치 이름이나 변수($N), 생략(지금 브랜치)은
+// 가드가 보는 PR과 gh가 머지하는 PR이 달라질 수 있어서 받지 않는다.
 function prNumber(words) {
-  for (const w of words.slice(3)) {
-    const fromUrl = w.match(/\/pull\/(\d+)/);
-    if (fromUrl) return Number(fromUrl[1]);
-    if (/^\d+$/.test(w)) return Number(w);
+  for (let i = 3; i < words.length; i += 1) {
+    const w = words[i];
+    if (MERGE_VALUE_FLAGS.has(w)) i += 1;
+    else if (w.startsWith('-')) continue;
+    else return Number(w.match(/^\d+$/)?.[0] ?? w.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)\/?$/)?.[1] ?? NaN) || null;
   }
-  return ghJson(['pr', 'view', '--json', 'number'])?.number ?? null;
+  return null;
 }
 
 function checkPassed(c) {
@@ -317,14 +317,16 @@ function checkMerge(words) {
   // 독립 검증의 판정은 한 head에 대한 것이다. 검증 뒤에 커밋이 더해지면 GitHub이 머지를 거절하게 head를 못박는다.
   if (!words.some((w) => w === '--match-head-commit' || w.startsWith('--match-head-commit=')))
     return '검증한 head로 머지한다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>';
+  if (words.some((w) => w === '-R' || w === '--repo' || w.startsWith('--repo='))) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
   const number = prNumber(words);
-  if (!number) return 'PR 번호를 알 수 없다. gh pr merge <번호> --merge';
+  if (!number) return 'PR 번호를 글자 그대로 적는다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>. 브랜치 이름, 변수, 생략은 받지 않는다.';
   const info = ghJson(['pr', 'view', String(number), '--json', 'files,isDraft,state,statusCheckRollup']);
   if (!info) return `PR #${number} 정보를 읽지 못했다.`;
   if (info.isDraft) return `PR #${number}는 draft다. gh pr ready 뒤에 머지한다.`;
   const hits = (info.files ?? []).map((f) => f.path).filter((p) => SENSITIVE.some((re) => re.test(p)));
   if (hits.length)
     return `PR #${number}는 사람이 머지하는 경로를 건드린다:\n${hits.map((h) => `  ${h}`).join('\n')}\nmerge-ready로 보고하고 멈춘다.`;
+  if ((info.statusCheckRollup ?? []).length === 0) return `PR #${number}에 체크가 하나도 없다. CI가 돈 뒤 머지한다.`;
   const notGreen = (info.statusCheckRollup ?? []).filter((c) => !checkPassed(c));
   if (notGreen.length)
     return `PR #${number}의 체크가 녹색이 아니다: ${notGreen.map((c) => `${c.name ?? c.context}=${c.conclusion || c.state || c.status}`).join(', ')}. 녹색이 된 뒤 머지한다.`;
@@ -389,8 +391,10 @@ function stagedProblem(words) {
 }
 
 // 커밋 전 게이트: npm run check(형식 검사와 검사, 4초 안팎). CI도 같은 명령을 돌린다.
+// 이 저장소인지는 가드 파일이 있는지로 본다. package.json은 에이전트가 머지하는 경로라 그 name으로 보면 에이전트가 게이트를 끌 수 있다.
+// 가드 검사의 임시 저장소에는 가드 파일이 없어 게이트가 돌지 않는다.
 function runCommitGate(top) {
-  if (packageName(top) !== 'dialogos') return null;
+  if (!existsSync(path.join(top, '.claude', 'hooks', 'guard-bash.mjs'))) return null;
   try {
     execFileSync('npm', ['run', 'check'], { cwd: top, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 180_000 });
   } catch (e) {
@@ -502,6 +506,15 @@ const WRAPPERS = new Map([
   ['stdbuf', { withValue: ['-i', '-o', '-e'] }],
   ['caffeinate', { withValue: ['-t', '-w'] }],
   ['xargs', { withValue: ['-I', '-n', '-P', '-L', '-s', '-E', '-d', '-a'] }],
+  // 셸 예약어 뒤에 오는 명령(`for … do 명령`, `if 명령; then 명령`, `else 명령`)도 같은 규칙으로 본다.
+  ['do', { withValue: [] }],
+  ['then', { withValue: [] }],
+  ['else', { withValue: [] }],
+  ['elif', { withValue: [] }],
+  ['if', { withValue: [] }],
+  ['while', { withValue: [] }],
+  ['until', { withValue: [] }],
+  ['function', { withValue: [], positional: 1 }],
 ]);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -521,6 +534,11 @@ function unwrap(words) {
     const head = rest[0].replace(/^[({!\\]+/, '');
     if (head !== rest[0]) {
       rest = head ? [head, ...rest.slice(1)] : rest.slice(1);
+      continue;
+    }
+    // 함수 정의 `f() { 명령; }`의 이름은 걷어 내고 본문의 명령을 본다.
+    if (/^[\w.-]+\(\)$/.test(head)) {
+      rest = rest.slice(1);
       continue;
     }
     if (ASSIGNMENT.test(head)) {
