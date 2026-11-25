@@ -23,6 +23,7 @@ function sample(overrides: Partial<GameRecord> = {}): GameRecord {
     side: 0,
     cardId: 'utilitarian',
     mode: 'engine',
+    memory: true,
     startLean: -1,
     history: [
       { role: 'user', content: '첫 말' },
@@ -252,6 +253,18 @@ for (const [name, open] of stores) {
     );
     const [summary] = await store.list('local', 1);
     assert.deepEqual([summary?.turns, summary?.voice], [4, { turns: 3, edited: 1, redone: 1 }]);
+  });
+
+  test(`${name} 저장소: 판이 기억을 쓰는지는 만들 때 정한 대로 남고, 다른 값으로 저장해도 바뀌지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await store.create(sample({ id: 'on' }));
+    await store.create(sample({ id: 'off', memory: false }));
+    assert.deepEqual([(await store.get('on'))?.memory, (await store.get('off'))?.memory], [true, false]);
+    await store.save(sample({ id: 'on', memory: false, turns: [promptTurn] }));
+    await store.save(sample({ id: 'off', memory: true, turns: [promptTurn] }));
+    assert.deepEqual([(await store.get('on'))?.memory, (await store.get('off'))?.memory], [true, false]);
+    assert.deepEqual((await store.get('off'))?.turns, [promptTurn]);
   });
 
   test(`${name} 저장소: 턴마다 상대에게 넘긴 기억의 id가 넘긴 차례대로 남고, 넘기지 않은 턴은 빈 목록이다`, async (t) => {
@@ -540,6 +553,8 @@ test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고,
     side: 1,
     cardId: 'utilitarian',
     mode: 'engine',
+    // 스키마 7 전에 시작한 판은 기억을 쓰지 않는 판으로 읽는다.
+    memory: false,
     startLean: 0,
     history: [],
     conceded: ['P1'],
@@ -557,7 +572,7 @@ test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고,
   assert.deepEqual(await store.get('old'), game);
 });
 
-test('SQLite 저장소: 스키마 6의 파일을 열면 턴에 넘긴 기억 칸을 더하고, 예전 턴은 기억을 넘기지 않은 턴(빈 목록)으로 읽는다', async (t) => {
+test('SQLite 저장소: 스키마 6의 파일을 열면 판의 기억 사용과 턴에 넘긴 기억 칸을 더하고, 예전 판은 기억을 끈 판, 예전 턴은 빈 목록으로 읽는다', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dialogos-migrate-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'app.sqlite');
@@ -584,6 +599,8 @@ test('SQLite 저장소: 스키마 6의 파일을 열면 턴에 넘긴 기억 칸
   t.after(() => store.close());
   assert.equal(store.schemaVersion, MIGRATIONS.length);
   const game = await store.get('old');
+  // 어떻게 시작했는지(눈가림 비교였는지) 모르는 판이라 기억을 끈 판으로 읽는다.
+  assert.equal(game?.memory, false);
   assert.deepEqual(game?.turns, [promptTurn]);
   // 예전 판을 이어 가면 새 턴부터 넘긴 기억이 남는다.
   await store.save({ ...game!, turns: [...game!.turns, { ...promptTurn, n: 2, memoryIds: ['m1', 'm2'] }] });
@@ -791,6 +808,7 @@ test('SQLite 저장소: 스키마 3의 파일을 열면 원장을 더하고, 예
     side: 0,
     cardId: 'utilitarian',
     mode: 'prompt',
+    memory: false,
     startLean: -1,
     history: [],
     conceded: [],

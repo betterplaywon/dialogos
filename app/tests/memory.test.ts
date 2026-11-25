@@ -50,6 +50,7 @@ function recorded(overrides: Partial<GameRecord>, lean: Lean): GameRecord & { re
     side: 0,
     cardId: 'deontologist',
     mode: 'engine',
+    memory: true,
     startLean: -1,
     history: [],
     conceded: [],
@@ -539,7 +540,7 @@ test('판 도중에 지운 기억은 다음 턴부터 넘기지 않고, 고친 �
   );
 });
 
-test('기억을 끈 서버는 저장된 기억이 있어도 넘기지 않고, 턴에 빈 목록을 남긴다', async () => {
+test('기억을 끈 서버로 시작한 판은 저장된 기억이 있어도 넘기지 않고, 턴에 빈 목록을 남긴다', async () => {
   const store = new MemoryGameStore();
   const on = server({ store, now: ticking() });
   await on.call('POST', `/api/games/${await on.playQ01()}/record`, { lean: 1, verdict: 'debate' });
@@ -572,6 +573,34 @@ test('다른 주제의 기억과 남의 기억은 넘기지 않는다', async ()
   assert.deepEqual(systems.slice(before).map(passedTexts), [null, null]);
   for (const id of [others.data.id, elsewhere.data.id]) {
     assert.deepEqual((await store.get(id))?.turns.map((turn) => turn.memoryIds), [[]]);
+  }
+});
+
+test('기억을 끈 서버(눈가림 비교)로 시작한 판은 기억을 켠 서버로 이어 하고 기록해도 기억을 넘기지도 만들지도 않는다', async (t) => {
+  for (const store of [new MemoryGameStore(), new SqliteGameStore(':memory:')]) {
+    t.after(() => (store instanceof SqliteGameStore ? store.close() : undefined));
+    // 기억을 켠 서버로 같은 주제의 기억을 먼저 만든다.
+    const on = server({ store, now: ticking() });
+    await on.call('POST', `/api/games/${await on.playQ01()}/record`, { lean: 1, verdict: 'debate' });
+    assert.equal((await on.memoriesOfUser()).length, 4);
+
+    const random = await devSetup({ APP_MODE: 'random' });
+    let blindIds = 0;
+    const blind = server({ store, pickMode: random.pickMode, memory: random.memory, now: ticking(), newId: () => `blind${++blindIds}` });
+    const game = await blind.call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 });
+    assert.equal(game.status, 201);
+
+    // 같은 저장소를 기억을 켠 서버로 다시 띄워 그 판을 이어 한다.
+    const { models, systems } = recording();
+    let againIds = 0;
+    const again = server({ store, models, now: ticking(), newId: () => `again${++againIds}` });
+    const turn = await again.call<TurnResponse>('POST', `/api/games/${game.data.id}/turns`, { text: '이어 한 판의 말입니다.' });
+    assert.deepEqual([turn.status, turn.data.memories], [200, []]);
+    assert.deepEqual(systems.map(passedTexts), [null]);
+    assert.equal((await again.call('POST', `/api/games/${game.data.id}/end`)).status, 200);
+    assert.equal((await again.call('POST', `/api/games/${game.data.id}/record`, { lean: 1, verdict: 'debate' })).status, 200);
+    assert.equal((await again.memoriesOfUser()).length, 4);
+    assert.deepEqual((await again.call<GameView>('GET', `/api/games/${game.data.id}`)).data.passed, []);
   }
 });
 

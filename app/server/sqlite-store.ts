@@ -75,9 +75,11 @@ export const MIGRATIONS: readonly string[] = [
      edited_at TEXT
    );
    CREATE INDEX memories_by_user ON memories (user_id, topic_id, created_at);`,
-  // 7: 턴마다 상대에게 넘긴 기억의 id(JSON 배열). 글은 남기지 않아, 지운 기억의 글이 판 화면에 다시 나오지 않는다.
-  // 그 전에 저장한 턴은 기억을 넘기지 않았으므로 빈 목록이다.
-  `ALTER TABLE turns ADD COLUMN memory_ids TEXT NOT NULL DEFAULT '[]';`,
+  // 7: 판이 기억을 쓰는지와, 턴마다 상대에게 넘긴 기억의 id(JSON 배열).
+  // 그 전에 시작한 판은 어떻게 시작했는지(눈가림 비교였는지) 몰라 기억을 끈 판(0)으로 둔다.
+  // 넘긴 기억은 글을 남기지 않아, 지운 기억의 글이 판 화면에 다시 나오지 않는다. 그 전의 턴은 기억을 넘기지 않았으므로 빈 목록이다.
+  `ALTER TABLE games ADD COLUMN memory INTEGER NOT NULL DEFAULT 0 CHECK (memory IN (0, 1));
+   ALTER TABLE turns ADD COLUMN memory_ids TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -90,6 +92,7 @@ interface GameRow {
   side: number;
   card_id: string;
   mode: string;
+  memory: number;
   history: string;
   conceded: string;
   start_lean: number | null;
@@ -262,9 +265,9 @@ export class SqliteGameStore implements GameStore {
     this.#transaction(() => {
       this.#db
         .prepare(
-          `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, history, conceded, start_lean, started_at,
+          `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, memory, history, conceded, start_lean, started_at,
                               ended_at, end_reason, end_lean, verdict, recorded_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           game.id,
@@ -273,6 +276,7 @@ export class SqliteGameStore implements GameStore {
           game.side,
           game.cardId,
           game.mode,
+          game.memory ? 1 : 0,
           JSON.stringify(game.history),
           JSON.stringify(game.conceded),
           game.startLean,
@@ -299,6 +303,7 @@ export class SqliteGameStore implements GameStore {
       side: row.side as SideIndex,
       cardId: row.card_id,
       mode: row.mode as Mode,
+      memory: row.memory === 1,
       startLean: row.start_lean as Lean | null,
       history: JSON.parse(row.history) as ChatMessage[],
       conceded: JSON.parse(row.conceded) as string[],
@@ -311,7 +316,7 @@ export class SqliteGameStore implements GameStore {
   }
 
   /**
-   * 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기).
+   * 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기). 판이 기억을 쓰는지는 만들 때만 적는다.
    * 새 기억은 판과 같은 트랜잭션으로 넣는다. 하나라도 넣지 못하면 판의 변경도 되돌린다.
    */
   async save(game: GameRecord, newMemories: readonly MemoryRecord[] = []): Promise<void> {

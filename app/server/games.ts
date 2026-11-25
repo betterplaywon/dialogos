@@ -84,8 +84,9 @@ export interface GameDeps {
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
   /**
-   * 끝 기록을 남길 때 기억을 만들고, 턴마다 같은 주제의 기억을 상대에게 넘기는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
+   * 새 판이 기억을 쓰는지(턴마다 같은 주제의 기억을 상대에게 넘기고, 끝 기록 때 기억을 만든다). 기억의 근거와 약점은 판정기의 판단을 드러내므로,
    * 눈가림 비교(APP_MODE=random)에서는 끈다(2026-11-25 사용자 결정, dev-setup.ts).
+   * 판을 시작할 때 판에 남기고(GameRecord.memory), 그 판의 턴과 끝 기록은 이 설정이 아니라 판에 남긴 값을 따른다.
    */
   memory: boolean;
   newId: () => string;
@@ -317,6 +318,7 @@ export function createGames(deps: GameDeps) {
         side,
         cardId: matchup.card.id,
         mode: deps.pickMode(),
+        memory: deps.memory,
         startLean: lean,
         history: state.history,
         conceded: [...state.conceded],
@@ -333,7 +335,7 @@ export function createGames(deps: GameDeps) {
 
     /**
      * entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다.
-     * 기억이 켜져 있으면 상한을 확인한 뒤, 모델을 부르기 전에 같은 주제의 최근 기억을 찾아 상대의 지시문으로 넘기고
+     * 판이 기억을 쓰면 상한을 확인한 뒤, 모델을 부르기 전에 같은 주제의 최근 기억을 찾아 상대의 지시문으로 넘기고
      * 그 id를 턴에 남긴다. 턴마다 다시 찾으므로 판 도중에 지우거나 고친 기억은 다음 턴부터 반영된다.
      */
     async turn(userId: string, id: string, rawText: string, entry: TurnEntry): Promise<TurnResponse> {
@@ -347,7 +349,7 @@ export function createGames(deps: GameDeps) {
         const matchup = matchupOf(game);
         return oneTurnPerUser(userId, async () => {
           await checkLimits(userId);
-          const passed = deps.memory
+          const passed = game.memory
             ? await deps.store.listMemories(userId, { topicId: game.topicId, limit: MEMORIES_PER_TURN })
             : [];
           const state = { history: game.history, conceded: new Set(game.conceded) };
@@ -404,7 +406,7 @@ export function createGames(deps: GameDeps) {
 
     /**
      * 끝난 판에 사후 입장과 훈계 문항의 답을 남긴다. 한 번 남기면 바꾸지 않는다.
-     * 기억이 켜져 있으면 이 판의 기억을 규칙으로 만들어 끝 기록과 함께 저장한다. 기억을 넣지 못하면 끝 기록도 남지 않는다.
+     * 판이 기억을 쓰면 이 판의 기억을 규칙으로 만들어 끝 기록과 함께 저장한다. 기억을 넣지 못하면 끝 기록도 남지 않는다.
      */
     async record(userId: string, id: string, lean: Lean, verdict: Verdict): Promise<GameView> {
       return exclusive(userId, id, async () => {
@@ -412,7 +414,7 @@ export function createGames(deps: GameDeps) {
         if (!game.endedAt) throw new GameError(409, '아직 끝나지 않은 판입니다. 판을 끝낸 뒤에 남겨 주세요.');
         if (game.record) throw new GameError(409, '이 판에는 이미 기록을 남겼습니다.');
         const recorded = { ...game, record: { lean, verdict, at: deps.now().toISOString() } };
-        const memories = deps.memory ? memoriesOf(recorded, topicOf(recorded), deps.newId) : [];
+        const memories = recorded.memory ? memoriesOf(recorded, topicOf(recorded), deps.newId) : [];
         await deps.store.save(recorded, memories);
         return viewOf(recorded);
       });
