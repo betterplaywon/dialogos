@@ -158,6 +158,37 @@ test('밀어붙이기는 두 번부터 약점이고, 판정기를 읽지 못한 
   ]);
 });
 
+test('기억 글은 늘 한 줄이다: 말, 전제, 입장의 줄바꿈과 탭은 공백 하나가 된다', () => {
+  const matchup = x01.sides[0].matchup;
+  if (!matchup) throw new Error('x01 첫째 쪽의 상대가 없습니다.');
+  const premises = [{ id: 'P1', flaw: 'overgeneralization' as const, text: '줄이\n나뉜\t전제입니다.' }];
+  const topic: Topic = {
+    ...x01,
+    sides: [
+      { stance: '그렇게\n해도   됩니다.\n', matchup: { ...matchup, question: { ...matchup.question, premises } } },
+      { ...x01.sides[1], stance: '그렇게\t해서는\r\n안 됩니다.' },
+    ],
+  };
+  const game = recorded(
+    {
+      turns: [
+        turn(1, '첫 줄입니다.\r\n\t둘째 줄입니다.', argument('P1')),
+        turn(2, '\n되풀이\n\n합니다.', push('repeat')),
+        turn(3, '되풀이 합니다.', push('repeat')),
+      ],
+    },
+    2,
+  );
+  const texts = kindsAndTexts(game, topic);
+  assert.deepEqual(texts, [
+    ['claim', '지킨 입장: 그렇게 해도 됩니다. 첫 말: "첫 줄입니다. 둘째 줄입니다."'],
+    ['ground', '상대가 전제를 거둔 말: "첫 줄입니다. 둘째 줄입니다." (거둔 전제: 줄이 나뉜 전제입니다.)'],
+    ['shift', '생각이 바뀜: 대체로 "그렇게 해도 됩니다." → 확실히 "그렇게 해서는 안 됩니다."'],
+    ['weakness', '근거 없이 밀어붙인 턴: 같은 주장 되풀이 2번'],
+  ]);
+  for (const [, text] of texts) assert.doesNotMatch(String(text), /[^\S ]|\s{2}|^\s|\s$/);
+});
+
 test('긴 입장과 말은 정한 글자 수로 자르고 끝에 말줄임표를 붙인다(이모지도 한 자로 센다)', () => {
   const longStance = `${'가'.repeat(70)}.`;
   const topic: Topic = { ...x01, sides: [{ ...x01.sides[0], stance: longStance }, x01.sides[1]] };
@@ -177,6 +208,9 @@ test('긴 입장과 말은 정한 글자 수로 자르고 끝에 말줄임표를
     ['ground', `상대가 전제를 거둔 말: "${'😀'.repeat(119)}…" (거둔 전제: ${'전'.repeat(49)}…)`],
     ['shift', `생각이 바뀜: 대체로 "${'가'.repeat(39)}…" → 대체로 "그렇게 해서는 안 됩니다."`],
   ]);
+  // 한 줄로 만든 뒤에 센다. 줄바꿈을 공백 하나로 바꾸면 110자 안에 든다.
+  const folded = recorded({ turns: [turn(1, '나\n\n'.repeat(55))] }, -1);
+  assert.deepEqual(kindsAndTexts(folded)[0], ['claim', `지킨 입장: 그렇게 해도 됩니다. 첫 말: "${'나 '.repeat(54)}나"`]);
   // 정한 글자 수까지는 자르지 않는다.
   const exact = recorded({ turns: [turn(1, '나'.repeat(110))] }, -1);
   assert.deepEqual(kindsAndTexts(exact)[0], ['claim', `지킨 입장: 그렇게 해도 됩니다. 첫 말: "${'나'.repeat(110)}"`]);

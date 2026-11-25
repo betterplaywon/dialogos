@@ -35,10 +35,18 @@ export const MEMORIES_PER_TURN = 3;
  */
 export const memoryLength = (text: string): number => [...text].length;
 
-/** n자를 넘으면 n-1자에 '…'를 붙여 n자로 줄인다. */
+/**
+ * 기억 글을 한 줄로 만든다. 공백 문자 묶음(줄바꿈, 탭 포함)을 공백 하나로 바꾸고 앞뒤를 다듬는다.
+ * 상대의 지시문은 기억마다 '- ' 한 줄로 넣는데, 턴 원문에는 줄바꿈이 남아 있을 수 있다.
+ * 기억을 만들 때(턴 원문, 전제 글, 입장 글)와 사용자가 고친 글을 받을 때 모두 이것을 거친 뒤에 길이를 재고 자른다.
+ */
+export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/** 한 줄로 만든 뒤, n자를 넘으면 n-1자에 '…'를 붙여 n자로 줄인다. 기억 글에 넣는 조각은 모두 이것을 거친다. */
 function clip(text: string, n: number): string {
-  const chars = [...text];
-  return chars.length > n ? `${chars.slice(0, n - 1).join('')}…` : text;
+  const line = oneLine(text);
+  const chars = [...line];
+  return chars.length > n ? `${chars.slice(0, n - 1).join('')}…` : line;
 }
 
 /** 판정기가 '근거 없이 밀어붙임'으로 본 방식과 약점 글의 이름. 이 순서로 적는다. */
@@ -63,7 +71,7 @@ export function memoriesOf(game: GameRecord & { record: EndRecord }, topic: Topi
   const texts: [MemoryKind, string][] = [];
 
   // 입장 글은 모두 마침표로 끝나므로, 뒤에 붙이는 마침표와 겹치지 않게 하나를 뗀다.
-  const kept = sides[game.side].stance.replace(/\.$/, '');
+  const kept = oneLine(sides[game.side].stance).replace(/\.$/, '');
   texts.push(['claim', `지킨 입장: ${clip(kept, 60)}. 첫 말: "${clip(first.user, 110)}"`]);
 
   const premises = sides[game.side].matchup?.question.premises ?? [];
