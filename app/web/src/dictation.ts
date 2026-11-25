@@ -10,7 +10,7 @@ import type { TurnEntry, TurnInput, VoiceTally } from '../../server/contract.ts'
 
 /** 한 턴의 받아쓰기 기록. 보낼 때 넣은 방식과 다시 말한 횟수를 정한다(turnEntryOf). */
 export interface TurnDictation {
-  /** 보낼 글에 남아 있어야 할 인식 조각. 다시 말해 바꾸거나 손으로 모두 지운 조각은 뺀다. */
+  /** 보낼 글에 남아 있어야 할 인식 조각. 다시 말해 바꾸거나, 인식된 글을 손으로 모두 지운 뒤 다시 말하면 앞선 조각은 뺀다. */
   readonly segments: readonly string[];
   /** 앞서 인식된 글을 다시 말해 바꾸거나, 손으로 모두 지운 뒤 다시 말한 횟수. */
   readonly redone: number;
@@ -71,7 +71,6 @@ export function takeDictation(
       : base
         ? '쓰던 글은 두고 인식한 글을 끝에 붙였습니다. 고친 뒤 보내 주세요.'
         : '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.';
-  // 들은 글이 입력 칸을 통째로 차지하면(바꾸거나 빈 칸에 넣으면) 앞선 조각은 입력 칸에 하나도 남지 않는다.
   const next: TurnDictation =
     base === ''
       ? { segments: [text], redone: turn.redone + (turn.segments.length > 0 ? 1 : 0) }
@@ -87,7 +86,8 @@ const lettersOf = (text: string): string => text.normalize('NFC').replace(/[^\p{
  * 모든 조각이 보낼 글 안에 들어간 차례대로, 겹치지 않게 그대로 남아 있으면 'voice'다.
  * 낱말을 고쳤거나 인식된 글을 지우고 다시 썼으면 'voice-edited'다.
  * 인식된 글을 둔 채 앞뒤에 글로 덧붙인 것은 고친 것이 아니다.
- * 다시 말해 바꾸거나 손으로 모두 지운 조각은 takeDictation이 조각에서 빼므로 여기서 세지 않는다. 고친 턴은 마지막 인식 글로 센다.
+ * 다시 말해 바꾼 조각과, 인식된 글을 손으로 모두 지운 뒤 다시 말했을 때의 앞선 조각은 takeDictation이 조각에서 빼므로 여기서 세지 않는다.
+ * 고친 턴은 마지막 인식 글로 센다.
  */
 export function turnInputOf(sent: string, segments: readonly string[]): TurnInput {
   const spoken = segments.map(lettersOf).filter((segment) => segment !== '');
