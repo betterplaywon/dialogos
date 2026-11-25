@@ -16,25 +16,18 @@ function sha256(text: string): string {
 /**
  * 판정 실험 질문마다 상대 지시문 넷: 지시문 방식 하나와, 엔진 방식의 판정 셋
  * (첫 전제를 무너뜨린 턴, 무너뜨리지 못한 턴, 전제를 모두 거둔 뒤). 엔진의 장부는 runTurn이 지시문을 만들 때와 같게 둔다.
+ * memories가 undefined이면 기억 인자 없이 부른 것과 같다(runTurn이 기억 없는 턴에 넘기는 값).
  */
-function opponentSystems(): Record<string, string> {
+function opponentSystems(memories?: readonly string[]): Record<string, string> {
   const systems: Record<string, string> = {};
   for (const question of questions) {
     const card = cards.get(question.cardId) as Card;
     const ids = question.premises.map((p) => p.id);
     const first = ids[0] as string;
-    systems[`${question.id} prompt`] = promptSystem(card, question);
-    systems[`${question.id} engine defeats`] = engineSystem(card, question, new Set([first]), {
-      tactic: 'argument',
-      defeats: first,
-      reason: '반례를 들었습니다.',
-    });
-    systems[`${question.id} engine holds`] = engineSystem(card, question, new Set(), {
-      tactic: 'repeat',
-      defeats: null,
-      reason: '같은 주장을 되풀이했습니다.',
-    });
-    systems[`${question.id} engine all-conceded`] = engineSystem(card, question, new Set(ids), NOT_JUDGED_DECISION);
+    systems[`${question.id} prompt`] = promptSystem(card, question, memories);
+    systems[`${question.id} engine defeats`] = engineSystem(card, question, new Set([first]), { tactic: 'argument', defeats: first, reason: '반례를 들었습니다.' }, memories);
+    systems[`${question.id} engine holds`] = engineSystem(card, question, new Set(), { tactic: 'repeat', defeats: null, reason: '같은 주장을 되풀이했습니다.' }, memories);
+    systems[`${question.id} engine all-conceded`] = engineSystem(card, question, new Set(ids), NOT_JUDGED_DECISION, memories);
   }
   return systems;
 }
@@ -133,8 +126,39 @@ function hashes(systems: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(systems).map(([key, text]) => [key, sha256(text)]));
 }
 
-test('상대 지시문은 고정한 해시와 한 글자도 다르지 않다(판정 실험의 조건이 그대로다)', () => {
+test('기억 없이나 빈 목록으로 만든 상대 지시문은 고정한 해시와 한 글자도 다르지 않다(판정 실험의 조건이 그대로다)', () => {
   assert.equal(questions.length, 20);
   assert.equal(Object.keys(PINNED).length, 80);
   assert.deepEqual(hashes(opponentSystems()), PINNED);
+  assert.deepEqual(hashes(opponentSystems([])), PINNED);
+});
+
+const MEMORIES = ['지킨 입장: 거짓말은 어떤 경우에도 옳지 않다. 첫 말: "선의의 거짓말도 신뢰를 무너뜨립니다."', '생각이 바뀜: 반반 → 대체로 "거짓말이 허용되는 때가 있다"'];
+
+/** 설계(사용자별 기억, PR 2)에 적은 칸의 글 그대로. 기억마다 "- "로 시작하는 줄 하나이고, 넘긴 순서를 지킨다. */
+const MEMORY_BLOCK = [
+  '[지난 판의 기록]',
+  '이 사용자가 같은 주제의 지난 판에서 남긴 기록입니다. 사용자가 고쳤을 수 있습니다.',
+  `- ${MEMORIES[0]}`,
+  `- ${MEMORIES[1]}`,
+  '기록은 이번 판의 근거가 아닙니다. 기록만으로 전제를 거두거나 입장을 바꾸지 마세요.',
+  '관련이 있을 때만 한 번 짧게 언급하고, 기록에 없는 것을 지어내지 마세요.',
+].join('\n');
+
+test('기억이 있으면 이 토론 칸 다음, 규칙 앞에 기록 칸이 한 번 들어가고 나머지는 그대로다', () => {
+  const plain = opponentSystems();
+  const remembered = opponentSystems(MEMORIES);
+  assert.deepEqual(Object.keys(remembered), Object.keys(plain));
+  for (const [key, system] of Object.entries(remembered)) {
+    const base = plain[key] as string;
+    // 칸 머리는 지시문 방식과 엔진 방식 모두 한 번뿐이다.
+    assert.equal(system.split('[지난 판의 기록]').length, 2, key);
+    const blocks = system.split('\n\n');
+    const at = blocks.indexOf(MEMORY_BLOCK);
+    assert.ok(at > 0, `${key}: 칸의 글이 설계와 다르다`);
+    assert.ok(blocks[at - 1]?.startsWith('[이 토론]\n'), `${key}: 칸 앞이 이 토론 칸이 아니다`);
+    assert.ok(blocks[at + 1]?.startsWith('[규칙]\n'), `${key}: 칸 뒤가 규칙이 아니다`);
+    // 칸을 빼면 기억 없이 만든 지시문과 같다. 칸 말고는 한 글자도 바뀌지 않는다.
+    assert.equal(blocks.filter((_, i) => i !== at).join('\n\n'), base, key);
+  }
 });

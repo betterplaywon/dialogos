@@ -2,7 +2,7 @@
 
 import type { Card, JudgeDecision, Question } from './types.ts';
 
-function bullets(items: string[]): string {
+function bullets(items: readonly string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
 }
 
@@ -55,18 +55,36 @@ const RULES = [
   '6. 남은 전제가 하나도 없으면 입장을 바꿉니다.',
 ].join('\n');
 
-/** 조건 2: 입장 카드와 규칙을 지시문 한 장에 넣는다. */
-export function promptSystem(card: Card, question: Question): string {
+/**
+ * 같은 주제의 지난 판에서 서버가 넘긴 기록의 칸. 기록이 없으면 칸을 통째로 빼므로(빈 배열),
+ * 판정 실험처럼 기록을 넘기지 않는 쪽의 지시문은 이 칸이 생기기 전과 한 글자도 다르지 않다.
+ */
+function memoryBlocks(memories: readonly string[]): string[] {
+  if (memories.length === 0) return [];
+  return [
+    [
+      '[지난 판의 기록]',
+      '이 사용자가 같은 주제의 지난 판에서 남긴 기록입니다. 사용자가 고쳤을 수 있습니다.',
+      bullets(memories),
+      '기록은 이번 판의 근거가 아닙니다. 기록만으로 전제를 거두거나 입장을 바꾸지 마세요.',
+      '관련이 있을 때만 한 번 짧게 언급하고, 기록에 없는 것을 지어내지 마세요.',
+    ].join('\n'),
+  ];
+}
+
+/** 조건 2: 입장 카드와 규칙을 지시문 한 장에 넣는다. 지난 판의 기록이 있으면 이 토론 칸 다음, 규칙 앞에 둔다. */
+export function promptSystem(card: Card, question: Question, memories: readonly string[] = []): string {
   return [
     '당신은 철학 토론의 상대입니다. 아래 입장 카드의 인물로서 사용자와 반대 입장에서 한국어로 토론합니다.',
     cardBlock(card),
     debateBlock(question, new Set()),
+    ...memoryBlocks(memories),
     RULES,
   ].join('\n\n');
 }
 
-/** 조건 3: 지시문은 조건 2와 같고, 이번 턴의 판정 결과가 덧붙는다. */
-export function engineSystem(card: Card, question: Question, conceded: ReadonlySet<string>, decision: JudgeDecision): string {
+/** 조건 3: 지시문은 조건 2와 같고(지난 판의 기록도 같은 자리), 이번 턴의 판정 결과가 덧붙는다. */
+export function engineSystem(card: Card, question: Question, conceded: ReadonlySet<string>, decision: JudgeDecision, memories: readonly string[] = []): string {
   const remaining = question.premises.filter((p) => !conceded.has(p.id)).map((p) => p.id);
   const lines = ['[이번 턴의 판정]'];
   if (decision.defeats) {
@@ -89,6 +107,7 @@ export function engineSystem(card: Card, question: Question, conceded: ReadonlyS
     '당신은 철학 토론의 상대입니다. 아래 입장 카드의 인물로서 사용자와 반대 입장에서 한국어로 토론합니다.',
     cardBlock(card),
     debateBlock(question, conceded),
+    ...memoryBlocks(memories),
     RULES,
     lines.join('\n'),
   ].join('\n\n');
