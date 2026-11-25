@@ -237,7 +237,16 @@ test('머지할 PR은 글자 그대로의 번호로 받고, draft·체크 없음
   assert.equal(ask(`gh pr merge https://github.com/o/r/pull/7 ${head}`).verdict, 'allow');
   assert.equal(ask(`gh pr merge ${head} 7`).verdict, 'allow');
   // 번호를 빼거나 변수·브랜치 이름으로 주면 가드가 보는 PR과 gh가 머지하는 PR이 달라질 수 있다.
-  for (const command of [`gh pr merge ${head}`, `gh pr merge $N ${head}`, `gh pr merge feat/x ${head}`, `gh pr merge 7 ${head} -R o/other`]) {
+  for (const command of [
+    `gh pr merge ${head}`,
+    `gh pr merge $N ${head}`,
+    `gh pr merge feat/x ${head}`,
+    `gh pr merge 7 ${head} -R o/other`,
+    // 전역 옵션이 하위 명령 앞에 와도 머지로 본다.
+    `gh -R o/other pr merge 7 ${head}`,
+    `gh --repo=o/other pr merge 7 ${head}`,
+    'gh -R o/r pr merge 7 --squash',
+  ]) {
     assert.equal(ask(command).verdict, 'block', command);
   }
   assert.match(ask(`gh pr merge 7 ${head}`, { isDraft: true }).reason, /draft/);
@@ -257,6 +266,8 @@ test('셸 예약어와 함수 정의 안의 명령도 같은 규칙을 적용한
     'until false; do git push origin main; done',
     'if git push origin main; then true; fi',
     'f() { git push origin main; }',
+    'echo `gh pr merge 43 --merge`',
+    'echo `git push origin main`',
     'function f { git push origin main; }',
   ]) {
     assert.equal(verdict(command), 'block', command);

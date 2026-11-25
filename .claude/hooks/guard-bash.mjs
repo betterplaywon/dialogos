@@ -482,6 +482,10 @@ function checkSegment(seg, words, assigns) {
     return checkGitRead(sub, args, seg);
   }
   if (first === 'gh') {
+    // 전역 옵션(-R/--repo, --hostname 등)이 하위 명령 앞에 와도 하위 명령으로 판단한다. 옮긴 옵션은 뒤에 남겨 머지의 --repo 막기가 본다.
+    let at = 1;
+    while (at < words.length && words[at].startsWith('-')) at += ['-R', '--repo', '--hostname'].includes(words[at]) ? 2 : 1;
+    if (at > 1) return checkSegment(seg, ['gh', ...words.slice(at), ...words.slice(1, at)], assigns);
     if (second === 'pr' && third === 'merge') return checkMerge(words);
     if (second === 'api') return checkGhApi(seg, words);
     if (second === 'pr' && ['create', 'edit', 'comment', 'review'].includes(third)) return checkPrText(words);
@@ -520,6 +524,8 @@ const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // 한 겹짜리 명령 치환. 안쪽에 괄호가 있는 것(커밋 메시지의 heredoc 등)은 줄마다 조각으로 이미 검사된다.
 const SUBSTITUTION = /\$\(([^()]*)\)/g;
+// 백틱 명령 치환. 따옴표 안의 백틱(인용한 코드)까지 명령으로 보므로 막힐 수 있다. 그때는 글을 파일로 넘긴다.
+const BACKTICK = /`([^`]*)`/g;
 
 /**
  * 앞에 붙은 환경 변수 지정, 감싸는 실행기, 묶음 기호를 걷어 내고 실제로 실행되는 명령의 단어를 낸다.
@@ -617,7 +623,7 @@ function check(cmd, depth = 0) {
   for (const [re, reason] of WHOLE_COMMAND_RULES) if (re.test(cmd)) return reason;
   const sequence = sequenceProblem(cmd);
   if (sequence) return sequence;
-  for (const match of cmd.matchAll(SUBSTITUTION)) {
+  for (const match of [...cmd.matchAll(SUBSTITUTION), ...cmd.matchAll(BACKTICK)]) {
     const reason = check(match[1], depth + 1);
     if (reason) return reason;
   }
