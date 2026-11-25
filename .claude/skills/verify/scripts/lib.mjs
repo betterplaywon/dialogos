@@ -190,11 +190,17 @@ export function createHarness(feature, title, options) {
      */
     async browser() {
       const profileDir = mkdtempSync(path.join(tmpdir(), 'dialogos-verify-chrome-'));
-      const removeProfile = () => rmSync(profileDir, { recursive: true, force: true });
-      closers.push(removeProfile);
-      const page = await launchChrome({ profileDir, shotsDir: dir });
-      closers.push(page.close);
-      return page;
+      // 닫기는 Chrome을 띄우기 전에 하나로 등록한다. Chrome이 떴으면 끝날 때까지 닫은 뒤에 폴더를 지운다.
+      // 띄우는 도중(탭에 붙기 전)에 종료 신호가 와도, Chrome을 띄우지 못해도 Chrome과 폴더가 남지 않는다.
+      let closeChrome = async () => {};
+      closers.push(async () => {
+        try {
+          await closeChrome();
+        } finally {
+          rmSync(profileDir, { recursive: true, force: true });
+        }
+      });
+      return launchChrome({ profileDir, shotsDir: dir, onSpawn: (close) => (closeChrome = close) });
     },
 
     /** 여정이 띄운 것을 모두 닫는다. 입구 스크립트가 여정이 끝난 뒤(실패해도) 부른다. */

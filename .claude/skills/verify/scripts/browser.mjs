@@ -38,9 +38,11 @@ const buttonExpr = (text) =>
 
 /**
  * Chrome을 띄우고 첫 탭에 붙는다. profileDir은 이번 실행만의 빈 사용자 폴더다.
- * 돌려주는 page의 close()는 Chrome을 닫고 프로세스가 끝날 때까지 기다린다. 여러 번 불러도 된다.
+ * onSpawn은 Chrome을 띄운 바로 그 차례에(사이에 기다림 없이) 닫는 함수를 받는다. 탭에 붙기 전에 종료 신호가 와도
+ * 부르는 쪽이 Chrome을 닫을 수 있게 하려는 것이다. 돌려주는 page의 close()도 같은 함수다.
+ * close()는 Chrome을 닫고 프로세스가 끝날 때까지 기다린다. 여러 번 불러도 된다.
  */
-export async function launchChrome({ profileDir, shotsDir, width = 900, height = 1200 }) {
+export async function launchChrome({ profileDir, shotsDir, onSpawn = () => {}, width = 900, height = 1200 }) {
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const chrome = spawn(
     chromePath(),
@@ -70,14 +72,11 @@ export async function launchChrome({ profileDir, shotsDir, width = 900, height =
   async function close() {
     if (closed) return;
     closed = true;
-    if (ws) {
-      try {
-        ws.send(JSON.stringify({ id: 0, method: 'Browser.close' }));
-      } catch {
-        // 이미 끊겼다. 아래에서 프로세스를 끝낸다.
-      }
-    }
+    // 탭에 붙어 있으면 Chrome에게 닫으라고 하고, 붙기 전이거나 끊겼으면 보낼 길이 없으므로 바로 끄라고 한다.
+    const attached = ws?.readyState === WebSocket.OPEN;
+    if (attached) ws.send(JSON.stringify({ id: 0, method: 'Browser.close' }));
     if (chrome.exitCode === null && chrome.signalCode === null) {
+      if (!attached) chrome.kill('SIGTERM');
       try {
         await within(exited, 5_000, 'Chrome이 5초 안에 닫히지 않았다.');
       } catch {
@@ -87,11 +86,13 @@ export async function launchChrome({ profileDir, shotsDir, width = 900, height =
     }
     ws?.close();
   }
+  onSpawn(close);
 
   try {
     let target;
     for (let i = 0; i < 100 && !target; i += 1) {
       await sleep(150);
+      if (closed) throw new Error('Chrome이 탭에 붙기 전에 닫혔다.');
       if (chrome.exitCode !== null) throw new Error(`Chrome이 뜨자마자 끝났다(종료 코드 ${chrome.exitCode}).`);
       if (!existsSync(portFile)) continue;
       const port = readFileSync(portFile, 'utf8').split('\n')[0];

@@ -32,7 +32,7 @@ dialogos의 실행 표면은 판정 실험(`eval/`)의 명령 다섯 개와 화�
 ## 준비
 
 - Node.js 22.13 이상, 저장소 루트에서 `npm ci` 한 번. `.env`는 필요 없다.
-- 화면 여정은 Google Chrome을 쓴다. macOS의 기본 위치(`/Applications/Google Chrome.app`)에 없으면 `CHROME_PATH`에 실행 파일 경로를 적는다. 사용자의 Chrome과 그 설정은 건드리지 않는다(증거 폴더 안의 새 사용자 폴더로 창 없이 띄운다).
+- 화면 여정은 Google Chrome을 쓴다. macOS의 기본 위치(`/Applications/Google Chrome.app`)에 없으면 `CHROME_PATH`에 실행 파일 경로를 적는다. 사용자의 Chrome과 그 설정은 건드리지 않는다(OS 임시 폴더의 새 사용자 폴더로 창 없이 띄우고, 닫을 때 지운다).
 - 사용자가 `npm run app:dev`를 띄워 두어도 된다. 화면 여정은 이 컴퓨터가 고른 빈 포트 둘에 앱을 따로 띄우고, 사용자의 포트(8787, 5173)와 판 파일(`data/app.sqlite`)은 쓰지 않는다.
 - 결과는 `runs/verify/` 아래에 쌓인다. 실험용 실행(`runs/<이름>/`)과 섞이지 않고, 커밋하지 않는다. 지우는 것은 사용자가 한다.
 
