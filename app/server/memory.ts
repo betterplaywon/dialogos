@@ -57,6 +57,8 @@ const PUSH_LABELS: Readonly<Record<Tactic, string>> = {
   emotion: '감정에 호소',
 };
 
+const isPush = (tactic: string): tactic is Tactic => Object.hasOwn(PUSH_LABELS, tactic);
+
 /** 이 횟수 이상 되풀이한 방식만 약점으로 남긴다. 한 번은 버릇이라 하기 어렵다. */
 const WEAKNESS_MIN = 2;
 
@@ -89,12 +91,14 @@ export function memoriesOf(game: GameRecord & { record: EndRecord }, topic: Topi
     texts.push(['shift', `생각이 바뀜: ${label(game.startLean)} → ${label(game.record.lean)}`]);
   }
 
-  // 판정기를 읽지 못한 턴과 판정하지 않은 턴은 tactic이 other라 여기서 세지 않는다.
-  const pushes = new Map<string, number>();
+  // 전제를 무너뜨리지 못한 턴 가운데 밀어붙인 방식(PUSH_LABELS의 키)만 센다.
+  // 근거를 댄 턴(argument)과, 판정기를 읽지 못하거나 판정하지 않은 턴(other)은 들지 않는다.
+  const pushes = new Map<Tactic, number>();
   for (const turn of game.turns) {
-    if (turn.decision && turn.decision.defeats === null) pushes.set(turn.decision.tactic, (pushes.get(turn.decision.tactic) ?? 0) + 1);
+    const decision = turn.decision;
+    if (decision && decision.defeats === null && isPush(decision.tactic)) pushes.set(decision.tactic, (pushes.get(decision.tactic) ?? 0) + 1);
   }
-  const weak = Object.entries(PUSH_LABELS).flatMap(([tactic, name]) => {
+  const weak = (Object.entries(PUSH_LABELS) as [Tactic, string][]).flatMap(([tactic, name]) => {
     const count = pushes.get(tactic) ?? 0;
     return count >= WEAKNESS_MIN ? [`${name} ${count}번`] : [];
   });
