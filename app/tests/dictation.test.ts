@@ -11,8 +11,10 @@ test('들은 글을 빈 입력 칸에 넣고, 이 턴의 인식 조각에 더한
     turn: { segments: ['거짓말은 옳지 않습니다'], redone: 0 },
     notice: '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
   });
-  // 공백뿐인 입력 칸은 빈 칸으로 본다.
-  assert.equal(takeDictation('  \n', NEW_TURN, '말한 글', 1000).draft, '말한 글');
+  // 공백뿐인 입력 칸은 빈 칸으로 본다. 앞선 조각이 없으니 다시 말한 것이 아니다.
+  const blank = takeDictation('  \n', NEW_TURN, '말한 글', 1000);
+  assert.equal(blank.draft, '말한 글');
+  assert.deepEqual(blank.turn, { segments: ['말한 글'], redone: 0 });
 });
 
 test('입력 칸이 직전에 인식된 글 그대로면, 다시 말할 때 새로 들은 글로 바꾸고 바뀐 조각을 빼고 다시 말한 횟수를 센다', () => {
@@ -24,6 +26,32 @@ test('입력 칸이 직전에 인식된 글 그대로면, 다시 말할 때 새�
     notice: '앞서 인식한 글을 새로 인식한 글로 바꿨습니다. 고친 뒤 보내 주세요.',
   });
   assert.deepEqual(takeDictation(second.draft, second.turn, '셋째', 1000).turn, { segments: ['셋째'], redone: 2 });
+});
+
+test('인식된 글을 손으로 모두 지운 뒤 말하면 앞선 조각을 빼고 다시 말한 횟수를 센다', () => {
+  const first = takeDictation('', NEW_TURN, '알아듣기 어렵게 적힌 글', 1000);
+  const again = takeDictation('', first.turn, '거짓말은 옳지 않습니다', 1000);
+  assert.deepEqual(again, {
+    draft: '거짓말은 옳지 않습니다',
+    turn: { segments: ['거짓말은 옳지 않습니다'], redone: 1 },
+    notice: '인식한 글을 입력 칸에 넣었습니다. 고친 뒤 보내 주세요.',
+  });
+  // 그대로 보내면 [말하기]를 다시 눌러 바꾼 것과 같이 센다. 고친 턴이 아니다.
+  assert.deepEqual(turnEntryOf(again.draft, again.turn), { input: 'voice', redone: 1 });
+  // 공백뿐인 칸도, 음성을 끄면서 넘긴 글(appendOnly)도 같다. 빈 칸이라 지킬 글이 없다.
+  assert.deepEqual(takeDictation(' \n', first.turn, '거짓말은 옳지 않습니다', 1000).turn, again.turn);
+  assert.deepEqual(takeDictation('', first.turn, '거짓말은 옳지 않습니다', 1000, { appendOnly: true }).turn, again.turn);
+  // 조각이 여럿이어도 모두 뺀다.
+  assert.deepEqual(takeDictation('', turnOf('첫째', '둘째'), '셋째', 1000).turn, { segments: ['셋째'], redone: 1 });
+  // 앞 조각만 손으로 지워 입력 칸이 마지막 조각 그대로면, 다시 말해 바꿀 때 지운 조각도 뺀다. 입력 칸에는 새로 들은 글만 남는다.
+  assert.deepEqual(takeDictation('둘째', turnOf('첫째', '둘째'), '셋째', 1000).turn, { segments: ['셋째'], redone: 1 });
+});
+
+test('인식된 글을 일부만 지우고 말하면 끝에 붙이고, 그대로 보내면 고친 턴이다', () => {
+  const first = takeDictation('', NEW_TURN, '거짓말은 결가가 좋아도 옳지 않습니다', 1000);
+  const partly = takeDictation('거짓말은', first.turn, '결과가 좋아도 옳지 않습니다', 1000);
+  assert.deepEqual(partly.turn, { segments: ['거짓말은 결가가 좋아도 옳지 않습니다', '결과가 좋아도 옳지 않습니다'], redone: 0 });
+  assert.deepEqual(turnEntryOf(partly.draft, partly.turn), { input: 'voice-edited', redone: 0 });
 });
 
 test('직접 쓰거나 고친 글이 있으면 지우지 않고 끝에 붙이며, 다시 말한 횟수는 세지 않는다', () => {
@@ -119,6 +147,8 @@ test('한 글자도 들어가지 못하면 입력 칸과 기록을 그대로 두
   assert.deepEqual(takeDictation('가나다라', NEW_TURN, '바사', 5), { draft: '가나다라', turn: NEW_TURN, notice: '입력 칸이 가득 차 인식한 글을 넣지 못했습니다.' });
   // 빈 칸인데 첫 글자가 두 칸짜리라 한 칸에 들어가지 못한다.
   assert.deepEqual(takeDictation('', NEW_TURN, '😀가', 1), { draft: '', turn: NEW_TURN, notice: '인식한 글을 입력 칸에 넣지 못했습니다.' });
+  // 앞선 조각이 있는 빈 칸이어도, 넣지 못했으면 다시 말한 것으로 세지 않는다.
+  assert.deepEqual(takeDictation('', turnOf('첫째'), '😀가', 1).turn, turnOf('첫째'));
 });
 
 test('받은 기록은 바꾸지 않는다', () => {
