@@ -5,14 +5,9 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { MemoryKind, MemoryView, PassedMemoryView, TopicView } from '../../server/contract.ts';
 import { api } from './api.ts';
+import { MEMORIES_PER_TURN, MEMORY_MAX } from './memory-limits.ts';
 
 const KIND_LABEL: Readonly<Record<MemoryKind, string>> = { claim: '주장', ground: '근거', shift: '바뀐 생각', weakness: '약점' };
-
-/** 기억 글의 글자 수 상한. 서버의 MAX_MEMORY_TEXT(server/memory.ts)와 같다. 넘는 글은 서버도 받지 않는다. */
-const MEMORY_MAX = 200;
-
-/** 한 턴에 상대에게 넘기는 기억 수. 서버의 MEMORIES_PER_TURN(server/memory.ts)과 같다. 안내 글에만 쓴다. */
-const MEMORIES_PER_TURN = 3;
 
 const DELETED_NOTE = '기억만 지웠습니다. 판 기록은 남습니다.';
 
