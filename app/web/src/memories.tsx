@@ -111,8 +111,9 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
   }
 
   // 알림 칸은 늘 두어, 지운 뒤 생긴 글을 화면 낭독기가 읽게 한다.
+  // 지우기 전과 뒤의 자식 구성이 달라, key가 없으면 React가 이 칸을 다른 노드로 바꿔 끼워 미리 있던 알림 칸이 아니게 된다.
   const note = (
-    <span className="memory-note" role="status">
+    <span key="note" className="memory-note" role="status">
       {memory.state === 'deleted' && deletedHere ? DELETED_NOTE : ''}
     </span>
   );
