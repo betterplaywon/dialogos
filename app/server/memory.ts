@@ -28,6 +28,12 @@ export interface MemoryRecord {
 export const MAX_MEMORY_TEXT = 200;
 
 /**
+ * 한 턴에 상대에게 넘기는 기억 수(2026-11-25 사용자 결정). 같은 주제의 기억 가운데 만든 시각이 늦은 것부터 넘긴다.
+ * 그래서 한 턴의 지시문에 더해지는 기억 글은 많아야 3 × MAX_MEMORY_TEXT자다.
+ */
+export const MEMORIES_PER_TURN = 3;
+
+/**
  * 기억 글의 글자 수. 코드 포인트로 세어 SQLite의 length()와 같게 한다.
  * clip도 코드 포인트로 자르므로 😀처럼 한 코드 포인트인 이모지는 반으로 자르지 않는다.
  * 국기, 피부색, ZWJ로 묶인 이모지처럼 여러 코드 포인트로 된 글자는 중간에서 잘릴 수 있다.

@@ -438,3 +438,139 @@ test('기억을 지우면 목록과 다음 조회에서 빠지고, 판 기록과
   const listed = await call<GamesResponse>('GET', '/api/games');
   assert.deepEqual(listed.data.games[0]?.record, { lean: 1, verdict: 'debate' });
 });
+
+// ---- 서버: 턴마다 같은 주제의 기억을 상대에게 넘기기 ----
+
+/** 부를 때마다 1분씩 가는 시계. 판마다 끝 기록의 시각이 달라야 '최근 기억'의 차례가 판의 차례와 같다. */
+function ticking(): () => Date {
+  let minute = 0;
+  return () => new Date(Date.UTC(2026, 10, 25, 0, minute++));
+}
+
+/** 상대가 받은 지시문(system)과 판정기가 받은 글을 부를 때마다 적어 두는 모델 출처. 판정은 위의 judge와 같다. */
+function recording() {
+  const systems: string[] = [];
+  const judged: string[] = [];
+  const models: ModelSource = {
+    provider: 'mock',
+    create: (role) =>
+      role === 'judge'
+        ? {
+            name: 'recording-judge',
+            async complete(messages) {
+              judged.push(messages.map((m) => m.content).join('\n'));
+              return judge.complete(messages);
+            },
+          }
+        : {
+            name: 'recording-opponent',
+            async complete(messages) {
+              systems.push(messages[0]?.role === 'system' ? messages[0].content : '');
+              return '답입니다.';
+            },
+          },
+  };
+  return { models, systems, judged };
+}
+
+/** 상대의 지시문에서 '지난 판의 기록' 칸에 든 기억 글들. 칸이 없으면 null이다(eval/src/prompts.ts의 칸 모양). */
+function passedTexts(system: string | undefined): string[] | null {
+  const block = system?.split('\n\n').find((part) => part.startsWith('[지난 판의 기록]\n'));
+  return block ? block.split('\n').flatMap((line) => (line.startsWith('- ') ? [line.slice(2)] : [])) : null;
+}
+
+test('같은 주제의 다음 판에서는 턴마다 최근 기억 3개를 상대의 지시문에 넘기고 그 id를 턴에 남기며, 판정기에는 넘기지 않는다', async () => {
+  const { models, systems, judged } = recording();
+  const { call, store, playQ01, memoriesOfUser } = server({ models, now: ticking() });
+  const first = await playQ01();
+  // 기억이 아직 없으면 기록 칸 없이 기억이 생기기 전의 지시문 그대로다.
+  assert.deepEqual(systems.map(passedTexts), [null, null, null]);
+  assert.deepEqual((await store.get(first))?.turns.map((turn) => turn.memoryIds), [[], [], []]);
+  await call('POST', `/api/games/${first}/record`, { lean: 1, verdict: 'debate' });
+  const memories = await memoriesOfUser();
+  assert.deepEqual(
+    memories.map((m) => m.kind),
+    ['claim', 'ground', 'shift', 'weakness'],
+  );
+  // 한 판의 기억은 만든 시각이 같아 넣은 차례(claim, ground, shift, weakness)로 앞의 3개를 넘긴다.
+  const recent = memories.slice(0, 3);
+
+  // 지킨 쪽이 달라도 같은 주제면 넘긴다.
+  const second = await call<GameView>('POST', '/api/games', { topicId: 'q01', side: 1, lean: 1 });
+  for (const text of ['새 판의 첫 말입니다.', '새 판의 둘째 말입니다.']) {
+    assert.equal((await call('POST', `/api/games/${second.data.id}/turns`, { text })).status, 200);
+  }
+  assert.deepEqual(systems.slice(3).map(passedTexts), [recent.map((m) => m.text), recent.map((m) => m.text)]);
+  assert.deepEqual(
+    (await store.get(second.data.id))?.turns.map((turn) => turn.memoryIds),
+    [recent.map((m) => m.id), recent.map((m) => m.id)],
+  );
+  // 판정기가 받은 글에는 기록 칸도 기억 글도 없다.
+  assert.equal(judged.length, 5);
+  for (const text of judged) {
+    assert.ok(!text.includes('[지난 판의 기록]') && memories.every((m) => !text.includes(m.text)), text);
+  }
+});
+
+test('판 도중에 지운 기억은 다음 턴부터 넘기지 않고, 고친 기억은 고친 글로 넘긴다', async () => {
+  const { models, systems } = recording();
+  const { call, store, playQ01, memoriesOfUser } = server({ models, now: ticking() });
+  await call('POST', `/api/games/${await playQ01()}/record`, { lean: 1, verdict: 'debate' });
+  const [claim, ground, shift, weakness] = await memoriesOfUser();
+  if (!claim || !ground || !shift || !weakness) throw new Error('기억이 넷이 아닙니다.');
+
+  const game = await call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 });
+  const turns = `/api/games/${game.data.id}/turns`;
+  await call('POST', turns, { text: '둘째 판의 첫 말입니다.' });
+  assert.deepEqual(passedTexts(systems.at(-1)), [claim.text, ground.text, shift.text]);
+
+  assert.equal((await call('POST', `/api/memories/${ground.id}/delete`)).status, 200);
+  assert.equal((await call('POST', `/api/memories/${claim.id}/edit`, { text: '고친 주장입니다.' })).status, 200);
+  await call('POST', turns, { text: '둘째 판의 둘째 말입니다.' });
+  // 지운 기억 자리에는 그다음으로 최근인 기억이 들어온다.
+  assert.deepEqual(passedTexts(systems.at(-1)), ['고친 주장입니다.', shift.text, weakness.text]);
+  assert.ok(!systems.at(-1)?.includes(ground.text));
+  assert.deepEqual(
+    (await store.get(game.data.id))?.turns.map((turn) => turn.memoryIds),
+    [
+      [claim.id, ground.id, shift.id],
+      [claim.id, shift.id, weakness.id],
+    ],
+  );
+});
+
+test('기억을 끈 서버는 저장된 기억이 있어도 넘기지 않고, 턴에 빈 목록을 남긴다', async () => {
+  const store = new MemoryGameStore();
+  const on = server({ store, now: ticking() });
+  await on.call('POST', `/api/games/${await on.playQ01()}/record`, { lean: 1, verdict: 'debate' });
+  assert.equal((await on.memoriesOfUser()).length, 4);
+
+  const { models, systems } = recording();
+  // 같은 저장소를 쓰는 둘째 서버. 판 id가 첫째 서버의 것과 겹치지 않게 한다.
+  let next = 0;
+  const off = server({ store, models, memory: false, now: ticking(), newId: () => `off${++next}` });
+  const game = await off.call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 });
+  assert.equal((await off.call('POST', `/api/games/${game.data.id}/turns`, { text: '기억을 끈 판입니다.' })).status, 200);
+  assert.deepEqual(systems.map(passedTexts), [null]);
+  assert.deepEqual((await store.get(game.data.id))?.turns.map((turn) => turn.memoryIds), [[]]);
+});
+
+test('다른 주제의 기억과 남의 기억은 넘기지 않는다', async () => {
+  const { models, systems } = recording();
+  const { call, store, playQ01, memoriesOfUser } = server({ models, now: ticking() });
+  await call('POST', `/api/games/${await playQ01('a')}/record`, { lean: 1, verdict: 'debate' }, 'a');
+  assert.equal((await memoriesOfUser('a')).length, 4);
+  const before = systems.length;
+
+  // 같은 주제라도 남(b)의 판에는 a의 기억이 가지 않는다.
+  const others = await call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 }, 'b');
+  assert.equal((await call('POST', `/api/games/${others.data.id}/turns`, { text: 'b의 말입니다.' }, 'b')).status, 200);
+  // a의 판이라도 다른 주제(x01)에는 q01의 기억이 가지 않는다.
+  const elsewhere = await call<GameView>('POST', '/api/games', { topicId: 'x01', side: 0, lean: -1 }, 'a');
+  assert.equal((await call('POST', `/api/games/${elsewhere.data.id}/turns`, { text: 'a의 다른 주제 말입니다.' }, 'a')).status, 200);
+
+  assert.deepEqual(systems.slice(before).map(passedTexts), [null, null]);
+  for (const id of [others.data.id, elsewhere.data.id]) {
+    assert.deepEqual((await store.get(id))?.turns.map((turn) => turn.memoryIds), [[]]);
+  }
+});

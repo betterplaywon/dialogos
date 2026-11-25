@@ -20,7 +20,7 @@ import type {
   TurnResponse,
   Verdict,
 } from './contract.ts';
-import { MAX_MEMORY_TEXT, memoriesOf, memoryLength, oneLine, type MemoryRecord } from './memory.ts';
+import { MAX_MEMORY_TEXT, MEMORIES_PER_TURN, memoriesOf, memoryLength, oneLine, type MemoryRecord } from './memory.ts';
 import { voiceTallyOf, type EndRecord, type GameRecord, type GameStore, type Mode } from './store.ts';
 
 /** 한 판에서 사용자가 보낼 수 있는 턴 수. 판정 실험이 잰 대화 길이와 같다. */
@@ -82,7 +82,7 @@ export interface GameDeps {
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
   /**
-   * 끝 기록을 남길 때 기억을 만드는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
+   * 끝 기록을 남길 때 기억을 만들고, 턴마다 같은 주제의 기억을 상대에게 넘기는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
    * 눈가림 비교(APP_MODE=random)에서는 끈다(2026-11-25 사용자 결정, dev-setup.ts).
    */
   memory: boolean;
@@ -305,7 +305,11 @@ export function createGames(deps: GameDeps) {
       return viewOf(await load(userId, id));
     },
 
-    /** entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다. */
+    /**
+     * entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다.
+     * 기억이 켜져 있으면 상한을 확인한 뒤, 모델을 부르기 전에 같은 주제의 최근 기억을 찾아 상대의 지시문으로 넘기고
+     * 그 id를 턴에 남긴다. 턴마다 다시 찾으므로 판 도중에 지우거나 고친 기억은 다음 턴부터 반영된다.
+     */
     async turn(userId: string, id: string, rawText: string, entry: TurnEntry): Promise<TurnResponse> {
       const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
@@ -317,6 +321,9 @@ export function createGames(deps: GameDeps) {
         const matchup = matchupOf(game);
         return oneTurnPerUser(userId, async () => {
           await checkLimits(userId);
+          const passed = deps.memory
+            ? await deps.store.listMemories(userId, { topicId: game.topicId, limit: MEMORIES_PER_TURN })
+            : [];
           const state = { history: game.history, conceded: new Set(game.conceded) };
           const outcome = await runTurn(state, {
             question: matchup.question,
@@ -324,6 +331,7 @@ export function createGames(deps: GameDeps) {
             condition: game.mode,
             models: meteredModels(deps.models, ledger, { userId, gameId: game.id, now: deps.now }),
             text,
+            memories: passed.map((memory) => memory.text),
           });
           const n = game.turns.length + 1;
           game.history = state.history;
@@ -333,7 +341,7 @@ export function createGames(deps: GameDeps) {
             user: text,
             input: entry.input,
             redone: entry.redone,
-            memoryIds: [],
+            memoryIds: passed.map((memory) => memory.id),
             reply: outcome.reply,
             ...(outcome.decision ? { decision: outcome.decision } : {}),
             ...(outcome.judge ? { judge: outcome.judge } : {}),
