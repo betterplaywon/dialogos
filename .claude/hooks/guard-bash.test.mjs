@@ -452,44 +452,95 @@ function bodyFiles(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-body-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeList(dir);
+  mkdirSync(path.join(dir, 'sub'));
   writeFileSync(path.join(dir, 'bad.md'), `본문 ${WORD}\n`);
   writeFileSync(path.join(dir, 'ok.md'), '평범한 본문\n');
-  writeFileSync(path.join(dir, 'bad.json'), JSON.stringify({ body: `본문 ${WORD}` }));
+  writeFileSync(path.join(dir, 'x.md'), '평범한 본문\n');
+  writeFileSync(path.join(dir, 'sub', 'x.md'), `본문 ${WORD}\n`);
   writeFileSync(path.join(dir, 'm.graphql'), 'mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }\n');
-  writeFileSync(path.join(dir, 'q.graphql'), 'query { viewer { login } }\n');
   return { cwd: dir };
 }
 
-test('gh pr·gh issue·gh api가 파일로 넘긴 글도 검사한다', (t) => {
-  // 글을 파일로 넘기면 명령 글자에는 본문이 없다(이슈 #42). 파일까지 읽어 같은 검사를 한다.
+test('gh pr·gh issue가 파일로 넘긴 글도 모두 읽어 검사한다', (t) => {
+  // 글을 파일로 넘기면 명령 글자에는 본문이 없다(이슈 #42). 이 gh 조각이 넘긴 파일을 모두 읽어 같은 검사를 한다.
   const at = bodyFiles(t);
   for (const command of [
     'gh pr comment 5 --body-file bad.md',
+    'gh pr comment 5 --body-file=bad.md',
     'gh issue create --title "작업 방식 - x" --body-file bad.md',
     'gh issue comment 5 -F bad.md',
-    'gh api repos/o/r/issues/5/comments -F body=@bad.md',
-    'gh api repos/o/r/issues/5/comments -F "body=@bad.md"',
-    'gh api repos/o/r/issues/5/comments --field=body=@bad.md',
-    'gh api repos/o/r/issues/5/comments --input bad.json',
+    'gh issue comment 5 -Fbad.md',
+    // 같은 옵션을 두 번 주면 gh는 뒤의 값을 쓴다. 모두 읽는다.
+    'gh pr comment 5 -F ok.md -F bad.md',
+    'gh pr review 5 -cF bad.md',
+    'gh issue create --title "x --body-file ok.md" --body-file bad.md',
+    'gh -R o/r issue comment 5 --body-file bad.md',
+    // cd 뒤의 상대 경로는 그 폴더에서 찾는다.
+    'cd sub && gh issue comment 5 --body-file x.md',
+    `gh pr close 5 --comment "${WORD}"`,
   ]) {
     assert.equal(kind(command, at), 'forbidden', command);
   }
-  // -f(--raw-field)는 @를 글자 그대로 보내므로 파일을 읽지 않는다.
-  for (const command of ['gh issue comment 5 --body-file ok.md', 'gh api repos/o/r/issues/5/comments -F body=@ok.md', 'gh api repos/o/r/issues/5/comments -f body=@bad.md']) {
+  for (const command of [
+    'gh issue comment 5 --body-file ok.md',
+    'gh pr comment 5 --body-file x.md',
+    "gh pr comment 5 --body \"$(cat <<'EOF'\n평범한 본문\nEOF\n)\"",
+    // 다른 조각의 -F(grep)를 글 파일로 읽지 않는다.
+    'gh issue list --state open | grep -F 가드',
+  ]) {
     assert.equal(verdict(command, at), 'allow', command);
   }
-  // 표준 입력과 읽지 못하는 파일은 검사할 수 없으므로 막는다.
-  for (const command of ['gh api repos/o/r/issues/5/comments -F body=@-', 'gh api repos/o/r/issues/5/comments --input -', 'gh issue comment 5 --body-file none.md']) {
-    assert.match(guard(command, at).reason, /표준 입력|읽지 못했다/, command);
+  // 표준 입력, 읽지 못하는 파일, 명령 치환으로 넣은 글은 실행 전에 볼 수 없으므로 막는다.
+  for (const command of [
+    'gh issue comment 5 --body-file -',
+    'gh issue comment 5 --body-file /dev/stdin',
+    'gh issue comment 5 --body-file none.md',
+    'gh pr comment 5 --body "$(cat bad.md)"',
+  ]) {
+    assert.match(guard(command, at).reason, /표준 입력|읽지 못했다|명령 치환/, command);
   }
 });
 
-test('gh api graphql은 파일로 넘긴 mutation도 막는다', (t) => {
-  // 막지 않으면 mergePullRequest로 가드의 머지 확인을 건너뛸 수 있다.
+test('글을 올리는 gh 명령 앞에는 cd 말고 다른 명령을 묶지 않는다', (t) => {
+  // 가드는 실행 전에 한 번만 보므로, 앞 명령이 바꾼 글 파일을 볼 수 없다.
   const at = bodyFiles(t);
-  assert.match(guard('gh api graphql -F query=@m.graphql', at).reason, /mutation 금지/);
-  assert.match(guard('gh api graphql --input m.graphql', at).reason, /mutation 금지/);
-  assert.equal(verdict('gh api graphql -F query=@q.graphql', at), 'allow');
+  for (const command of [
+    'cp bad.md x.md && gh issue comment 5 --body-file x.md',
+    'echo bad.md | xargs gh issue comment 5 --body-file',
+    'true; gh pr comment 5 --body-file ok.md',
+  ]) {
+    assert.match(guard(command, at).reason, /묶지 않는다/, command);
+  }
+  for (const command of ['cd sub && cd .. && gh pr comment 5 --body-file ok.md', 'gh pr comment 5 --body-file ok.md && gh pr view 5', 'git status && gh pr view 5']) {
+    assert.equal(verdict(command, at), 'allow', command);
+  }
+});
+
+test('gh api는 읽기만 한다', (t) => {
+  // 메서드와 본문 옵션은 붙여 쓰기와 묶음까지 있어 하나하나 읽지 않고 보이면 막는다. 글은 gh pr·gh issue로 올린다.
+  const at = bodyFiles(t);
+  for (const command of [
+    'gh api repos/o/r/issues/5/comments -F body=@bad.md',
+    'gh api repos/o/r/issues/5/comments -f body=x',
+    'gh api repos/o/r/issues/5/comments --field=body=x',
+    'gh api repos/o/r/issues/5/comments --raw-field body=x',
+    'gh api repos/o/r/issues/5/comments --input bad.md',
+    'gh api graphql -Fquery=@m.graphql',
+    'gh api graphql -F=query=@m.graphql',
+    'gh api graphql -H "X-Note: -X GET" -F query=@m.graphql',
+    'gh api -XPUT repos/o/r/pulls/5/merge',
+    'gh api --method=PATCH repos/o/r/issues/5',
+    'gh api -iF k=v repos/o/r/issues',
+  ]) {
+    assert.match(guard(command, at).reason, /읽기\(GET\)만/, command);
+  }
+  for (const command of [
+    'gh api repos/o/r/pulls/5',
+    'gh api repos/o/r/pulls --paginate --jq ".[].number"',
+    'gh api -H "Accept: application/vnd.github+json" repos/o/r/pulls',
+  ]) {
+    assert.equal(verdict(command, at), 'allow', command);
+  }
 });
 
 test('명령 앞에 환경 변수를 붙이거나 다른 실행기로 감싸도 같은 규칙을 적용한다', () => {
