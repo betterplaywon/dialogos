@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { MemoryRecord } from '../server/memory.ts';
+import { MAX_MEMORY_TEXT, type MemoryRecord } from '../server/memory.ts';
 import { MIGRATIONS, SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type SpendEntry, type TurnLog } from '../server/store.ts';
 
@@ -443,14 +443,14 @@ test('메모리 저장소와 SQLite 저장소는 같은 기억과 고치기, 지
   assert.equal(fromMemory[0]?.[1]?.text, '고친 약점입니다.');
 });
 
-test('SQLite 저장소: 기억 글이 비었거나 200자를 넘거나, 종류나 지킨 쪽이 정한 값 밖이면 넣지 않고 끝 기록도 남기지 않는다', async (t) => {
+test('SQLite 저장소: 기억 글이 비었거나 상한(MAX_MEMORY_TEXT)을 넘거나, 종류나 지킨 쪽이 정한 값 밖이면 넣지 않고 끝 기록도 남기지 않는다', async (t) => {
   const store = new SqliteGameStore(':memory:');
   t.after(() => store.close());
   await store.create(sample());
   const recorded = recordedAt('g1', '2026-11-19T00:04:00.000Z');
   for (const bad of [
     memory({ text: '' }),
-    memory({ text: '가'.repeat(201) }),
+    memory({ text: '가'.repeat(MAX_MEMORY_TEXT + 1) }),
     memory({ kind: 'habit' as MemoryRecord['kind'] }),
     memory({ side: 2 as MemoryRecord['side'] }),
   ]) {
@@ -458,11 +458,11 @@ test('SQLite 저장소: 기억 글이 비었거나 200자를 넘거나, 종류�
     assert.deepEqual(await store.get('g1'), sample());
     assert.deepEqual(await store.listMemories('local', { limit: 10 }), []);
   }
-  // 200자까지는 받는다. 고칠 때도 같은 상한이다.
-  await store.save(recorded, [memory({ text: '가'.repeat(200) })]);
-  await assert.rejects(store.editMemory('local', 'm1', '가'.repeat(201), '2026-11-20T00:00:00.000Z'));
+  // 상한까지는 받는다. 고칠 때도 같은 상한이다. 스키마의 CHECK(200)와 memory.ts의 상수가 어긋나면 여기서 드러난다.
+  await store.save(recorded, [memory({ text: '가'.repeat(MAX_MEMORY_TEXT) })]);
+  await assert.rejects(store.editMemory('local', 'm1', '가'.repeat(MAX_MEMORY_TEXT + 1), '2026-11-20T00:00:00.000Z'));
   await assert.rejects(store.editMemory('local', 'm1', '', '2026-11-20T00:00:00.000Z'));
-  assert.deepEqual(await store.listMemories('local', { limit: 10 }), [memory({ text: '가'.repeat(200) })]);
+  assert.deepEqual(await store.listMemories('local', { limit: 10 }), [memory({ text: '가'.repeat(MAX_MEMORY_TEXT) })]);
 });
 
 test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고, 예전 판과 턴은 그대로 읽는다', async (t) => {
