@@ -149,6 +149,12 @@ export interface EndRecordRequest {
   verdict: Verdict;
 }
 
+/**
+ * 기억의 종류. claim은 지킨 입장과 첫 말, ground는 상대가 전제를 거둔 말, shift는 판 앞뒤로 바뀐 생각,
+ * weakness는 근거 없이 되풀이해 밀어붙인 방식이다(app/server/memory.ts).
+ */
+export type MemoryKind = 'claim' | 'ground' | 'shift' | 'weakness';
+
 export interface ErrorResponse {
   error: string;
 }
