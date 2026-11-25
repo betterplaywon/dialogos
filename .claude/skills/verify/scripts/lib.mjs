@@ -91,6 +91,12 @@ export function createHarness(feature, title, options) {
   const file = (name) => path.join(dir, name);
   /** 여정이 띄우거나 만든 것(앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
   const closers = [];
+  /** 진행 중이거나 끝난 닫기. 한 번 시작하면 다시 부른 쪽도 같은 닫기가 끝나기를 기다린다. */
+  let closing = null;
+  /** 닫기가 시작된 뒤에는 새로 띄우지 않는다. 띄우면 닫기 목록에 늦게 들어가 남을 수 있다. */
+  const refuseIfClosing = (what) => {
+    if (closing) throw new Error(`닫는 중이라 ${what}을 띄우지 않는다.`);
+  };
 
   return {
     feature,
@@ -129,6 +135,8 @@ export function createHarness(feature, title, options) {
       const log = `cmd-${pad(commands)}-app.txt`;
       const dbName = `app-${pad(commands)}.sqlite`;
       const [api, web] = await freePorts(2);
+      // 여기부터 닫기 목록에 넣기까지는 기다림 없이 한 차례에 돈다. 그 사이에 닫기가 시작될 수 없다.
+      refuseIfClosing('앱');
       const started = Date.now();
       const child = spawn(process.execPath, ['--import', 'tsx', path.join('app', 'dev.ts')], {
         cwd: ROOT,
@@ -189,6 +197,7 @@ export function createHarness(feature, title, options) {
      * 사용자 폴더는 증거가 아니고 실행마다 약 17MB라, 증거 폴더(지우지 않는 runs/) 대신 OS 임시 폴더에 두고 닫을 때 지운다.
      */
     async browser() {
+      refuseIfClosing('Chrome');
       const profileDir = mkdtempSync(path.join(tmpdir(), 'dialogos-verify-chrome-'));
       // 닫기는 Chrome을 띄우기 전에 하나로 등록한다. Chrome이 떴으면 끝날 때까지 닫은 뒤에 폴더를 지운다.
       // 띄우는 도중(탭에 붙기 전)에 종료 신호가 와도, Chrome을 띄우지 못해도 Chrome과 폴더가 남지 않는다.
@@ -203,15 +212,23 @@ export function createHarness(feature, title, options) {
       return launchChrome({ profileDir, shotsDir: dir, onSpawn: (close) => (closeChrome = close) });
     },
 
-    /** 여정이 띄운 것을 모두 닫는다. 입구 스크립트가 여정이 끝난 뒤(실패해도) 부른다. */
-    async close() {
-      for (const closeOne of closers.splice(0).reverse()) {
-        try {
-          await closeOne();
-        } catch (error) {
-          console.error(`닫다가 실패: ${error instanceof Error ? error.message : error}`);
+    /**
+     * 여정이 띄운 것을 모두 닫는다. 입구 스크립트가 여정이 끝난 뒤(실패해도), 그리고 종료 신호를 받았을 때 부른다.
+     * 닫기는 한 번만 돈다. 닫는 도중에 다시 부르면(예: 여정 뒤의 닫기 중에 Ctrl+C) 같은 닫기를 돌려주어, 부른 쪽이 모두 끝나기를 기다린다.
+     * 나중에 넣은 것부터 닫고, 목록이 빌 때까지 닫는다.
+     */
+    close() {
+      closing ??= (async () => {
+        while (closers.length > 0) {
+          const closeOne = closers.pop();
+          try {
+            await closeOne();
+          } catch (error) {
+            console.error(`닫다가 실패: ${error instanceof Error ? error.message : error}`);
+          }
         }
-      }
+      })();
+      return closing;
     },
 
     ok(result) {

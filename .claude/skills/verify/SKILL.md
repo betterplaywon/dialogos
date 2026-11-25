@@ -62,7 +62,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `screen`: 앱을 빈 포트에 띄워 글로 한 판을 한다. 주제 목록 → 주제와 생각 고르기 → 글로 두 턴 → 새로 고친 뒤 이어 하기 → 끝내기 → 사후 입장과 훈계 문항 → 목록의 기록 → 판 파일의 턴과 끝 기록. 이 Mac에서 단계 합계 약 6초. [features/screen.md](features/screen.md)
 - `voice-screen`: 페이지보다 먼저 도는 스크립트로 브라우저의 음성 인식과 음성 합성을 가짜로 바꾸고 한 판을 한다. 음성 켜기 → 말하기 → 다시 말하기(바꿈) → 손댄 뒤 말하기(붙임) → 보내기(판 파일의 input, redone과 상대의 답 읽기) → 듣는 중에 끄기(붙임) → 보내기 → VS Code 꼴 User-Agent의 안내. 이 Mac에서 단계 합계 약 9초. [features/voice-screen.md](features/voice-screen.md)
 
-화면 여정은 실패하거나 Ctrl+C로 멈춰도 띄운 앱과 Chrome을 닫고 끝난다.
+화면 여정은 실패하거나 Ctrl+C(두 번 눌러도), 종료 신호, 터미널 닫기로 멈춰도 띄운 앱과 Chrome을 닫고 임시 사용자 폴더를 지운 뒤에 끝난다. 닫는 데 앱과 Chrome마다 많아야 5초 걸린다.
 
 맵에 없는 것을 확인하려면 여정을 하나 더 쓴다. `scripts/journeys/<id>.mjs`가 `export const title`과 `export async function run(h)`를 내보내면 입구 스크립트가 그 id를 바로 받는다. `h`는 `scripts/lib.mjs`의 하네스다.
 
@@ -71,7 +71,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `h.jsonl`, `h.json`, `h.read`, `h.exists`, `h.save`: 증거 폴더(= 이 검증의 실행 폴더)의 파일을 읽고 쓴다.
 - `h.runId`, `h.dir`, `h.runsDir`, `h.options`. 프로젝트 코드는 `evalModule('util')`처럼 불러 쓴다.
 - `h.app()`: 앱을 빈 포트 둘에 모의 모델로 띄우고, 화면을 거친 `/api/topics`가 답할 때까지 기다린다. `{ url, api, web, dbPath, db, log }`를 돌려준다. 판 파일은 증거 폴더의 `app-NN.sqlite`, 출력은 닫을 때 `cmd-NN-app.txt`에 남는다.
-- `h.browser()`: 창 없는 Chrome을 띄워 페이지 하나를 돌려준다(`scripts/browser.mjs`). `goto`, `reload`, `press(단추 글)`, `choose(라디오 name, 몇째)`, `type(selector, 글, { replace })`, `text`, `texts`, `value`, `hasButton`, `waitFor(식, 설명)`, `shot(이름)`, `beforeLoad(스크립트)`, `send(CDP 메서드)`, `errors`(페이지의 예외와 console.error). 누르기는 요소가 나타나기를 5초까지 기다린 뒤 그 자리를 마우스로 누르고, 쓰기는 글자 입력으로 보낸다.
+- `h.browser()`: 창 없는 Chrome을 띄워 페이지 하나를 돌려준다(`scripts/browser.mjs`). `goto`, `reload`, `press(단추 글)`, `choose(라디오 name, 몇째)`, `type(selector, 글)`(끝에 이어 친다), `text`, `texts`, `value`, `hasButton`, `waitFor(식, 설명)`, `shot(이름)`, `beforeLoad(스크립트)`, `send(CDP 메서드)`, `errors`(페이지의 예외와 console.error). 누르기는 요소가 나타나기를 5초까지 기다린 뒤 그 자리를 마우스로 누르고, 쓰기는 글자 입력으로 보낸다.
 - 여정이 띄운 앱과 Chrome은 입구 스크립트가 여정 뒤에 닫는다(`h.close()`). 여정이 따로 닫을 필요는 없다.
 
 여정을 추가하면 `features/`에 기능 파일을 같이 추가한다.

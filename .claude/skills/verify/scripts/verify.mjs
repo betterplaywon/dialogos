@@ -45,14 +45,33 @@ const journey = await import(pathToFileURL(path.join(JOURNEYS, `${feature}.mjs`)
 const h = createHarness(feature, journey.title, options);
 console.log(`verify ${feature}: ${journey.title}\n증거: ${h.rel}/`);
 
-// Ctrl+C나 종료 신호로 멈춰도 여정이 띄운 앱과 Chrome을 닫고 끝낸다.
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => {
-    console.log(`\n${signal}: 띄운 앱과 Chrome을 닫는다.`);
+// Ctrl+C, 끄기, 터미널 닫기로 멈춰도 여정이 띄운 앱과 Chrome을 닫은 뒤에 끝낸다.
+// 닫기는 한 번만 돌고(h.close()가 같은 닫기를 돌려준다), 닫는 동안 온 신호는 기다리라고만 알린다.
+// 그 신호로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 앱과 Chrome마다 많아야 5초 기다린다.
+/** 여정의 결과를 steps.md에 적었으면 true. 그 뒤에 온 신호는 결과를 덮어쓰지 않는다. */
+let finished = false;
+let stopping = null;
+const say = (line) => {
+  try {
+    console.log(line);
+  } catch {
+    // 터미널이 닫혀 쓸 곳이 없다. 닫기는 그대로 한다.
+  }
+};
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    if (stopping) {
+      say(`\n${signal}: 띄운 앱과 Chrome을 닫는 중이다. 끝날 때까지 기다린다.`);
+      return;
+    }
+    stopping = signal;
+    say(`\n${signal}: 띄운 앱과 Chrome을 닫는다.`);
     void h
       .close()
-      .then(() => h.finish(false, `${signal}로 도중에 멈췄다.`))
-      .finally(() => process.exit(130));
+      .then(() => {
+        if (!finished) h.finish(false, `${signal}로 도중에 멈췄다.`);
+      })
+      .finally(() => process.exit(finished ? (process.exitCode ?? 0) : 130));
   });
 }
 
@@ -64,8 +83,12 @@ try {
 }
 // 실패해도 띄운 것을 먼저 닫는다. 앱의 출력(cmd-NN-app.txt)이 닫을 때 쓰이므로 finish보다 앞이다.
 await h.close();
-const passed = error === undefined;
-h.finish(passed, error instanceof StepFailed ? undefined : error);
-if (error && !(error instanceof StepFailed)) console.error(error);
-console.log(`${passed ? 'VERIFY PASS' : 'VERIFY FAIL'} ${feature} — ${h.rel}/steps.md`);
-process.exitCode = passed ? 0 : 1;
+// 닫는 동안 신호가 왔으면 신호 쪽이 결과를 적고 끝낸다.
+if (!stopping) {
+  const passed = error === undefined;
+  h.finish(passed, error instanceof StepFailed ? undefined : error);
+  finished = true;
+  if (error && !(error instanceof StepFailed)) console.error(error);
+  console.log(`${passed ? 'VERIFY PASS' : 'VERIFY FAIL'} ${feature} — ${h.rel}/steps.md`);
+  process.exitCode = passed ? 0 : 1;
+}
