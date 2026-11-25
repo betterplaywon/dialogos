@@ -107,6 +107,7 @@ function serverWith(models: ModelSource, limits: Limits, pickMode: () => Mode = 
     models,
     limits,
     pickMode,
+    memory: true,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-22T00:00:00Z'),
   });
@@ -375,14 +376,14 @@ test('APP_MODEL을 적지 않은 모의 모델에서도 APP_MODE를 적지 않�
   const setup = await devSetup({});
   assert.equal(setup.models.provider, 'mock');
   assert.deepEqual(await modesOf(setup, GAMES), Array.from({ length: GAMES }, () => 'engine'));
-  assert.match(setup.label, /엔진 방식, 모의 모델/);
+  assert.match(setup.label, /엔진 방식, 기억 켬, 모의 모델/);
 });
 
 test('APP_MODE=random이면 받아들여 판마다 지시문 방식과 엔진 방식을 무작위로 고르고, 첫 줄이 눈가림 비교라고 알린다', async () => {
   const setup = await devSetup({ APP_MODE: 'random' });
   // 반씩 고르면 마흔 판이 모두 한 방식일 확률은 2의 -39제곱(1조분의 2쯤)이다.
   assert.deepEqual(new Set(await modesOf(setup, 2 * GAMES)), new Set(['prompt', 'engine']));
-  assert.match(setup.label, /방식 반씩 무작위\(눈가림 비교\)/);
+  assert.match(setup.label, /방식 반씩 무작위\(눈가림 비교\), 기억 끔/);
 });
 
 test('개발 서버는 APP_MODE가 engine과 random 밖이거나, APP_MODEL이 mock과 local 밖이거나, APP_LOCAL_THINK가 judge, all, none 밖이거나, 로컬 주소가 이 컴퓨터가 아니거나, 로컬 모델이 없거나 원격 모델이면 까닭을 알리고 띄우지 않는다', async (t) => {

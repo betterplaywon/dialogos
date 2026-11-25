@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import type { ErrorResponse, GamesResponse, TopicsResponse } from './contract.ts';
+import type { DeleteMemoryResponse, ErrorResponse, GamesResponse, MemoriesResponse, MemoryView, TopicsResponse } from './contract.ts';
 import { createGames, GameError, isLean, isRedone, isSide, isTurnInput, isVerdict, LOCAL_USER, MAX_REDONE, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
@@ -101,6 +101,21 @@ export function createApp(deps: AppDeps): Hono {
     if (!isVerdict(verdict)) throw new GameError(400, "훈계 문항의 답(verdict)은 'debate'나 'lecture'입니다.");
     return c.json(await games.record(userOf(c.req.raw), c.req.param('id'), lean, verdict));
   });
+
+  // 기억. 고치기와 지우기도 다른 쓰는 요청처럼 POST와 JSON으로만 받아, 위의 사이트 간 요청 막기가 그대로 덮는다.
+  app.get('/api/memories', async (c) =>
+    c.json<MemoriesResponse>({ memories: await games.memories(userOf(c.req.raw), c.req.query('topicId')) }),
+  );
+
+  app.post('/api/memories/:id/edit', async (c) => {
+    const { text } = await readBody(c.req);
+    if (typeof text !== 'string') throw new GameError(400, '고칠 글(text)이 필요합니다.');
+    return c.json<MemoryView>(await games.editMemory(userOf(c.req.raw), c.req.param('id'), text));
+  });
+
+  app.post('/api/memories/:id/delete', async (c) =>
+    c.json<DeleteMemoryResponse>(await games.deleteMemory(userOf(c.req.raw), c.req.param('id'))),
+  );
 
   app.notFound((c) => c.json<ErrorResponse>({ error: '없는 주소입니다.' }, 404));
 

@@ -58,6 +58,7 @@ function setup(overrides: Partial<AppDeps> = {}) {
     models: mockSource(),
     limits: UNLIMITED,
     pickMode: (): Mode => 'engine',
+    memory: true,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-19T00:00:00Z'),
     ...overrides,
@@ -404,14 +405,17 @@ test('저장이 느려도 같은 판의 턴과 끝내기가 서로의 저장을 
       await delay(10);
       return inner.get(id);
     },
-    async save(game: GameRecord) {
+    async save(game, newMemories) {
       await delay(10);
-      return inner.save(game);
+      return inner.save(game, newMemories);
     },
     list: (userId: string, limit: number) => inner.list(userId, limit),
     countTurnsSince: (userId: string, since: string) => inner.countTurnsSince(userId, since),
     addSpend: (entry: SpendEntry) => inner.addSpend(entry),
     totalSpendMicroUsd: () => inner.totalSpendMicroUsd(),
+    listMemories: (userId, query) => inner.listMemories(userId, query),
+    editMemory: (userId, id, text, at) => inner.editMemory(userId, id, text, at),
+    deleteMemory: (userId, id) => inner.deleteMemory(userId, id),
   };
   const { app } = setup({ store: slowStore, pickMode: () => 'prompt' });
   for (let round = 0; round < 5; round++) {
