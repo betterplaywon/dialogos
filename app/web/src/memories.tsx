@@ -4,12 +4,19 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { MemoryKind, MemoryView, PassedMemoryView, TopicView } from '../../server/contract.ts';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 import { MEMORIES_PER_TURN, MEMORY_MAX } from './memory-limits.ts';
 
 const KIND_LABEL: Readonly<Record<MemoryKind, string>> = { claim: '주장', ground: '근거', shift: '바뀐 생각', weakness: '약점' };
 
-const DELETED_NOTE = '기억만 지웠습니다. 판 기록은 남습니다.';
+/** 지운 자리의 알림. 이 자리에서 지웠는지, 고치거나 지우려다 다른 곳(다른 탭)에서 이미 지운 것을 알았는지에 따라 다르다. */
+const DELETED_NOTES = {
+  here: '기억만 지웠습니다. 판 기록은 남습니다.',
+  elsewhere: '다른 곳에서 이미 지운 기록입니다.',
+} as const;
+
+/** 고치거나 지우려던 기억이 서버에 없다(다른 곳에서 이미 지웠다). 화면의 기억은 늘 그 사용자의 것이라 404는 이 뜻뿐이다. */
+const goneAlready = (error: unknown): boolean => error instanceof ApiError && error.status === 404;
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
@@ -45,8 +52,8 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
   const [mode, setMode] = useState<ItemMode>({ kind: 'view' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** 이 자리에서 지웠는지. 같은 기억이 다른 턴에도 있으면 그곳에는 알림을 겹쳐 보이지 않는다. */
-  const [deletedHere, setDeletedHere] = useState(false);
+  /** 이 자리에서 지웠거나 지운 것을 알게 됐는지. 같은 기억이 다른 턴에도 있으면 그곳에는 알림을 겹쳐 보이지 않는다. */
+  const [deletedBy, setDeletedBy] = useState<keyof typeof DELETED_NOTES | null>(null);
   const item = useRef<HTMLLIElement | null>(null);
   const editButton = useRef<HTMLButtonElement | null>(null);
   const deleteButton = useRef<HTMLButtonElement | null>(null);
@@ -61,13 +68,20 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
 
   useEffect(() => {
     // 지운 자리에는 단추가 없다. 초점을 항목으로 옮겨, 키보드로 쓰는 사람이 자리를 잃지 않게 한다.
-    if (memory.state === 'deleted' && deletedHere) item.current?.focus();
-  }, [memory.state, deletedHere]);
+    if (memory.state === 'deleted' && deletedBy) item.current?.focus();
+  }, [memory.state, deletedBy]);
 
   function close(to: 'edit' | 'delete') {
     returnTo.current = to;
     setError(null);
     setMode({ kind: 'view' });
+  }
+
+  /** 지운 기록으로 바꾼다. 글은 더 보이지 않는다. */
+  function markDeleted(by: keyof typeof DELETED_NOTES) {
+    setDeletedBy(by);
+    setMode({ kind: 'view' });
+    onChange({ id: memory.id, state: 'deleted' });
   }
 
   async function save(event: FormEvent) {
@@ -79,7 +93,8 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
       onChange(keptOf(await api.editMemory(memory.id, mode.draft)));
       close('edit');
     } catch (e) {
-      setError(messageOf(e));
+      if (goneAlready(e)) markDeleted('elsewhere');
+      else setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -91,11 +106,10 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
     setError(null);
     try {
       await api.deleteMemory(memory.id);
-      setDeletedHere(true);
-      setMode({ kind: 'view' });
-      onChange({ id: memory.id, state: 'deleted' });
+      markDeleted('here');
     } catch (e) {
-      setError(messageOf(e));
+      if (goneAlready(e)) markDeleted('elsewhere');
+      else setError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -109,7 +123,7 @@ function MemoryItem({ memory, onChange }: { memory: PassedMemoryView; onChange: 
   // 지우기 전과 뒤의 자식 구성이 달라, key가 없으면 React가 이 칸을 다른 노드로 바꿔 끼워 미리 있던 알림 칸이 아니게 된다.
   const note = (
     <span key="note" className="memory-note" role="status">
-      {memory.state === 'deleted' && deletedHere ? DELETED_NOTE : ''}
+      {memory.state === 'deleted' && deletedBy ? DELETED_NOTES[deletedBy] : ''}
     </span>
   );
 

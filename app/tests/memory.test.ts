@@ -689,3 +689,44 @@ test('턴 응답과 판은 넘긴 기억을 싣고, 지운 기억은 글 없이 
     assert.deepEqual(recorded.data.passed, view.data.passed);
   }
 });
+
+test('답을 기다리는 사이에 다른 곳에서 지우거나 고친 기억은 턴 응답에도 지운 기록과 지금 글로 온다', async () => {
+  const store = new MemoryGameStore();
+  // 상대가 답을 만드는 사이에 한 번 돈다. 다른 탭에서 기억을 지우고 고친 것을 흉내 낸다.
+  let during: (() => Promise<void>) | undefined;
+  const models: ModelSource = {
+    provider: 'mock',
+    create: (role) =>
+      role === 'judge'
+        ? judge
+        : {
+            name: 'racing-opponent',
+            async complete() {
+              const run = during;
+              during = undefined;
+              await run?.();
+              return '답입니다.';
+            },
+          },
+  };
+  const { call, playQ01, memoriesOfUser } = server({ store, models, now: ticking() });
+  await call('POST', `/api/games/${await playQ01()}/record`, { lean: 1, verdict: 'debate' });
+  const [a, b, c] = await memoriesOfUser();
+  if (!a || !b || !c) throw new Error('기억이 셋보다 적습니다.');
+  const second = await call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 });
+  during = async () => {
+    assert.equal(await store.deleteMemory('local', a.id), true);
+    assert.ok(await store.editMemory('local', b.id, '다른 탭에서 고친 글', '2026-11-25T01:00:00.000Z'));
+  };
+  const turn = await call<TurnResponse>('POST', `/api/games/${second.data.id}/turns`, { text: '새 판의 말입니다.' });
+  assert.equal(turn.status, 200);
+  assert.equal(during, undefined);
+  assert.deepEqual(turn.data.memories, [
+    { id: a.id, state: 'deleted' },
+    { id: b.id, state: 'kept', kind: b.kind, text: '다른 탭에서 고친 글', edited: true },
+    { id: c.id, state: 'kept', kind: c.kind, text: c.text, edited: false },
+  ]);
+  // 지운 기억의 글과 고치기 전 글은 응답 어디에도 없다.
+  assert.ok(!JSON.stringify(turn.data).includes(a.text));
+  assert.ok(!JSON.stringify(turn.data).includes(b.text));
+});
