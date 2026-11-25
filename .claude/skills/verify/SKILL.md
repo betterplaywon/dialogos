@@ -1,6 +1,6 @@
 ---
 name: verify
-description: "dialogos 판정 실험의 명령(eval:run → eval:label → eval:score → eval:sample → eval:agreement)과 화면(app/의 글 한 판)을 모의 모델로 사람이 쓰는 순서대로 돌려 증거를 runs/verify/에 남기는 검증 스킬. 화면은 사용자의 개발 서버와 겹치지 않는 빈 포트에 앱을 띄우고 창 없는 Chrome으로 누른다. 실제 모델은 부르지 않는다(.env를 읽지 않고, 연결 정보와 APP_*를 지운 환경, --confirm 없음). 변경이 실제 명령 흐름이나 화면에서 동작하는지 증명하거나, 버그를 재현하거나, 대화·판정·라벨을 사람이 읽는 대화록으로 보여 줄 때 쓴다. /verify"
+description: "dialogos 판정 실험의 명령(eval:run → eval:label → eval:score → eval:sample → eval:agreement)과 화면(app/의 글 한 판, 음성 한 판)을 모의 모델로 사람이 쓰는 순서대로 돌려 증거를 runs/verify/에 남기는 검증 스킬. 화면은 사용자의 개발 서버와 겹치지 않는 빈 포트에 앱을 띄우고 창 없는 Chrome으로 누른다. 음성은 브라우저의 인식기와 합성기만 가짜로 바꾸고 실제 마이크와 소리는 쓰지 않는다. 실제 모델은 부르지 않는다(.env를 읽지 않고, 연결 정보와 APP_*를 지운 환경, --confirm 없음). 변경이 실제 명령 흐름이나 화면에서 동작하는지 증명하거나, 버그를 재현하거나, 대화·판정·라벨을 사람이 읽는 대화록으로 보여 줄 때 쓴다. /verify"
 ---
 
 # verify
@@ -42,7 +42,7 @@ dialogos의 실행 표면은 판정 실험(`eval/`)의 명령 다섯 개와 화�
 node .claude/skills/verify/scripts/verify.mjs <기능> [--questions q01,q02] [--reps 2] [--turns 30]
 ```
 
-`<기능>`은 [feature map](features/README.md)의 id 하나다: `flow` | `plan-gate` | `screen`. 옵션은 이 셋뿐이고 `flow`만 쓴다. 기본값은 모든 질문, 조건 셋, 2번, 30턴이다(본 실행과 같은 모양).
+`<기능>`은 [feature map](features/README.md)의 id 하나다: `flow` | `plan-gate` | `screen` | `voice-screen`. 옵션은 이 셋뿐이고 `flow`만 쓴다. 기본값은 모든 질문, 조건 셋, 2번, 30턴이다(본 실행과 같은 모양).
 
 성공 출력 예:
 
@@ -60,6 +60,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `flow`: 대화 → 같은 명령으로 이어 돌리기 → 채점 → 결과표 → 표본(숨긴 칸 확인) → 사람 칸을 채운 일치율(두 칸을 일부러 뒤집어 그 두 개만 다르게 나오는지) → 사람이 읽는 대화록. [features/flow.md](features/flow.md)
 - `plan-gate`: `--provider api`의 대화와 채점이 `--confirm` 없이는 계획만 출력하고, 실행 폴더·라벨·채점기 기록을 만들지 않는지. [features/plan-gate.md](features/plan-gate.md)
 - `screen`: 앱을 빈 포트에 띄워 글로 한 판을 한다. 주제 목록 → 주제와 생각 고르기 → 글로 두 턴 → 새로 고친 뒤 이어 하기 → 끝내기 → 사후 입장과 훈계 문항 → 목록의 기록 → 판 파일의 턴과 끝 기록. 이 Mac에서 단계 합계 약 6초. [features/screen.md](features/screen.md)
+- `voice-screen`: 페이지보다 먼저 도는 스크립트로 브라우저의 음성 인식과 음성 합성을 가짜로 바꾸고 한 판을 한다. 음성 켜기 → 말하기 → 다시 말하기(바꿈) → 손댄 뒤 말하기(붙임) → 보내기(판 파일의 input, redone과 상대의 답 읽기) → 듣는 중에 끄기(붙임) → 보내기 → VS Code 꼴 User-Agent의 안내. 이 Mac에서 단계 합계 약 9초. [features/voice-screen.md](features/voice-screen.md)
 
 화면 여정은 실패하거나 Ctrl+C로 멈춰도 띄운 앱과 Chrome을 닫고 끝난다.
 
@@ -91,7 +92,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - **사람이 쓰는 경로로 한다.** 명령과 앱은 npm 스크립트와 같은 진입점으로 띄우고, 사람 칸은 표본 파일을 채워서 넣는다. 화면은 단추를 글로 찾아 누르고 입력 칸에 글자를 친다. 내부 함수를 직접 불러 결과를 만들지 않는다.
 - **행동과 결과를 함께 남긴다.** 단계마다 관찰과 명령 출력, 그리고 결과 파일.
 - **부수 효과를 확인한다.** 줄 수, `meta.json`의 기록, 판 파일의 행, 만들어지지 않아야 할 폴더와 파일까지 본다.
-- **모의는 경계에서만.** 모의 모델은 `--provider mock`과 앱의 기본값(`APP_MODEL` 없음)이라는 정식 선택지이고, 그 밖에 바꾼 것은 `.env`를 읽지 않는 것 하나다.
+- **모의는 경계에서만.** 모의 모델은 `--provider mock`과 앱의 기본값(`APP_MODEL` 없음)이라는 정식 선택지이고, 그 밖에 바꾼 것은 `.env`를 읽지 않는 것 하나다. `voice-screen`만 브라우저의 음성 API 네 이름을 가짜로 바꾼다. 앱의 코드는 그 API를 잇는 `browser-voice.ts`부터 화면까지 그대로 돈다.
 - 보고에는 기능 id, 증거 폴더, 단계별 결과를 적는다. 모의 모델의 숫자는 결과로 적지 않는다.
 
 ## 아직 못 하는 것
@@ -99,7 +100,9 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - 실제 모델의 형식(판정기와 채점기가 JSON을 제대로 내는지, 온도 값을 받는지, 걸리는 시간과 토큰)은 증명하지 않는다. 시범 실행에서 본다.
 - 실제 모델 연결 코드는 `eval/tests/api.test.ts`, `api-flow.test.ts`가 이 컴퓨터 안의 가짜 서버로 검사한다. 이 스킬은 그 경로를 타지 않는다.
 - 화면 여정은 이 Mac의 창 없는 Chrome 한 가지로만 본다. Safari, Firefox, 좁은 화면은 사람이 본다.
-- 음성은 아직 여정이 없다. 기억은 아직 없다. 생기면 여정을 더한다.
+- 실제 인식기(정확도, 쉼에서 끊기는 때), 실제 목소리(고르기, 속도, 기기 밖 목소리), 실제 마이크와 권한 창, 인식 팩 내려받기는 증명하지 않는다. 여전히 사람이 Chrome에서 직접 본다. `voice-screen`은 그 위의 화면 규칙만 본다.
+- 앱 안 브라우저는 User-Agent만 바꾼 Chrome으로 흉내 낸다. 실제 VS Code 안에서 페이지가 닫히는지는 보지 않는다.
+- 기억은 아직 없다. 생기면 여정을 더한다.
 
 ## 유지보수
 
