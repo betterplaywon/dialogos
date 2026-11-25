@@ -187,9 +187,14 @@ export function createHarness(feature, title, options) {
         }
         await sleep(200);
       }
+      // 끄기 전에 본다. 끈 뒤에는 늘 끝나 있다.
+      const why =
+        child.exitCode !== null || child.signalCode !== null
+          ? `앱이 뜨기 전에 끝났다(종료 코드 ${child.exitCode}, 신호 ${child.signalCode ?? '없음'})`
+          : '앱이 30초 안에 뜨지 않았다';
       await stop();
       const tail = plain(output).trim().split('\n').slice(-5).join(' / ');
-      throw new Error(`앱이 30초 안에 뜨지 않았다(${log}): ${tail}`);
+      throw new Error(`${why}(${log}): ${tail}`);
     },
 
     /**
