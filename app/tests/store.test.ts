@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { MAX_MEMORY_TEXT, type MemoryRecord } from '../server/memory.ts';
 import { MIGRATIONS, SqliteGameStore } from '../server/sqlite-store.ts';
 import { MemoryGameStore, type GameRecord, type GameStore, type SpendEntry, type TurnLog } from '../server/store.ts';
 
@@ -77,6 +78,62 @@ const mixedInputTurns: TurnLog[] = (['text', 'voice', 'voice-edited', 'voice'] a
 
 /** 저장한 시각만 다른 지시문 방식의 턴. */
 const turnAt = (n: number, at: string): TurnLog => ({ ...promptTurn, n, at });
+
+/** 끝 기록을 남긴 판 g1의 기억 하나. */
+function memory(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
+  return {
+    id: 'm1',
+    userId: 'local',
+    gameId: 'g1',
+    topicId: 'q01',
+    side: 0,
+    kind: 'claim',
+    text: '지킨 입장: 검사용 입장입니다. 첫 말: "검사용 말입니다."',
+    createdAt: '2026-11-19T00:04:00.000Z',
+    ...overrides,
+  };
+}
+
+/** 끝내고 기록을 남긴 판. 기억의 만든 시각은 끝 기록의 시각과 같다. */
+const recordedAt = (id: string, at: string, overrides: Partial<GameRecord> = {}): GameRecord =>
+  sample({ id, endedAt: at, endReason: 'user', record: { lean: 1, verdict: 'debate', at }, ...overrides });
+
+/** 판 하나의 기억들. id는 `${판}-${글자}`이고, 글자 차례(z, y, x)가 넣는 차례와 반대다. */
+const memoriesFor = (game: GameRecord, kinds: readonly MemoryRecord['kind'][]): MemoryRecord[] =>
+  kinds.map((kind, i) =>
+    memory({
+      id: `${game.id}-${'zyx'[i]}`,
+      userId: game.userId,
+      gameId: game.id,
+      topicId: game.topicId,
+      side: game.side,
+      kind,
+      text: `${game.id} ${kind}`,
+      createdAt: game.record?.at ?? '',
+    }),
+  );
+
+/**
+ * 끝 기록과 기억을 넣은 판 넷. 넣는 차례(g1, g2, g3)와 만든 시각의 차례(g2, g3, g1)가 다르다.
+ * g3은 다른 주제, g4는 남의 판이다.
+ */
+async function seedMemories(store: GameStore): Promise<void> {
+  const games: [GameRecord, MemoryRecord['kind'][]][] = [
+    [recordedAt('g1', '2026-11-19T01:00:00.000Z'), ['claim', 'ground', 'shift']],
+    [recordedAt('g2', '2026-11-19T03:00:00.000Z'), ['claim', 'weakness']],
+    [recordedAt('g3', '2026-11-19T02:00:00.000Z', { topicId: 'x01', side: 1 }), ['claim']],
+    [recordedAt('g4', '2026-11-19T04:00:00.000Z', { userId: 'someone-else' }), ['claim']],
+  ];
+  for (const [game, kinds] of games) {
+    await store.create({ ...game, endedAt: undefined, endReason: undefined, record: undefined });
+    await store.save(game, memoriesFor(game, kinds));
+  }
+}
+
+const idsOf = (memories: readonly MemoryRecord[]) => memories.map((m) => m.id);
+
+/** seedMemories가 넣은 local의 기억 전체의 차례. */
+const SEEDED = ['g2-z', 'g2-y', 'g3-z', 'g1-z', 'g1-y', 'g1-x'];
 
 /** 판정기를 한 번 부른 원장 한 줄. */
 function spend(overrides: Partial<SpendEntry> = {}): SpendEntry {
@@ -272,7 +329,195 @@ for (const [name, open] of stores) {
     await store.addSpend(spend({ userId: 'someone-else', gameId: '없는판', costMicroUsd: 1 }));
     assert.equal(await store.totalSpendMicroUsd(), 850 + 1875 + 1);
   });
+
+  test(`${name} 저장소: 끝 기록과 기억을 함께 남기고, 기억은 그 사용자의 것만 만든 시각이 늦은 것부터, 같은 시각이면 넣은 차례로 나온다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await seedMemories(store);
+    assert.deepEqual((await store.get('g1'))?.record, { lean: 1, verdict: 'debate', at: '2026-11-19T01:00:00.000Z' });
+    assert.deepEqual(idsOf(await store.listMemories('local', { limit: 10 })), SEEDED);
+    assert.deepEqual(idsOf(await store.listMemories('local', { limit: 3 })), ['g2-z', 'g2-y', 'g3-z']);
+    assert.deepEqual(idsOf(await store.listMemories('local', { topicId: 'q01', limit: 10 })), ['g2-z', 'g2-y', 'g1-z', 'g1-y', 'g1-x']);
+    assert.deepEqual(idsOf(await store.listMemories('local', { topicId: 'x01', limit: 10 })), ['g3-z']);
+    assert.deepEqual(await store.listMemories('local', { topicId: '없는주제', limit: 10 }), []);
+    assert.deepEqual(idsOf(await store.listMemories('someone-else', { limit: 10 })), ['g4-z']);
+    assert.deepEqual(await store.listMemories('nobody', { limit: 10 }), []);
+    // 넣은 그대로 돌려준다. 고친 적이 없으면 고친 시각이 없다.
+    assert.deepEqual(await store.listMemories('local', { topicId: 'x01', limit: 1 }), [
+      memory({ id: 'g3-z', gameId: 'g3', topicId: 'x01', side: 1, text: 'g3 claim', createdAt: '2026-11-19T02:00:00.000Z' }),
+    ]);
+  });
+
+  test(`${name} 저장소: 기억 글을 고치면 고친 시각이 남고 차례는 그대로이며, 남의 기억이나 없는 기억은 고치지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await seedMemories(store);
+    const edited = await store.editMemory('local', 'g1-y', '고친 글입니다.', '2026-11-20T00:00:00.000Z');
+    const expected = memory({
+      id: 'g1-y',
+      kind: 'ground',
+      text: '고친 글입니다.',
+      createdAt: '2026-11-19T01:00:00.000Z',
+      editedAt: '2026-11-20T00:00:00.000Z',
+    });
+    assert.deepEqual(edited, expected);
+    const listed = await store.listMemories('local', { limit: 10 });
+    assert.deepEqual(idsOf(listed), SEEDED);
+    assert.deepEqual(listed[4], expected);
+    // 돌려받은 것을 밖에서 고쳐도 저장된 기억은 그대로다.
+    if (edited) edited.text = '밖에서 고침';
+    assert.deepEqual((await store.listMemories('local', { limit: 10 }))[4], expected);
+
+    assert.equal(await store.editMemory('someone-else', 'g1-y', '남이 고침', '2026-11-20T00:01:00.000Z'), undefined);
+    assert.equal(await store.editMemory('local', 'g4-z', '남의 것을 고침', '2026-11-20T00:01:00.000Z'), undefined);
+    assert.equal(await store.editMemory('local', '없는기억', '고침', '2026-11-20T00:01:00.000Z'), undefined);
+    assert.deepEqual((await store.listMemories('local', { limit: 10 }))[4], expected);
+    assert.equal((await store.listMemories('someone-else', { limit: 10 }))[0]?.text, 'g4 claim');
+  });
+
+  test(`${name} 저장소: 기억을 지우면 목록에서 빠지고 판 기록은 남으며, 남의 기억이나 없는 기억은 지우지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await seedMemories(store);
+    const before = await store.get('g1');
+    assert.equal(await store.deleteMemory('someone-else', 'g1-y'), false);
+    assert.equal(await store.deleteMemory('local', 'g4-z'), false);
+    assert.equal(await store.deleteMemory('local', '없는기억'), false);
+    assert.deepEqual(idsOf(await store.listMemories('local', { limit: 10 })), SEEDED);
+
+    assert.equal(await store.deleteMemory('local', 'g1-y'), true);
+    assert.deepEqual(idsOf(await store.listMemories('local', { limit: 10 })), ['g2-z', 'g2-y', 'g3-z', 'g1-z', 'g1-x']);
+    assert.equal(await store.deleteMemory('local', 'g1-y'), false);
+    assert.equal(await store.editMemory('local', 'g1-y', '지운 뒤 고침', '2026-11-20T00:00:00.000Z'), undefined);
+    assert.deepEqual(await store.get('g1'), before);
+    assert.deepEqual(idsOf(await store.listMemories('someone-else', { limit: 10 })), ['g4-z']);
+  });
+
+  test(`${name} 저장소: 기억을 넣지 못하면 끝 기록과 판의 변경도 남지 않는다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await seedMemories(store);
+    await store.create(sample({ id: 'g5' }));
+    const recorded = recordedAt('g5', '2026-11-19T05:00:00.000Z', { turns: [promptTurn] });
+    const [fresh] = memoriesFor(recorded, ['claim']);
+    if (!fresh) throw new Error('기억을 만들지 못했습니다.');
+    // 이미 있는 기억과 id가 겹치거나, 한 번에 넣는 기억끼리 id가 겹친다.
+    for (const memories of [
+      [fresh, { ...fresh, id: 'g1-z' }],
+      [fresh, { ...fresh }],
+    ]) {
+      await assert.rejects(store.save(recorded, memories));
+      assert.deepEqual(await store.get('g5'), sample({ id: 'g5' }));
+      const listed = await store.listMemories('local', { limit: 10 });
+      assert.deepEqual(idsOf(listed), SEEDED);
+      assert.equal(listed.find((m) => m.id === 'g1-z')?.gameId, 'g1');
+    }
+    // 겹치지 않으면 남긴다.
+    await store.save(recorded, [fresh]);
+    assert.deepEqual(await store.get('g5'), recorded);
+    assert.deepEqual(idsOf(await store.listMemories('local', { limit: 1 })), ['g5-z']);
+  });
 }
+
+test('메모리 저장소와 SQLite 저장소는 같은 기억과 고치기, 지우기에 같은 목록을 같은 차례로 낸다', async (t) => {
+  const inMemory = new MemoryGameStore();
+  const sqlite = new SqliteGameStore(':memory:');
+  t.after(() => sqlite.close());
+  const lists = async (store: GameStore) => [
+    await store.listMemories('local', { limit: 100 }),
+    await store.listMemories('local', { topicId: 'q01', limit: 4 }),
+    await store.listMemories('someone-else', { limit: 100 }),
+  ];
+  for (const store of [inMemory, sqlite]) {
+    await seedMemories(store);
+    await store.editMemory('local', 'g2-y', '고친 약점입니다.', '2026-11-20T00:00:00.000Z');
+    await store.deleteMemory('local', 'g1-z');
+  }
+  const fromMemory = await lists(inMemory);
+  assert.deepEqual(fromMemory, await lists(sqlite));
+  assert.deepEqual(fromMemory.map(idsOf), [
+    ['g2-z', 'g2-y', 'g3-z', 'g1-y', 'g1-x'],
+    ['g2-z', 'g2-y', 'g1-y', 'g1-x'],
+    ['g4-z'],
+  ]);
+  assert.equal(fromMemory[0]?.[1]?.text, '고친 약점입니다.');
+});
+
+test('SQLite 저장소: 기억 글이 비었거나 상한(MAX_MEMORY_TEXT)을 넘거나, 종류나 지킨 쪽이 정한 값 밖이면 넣지 않고 끝 기록도 남기지 않는다', async (t) => {
+  const store = new SqliteGameStore(':memory:');
+  t.after(() => store.close());
+  await store.create(sample());
+  const recorded = recordedAt('g1', '2026-11-19T00:04:00.000Z');
+  for (const bad of [
+    memory({ text: '' }),
+    memory({ text: '가'.repeat(MAX_MEMORY_TEXT + 1) }),
+    memory({ kind: 'habit' as MemoryRecord['kind'] }),
+    memory({ side: 2 as MemoryRecord['side'] }),
+  ]) {
+    await assert.rejects(store.save(recorded, [memory({ id: 'ok' }), { ...bad, id: 'bad' }]));
+    assert.deepEqual(await store.get('g1'), sample());
+    assert.deepEqual(await store.listMemories('local', { limit: 10 }), []);
+  }
+  // 상한까지는 받는다. 고칠 때도 같은 상한이다. 스키마의 CHECK(200)와 memory.ts의 상수가 어긋나면 여기서 드러난다.
+  await store.save(recorded, [memory({ text: '가'.repeat(MAX_MEMORY_TEXT) })]);
+  await assert.rejects(store.editMemory('local', 'm1', '가'.repeat(MAX_MEMORY_TEXT + 1), '2026-11-20T00:00:00.000Z'));
+  await assert.rejects(store.editMemory('local', 'm1', '', '2026-11-20T00:00:00.000Z'));
+  assert.deepEqual(await store.listMemories('local', { limit: 10 }), [memory({ text: '가'.repeat(MAX_MEMORY_TEXT) })]);
+});
+
+test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고, 예전 판과 턴은 그대로 읽는다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-migrate-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  // 스키마 5까지만 적용한 파일(기억을 붙이기 전의 서버가 만든 파일)을 흉내 낸다. 그때는 기억 표가 없다.
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+  for (const sql of MIGRATIONS.slice(0, 5)) old.exec(sql);
+  old.exec('INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5)');
+  old
+    .prepare(
+      `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, history, conceded, start_lean, started_at,
+                          ended_at, end_reason, end_lean, verdict, recorded_at)
+       VALUES ('old', 'local', 'q01', 1, 'utilitarian', 'engine', '[]', '["P1"]', 0, '2026-11-24T00:00:00.000Z',
+               '2026-11-24T00:10:00.000Z', 'user', 2, 'debate', '2026-11-24T00:11:00.000Z')`,
+    )
+    .run();
+  old
+    .prepare(
+      `INSERT INTO turns (game_id, n, user_text, input, redone, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
+       VALUES ('old', 1, '반론입니다.', 'voice', 2, 'P1을 거둡니다.', '{"tactic":"argument","defeats":"P1","reason":"반례"}', 1, 1, 12, 34,
+               '2026-11-24T00:01:00.000Z')`,
+    )
+    .run();
+  old.close();
+
+  const store = new SqliteGameStore(path);
+  t.after(() => store.close());
+  assert.equal(store.schemaVersion, 6);
+  const game = await store.get('old');
+  assert.deepEqual(game, {
+    id: 'old',
+    userId: 'local',
+    topicId: 'q01',
+    side: 1,
+    cardId: 'utilitarian',
+    mode: 'engine',
+    startLean: 0,
+    history: [],
+    conceded: ['P1'],
+    turns: [{ ...engineTurn, input: 'voice', redone: 2, judge: { calls: 1, readable: true }, at: '2026-11-24T00:01:00.000Z' }],
+    startedAt: '2026-11-24T00:00:00.000Z',
+    endedAt: '2026-11-24T00:10:00.000Z',
+    endReason: 'user',
+    record: { lean: 2, verdict: 'debate', at: '2026-11-24T00:11:00.000Z' },
+  });
+  // 예전 판에는 기억이 없다. 기억 표는 비어서 시작하고, 판을 바꾸지 않고 기억을 더할 수 있다.
+  assert.deepEqual(await store.listMemories('local', { limit: 10 }), []);
+  const added = memory({ gameId: 'old', side: 1 });
+  await store.save(game!, [added]);
+  assert.deepEqual(await store.listMemories('local', { limit: 10 }), [added]);
+  assert.deepEqual(await store.get('old'), game);
+});
 
 test('SQLite 저장소: 파일을 다시 열면 판이 남고, 스키마는 한 번만 적용한다', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'dialogos-store-'));

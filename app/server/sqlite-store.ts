@@ -3,7 +3,8 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type { ChatMessage, JudgeDecision } from '../../eval/src/types.ts';
-import type { EndReason, Lean, SideIndex, TurnInput, Verdict } from './contract.ts';
+import type { EndReason, Lean, MemoryKind, SideIndex, TurnInput, Verdict } from './contract.ts';
+import type { MemoryRecord } from './memory.ts';
 import type { EndRecord, GameRecord, GameStore, GameSummary, Mode, SpendEntry, TurnLog } from './store.ts';
 
 /**
@@ -60,6 +61,20 @@ export const MIGRATIONS: readonly string[] = [
   // 5: 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수. 그 전에 저장한 턴은 이 횟수를 남기지 않았으므로 0으로 둔다
   // (다시 말하면 바꾸는 동작이 들어온 PR #28부터 이 스키마 전까지 다시 말한 턴도 0이다).
   `ALTER TABLE turns ADD COLUMN redone INTEGER NOT NULL DEFAULT 0 CHECK (redone >= 0);`,
+  // 6: 사용자별 기억(app/server/memory.ts). 판 끝 기록과 같은 트랜잭션으로 넣고, 사용자가 글을 고치거나 줄을 지운다.
+  // 지워도 판과 턴은 남는다. 글의 길이 상한(200)은 memory.ts의 MAX_MEMORY_TEXT와 같다.
+  `CREATE TABLE memories (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL,
+     game_id TEXT NOT NULL REFERENCES games (id),
+     topic_id TEXT NOT NULL,
+     side INTEGER NOT NULL CHECK (side IN (0, 1)),
+     kind TEXT NOT NULL CHECK (kind IN ('claim', 'ground', 'shift', 'weakness')),
+     text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND 200),
+     created_at TEXT NOT NULL,
+     edited_at TEXT
+   );
+   CREATE INDEX memories_by_user ON memories (user_id, topic_id, created_at);`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -112,6 +127,32 @@ interface SummaryRow {
   end_lean: number | null;
   verdict: string | null;
   recorded_at: string | null;
+}
+
+interface MemoryRow {
+  id: string;
+  user_id: string;
+  game_id: string;
+  topic_id: string;
+  side: number;
+  kind: string;
+  text: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+function memoryOf(row: MemoryRow): MemoryRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    gameId: row.game_id,
+    topicId: row.topic_id,
+    side: row.side as SideIndex,
+    kind: row.kind as MemoryKind,
+    text: row.text,
+    createdAt: row.created_at,
+    ...(row.edited_at !== null ? { editedAt: row.edited_at } : {}),
+  };
 }
 
 /** 끝 기록의 세 칸은 함께 채워진다. 하나라도 비었으면 기록이 없는 것이다. */
@@ -263,8 +304,11 @@ export class SqliteGameStore implements GameStore {
     };
   }
 
-  /** 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기). */
-  async save(game: GameRecord): Promise<void> {
+  /**
+   * 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(턴과 같은 덧붙이기).
+   * 새 기억은 판과 같은 트랜잭션으로 넣는다. 하나라도 넣지 못하면 판의 변경도 되돌린다.
+   */
+  async save(game: GameRecord, newMemories: readonly MemoryRecord[] = []): Promise<void> {
     this.#transaction(() => {
       const result = this.#db
         .prepare(
@@ -287,6 +331,13 @@ export class SqliteGameStore implements GameStore {
         );
       if (Number(result.changes) === 0) throw new Error(`없는 판입니다: ${game.id}`);
       this.#insertTurns(game);
+      const insert = this.#db.prepare(
+        `INSERT INTO memories (id, user_id, game_id, topic_id, side, kind, text, created_at, edited_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const m of newMemories) {
+        insert.run(m.id, m.userId, m.gameId, m.topicId, m.side, m.kind, m.text, m.createdAt, m.editedAt ?? null);
+      }
     });
   }
 
@@ -351,5 +402,30 @@ export class SqliteGameStore implements GameStore {
   async totalSpendMicroUsd(): Promise<number> {
     const row = this.#db.prepare('SELECT COALESCE(SUM(cost_micro_usd), 0) AS total FROM spend').get() as unknown as { total: number };
     return row.total;
+  }
+
+  /** 같은 시각이면 먼저 넣은 줄(rowid가 작은 줄)이 먼저다. */
+  async listMemories(userId: string, query: { topicId?: string; limit: number }): Promise<MemoryRecord[]> {
+    const where = query.topicId === undefined ? [userId] : [userId, query.topicId];
+    const rows = this.#db
+      .prepare(
+        `SELECT * FROM memories WHERE user_id = ?${where.length > 1 ? ' AND topic_id = ?' : ''}
+         ORDER BY created_at DESC, rowid ASC
+         LIMIT ?`,
+      )
+      .all(...where, query.limit) as unknown as MemoryRow[];
+    return rows.map(memoryOf);
+  }
+
+  async editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined> {
+    const row = this.#db
+      .prepare('UPDATE memories SET text = ?, edited_at = ? WHERE id = ? AND user_id = ? RETURNING *')
+      .get(text, at, id, userId) as unknown as MemoryRow | undefined;
+    return row ? memoryOf(row) : undefined;
+  }
+
+  async deleteMemory(userId: string, id: string): Promise<boolean> {
+    const result = this.#db.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').run(id, userId);
+    return Number(result.changes) > 0;
   }
 }

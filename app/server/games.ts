@@ -6,10 +6,12 @@ import { DEFAULT_TURNS } from '../../eval/src/script.ts';
 import type { Card, Question } from '../../eval/src/types.ts';
 import { limitRefusal, meteredModels, type Limits, type ModelSource, type Refusal } from './budget.ts';
 import type {
+  DeleteMemoryResponse,
   EndRecordView,
   GameSummaryView,
   GameView,
   Lean,
+  MemoryView,
   MessageView,
   SideIndex,
   TopicView,
@@ -18,6 +20,7 @@ import type {
   TurnResponse,
   Verdict,
 } from './contract.ts';
+import { MAX_MEMORY_TEXT, memoriesOf, memoryLength, oneLine, type MemoryRecord } from './memory.ts';
 import { voiceTallyOf, type EndRecord, type GameRecord, type GameStore, type Mode } from './store.ts';
 
 /** 한 판에서 사용자가 보낼 수 있는 턴 수. 판정 실험이 잰 대화 길이와 같다. */
@@ -26,6 +29,8 @@ export const MAX_TURNS = DEFAULT_TURNS;
 export const MAX_TEXT_LENGTH = 1000;
 /** 지난 판 목록에 보이는 판 수. */
 export const RECENT_GAMES = 20;
+/** 기억 목록에 보이는 기억 수. 주제를 골라도 같다. */
+export const RECENT_MEMORIES = 100;
 /** 로그인을 붙이기 전의 사용자. 3주 차에 사람마다 다른 사용자로 바꾼다. */
 export const LOCAL_USER = 'local';
 /**
@@ -76,6 +81,11 @@ export interface GameDeps {
   limits: Limits;
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
+  /**
+   * 끝 기록을 남길 때 기억을 만드는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
+   * 눈가림 비교(APP_MODE=random)에서는 끈다(2026-11-25 사용자 결정, dev-setup.ts).
+   */
+  memory: boolean;
   newId: () => string;
   now: () => Date;
 }
@@ -106,6 +116,19 @@ export function topicView(topic: Topic): TopicView {
 
 function recordView(record: EndRecord | undefined): EndRecordView | null {
   return record ? { lean: record.lean, verdict: record.verdict } : null;
+}
+
+function memoryView(memory: MemoryRecord): MemoryView {
+  return {
+    id: memory.id,
+    gameId: memory.gameId,
+    topicId: memory.topicId,
+    side: memory.side,
+    kind: memory.kind,
+    text: memory.text,
+    createdAt: memory.createdAt,
+    edited: memory.editedAt !== undefined,
+  };
 }
 
 function messagesOf(game: GameRecord): MessageView[] {
@@ -338,16 +361,45 @@ export function createGames(deps: GameDeps) {
       });
     },
 
-    /** 끝난 판에 사후 입장과 훈계 문항의 답을 남긴다. 한 번 남기면 바꾸지 않는다. */
+    /**
+     * 끝난 판에 사후 입장과 훈계 문항의 답을 남긴다. 한 번 남기면 바꾸지 않는다.
+     * 기억이 켜져 있으면 이 판의 기억을 규칙으로 만들어 끝 기록과 함께 저장한다. 기억을 넣지 못하면 끝 기록도 남지 않는다.
+     */
     async record(userId: string, id: string, lean: Lean, verdict: Verdict): Promise<GameView> {
       return exclusive(userId, id, async () => {
         const game = await load(userId, id);
         if (!game.endedAt) throw new GameError(409, '아직 끝나지 않은 판입니다. 판을 끝낸 뒤에 남겨 주세요.');
         if (game.record) throw new GameError(409, '이 판에는 이미 기록을 남겼습니다.');
-        game.record = { lean, verdict, at: deps.now().toISOString() };
-        await deps.store.save(game);
-        return viewOf(game);
+        const recorded = { ...game, record: { lean, verdict, at: deps.now().toISOString() } };
+        const memories = deps.memory ? memoriesOf(recorded, topicOf(recorded), deps.newId) : [];
+        await deps.store.save(recorded, memories);
+        return viewOf(recorded);
       });
+    },
+
+    /** 그 사용자의 기억. 만든 시각이 늦은 것부터 RECENT_MEMORIES개. topicId가 있으면 그 주제만. */
+    async memories(userId: string, topicId?: string): Promise<MemoryView[]> {
+      const memories = await deps.store.listMemories(userId, { ...(topicId !== undefined ? { topicId } : {}), limit: RECENT_MEMORIES });
+      return memories.map(memoryView);
+    },
+
+    /**
+     * 기억 글을 고친다. 턴과 같이 보이지 않는 제어 문자를 지우고, 만들 때와 같이 한 줄로 만든 뒤 1~MAX_MEMORY_TEXT자만 받는다.
+     * 없거나 남의 기억이면 있는지 드러내지 않고 '없는 기록'(404)으로 답한다.
+     */
+    async editMemory(userId: string, id: string, rawText: string): Promise<MemoryView> {
+      const text = oneLine(rawText.replace(CONTROL_CHARS, ''));
+      if (!text) throw new GameError(400, '고친 기록이 비어 있습니다.');
+      if (memoryLength(text) > MAX_MEMORY_TEXT) throw new GameError(400, `기록은 ${MAX_MEMORY_TEXT}자까지 쓸 수 있습니다.`);
+      const edited = await deps.store.editMemory(userId, id, text, deps.now().toISOString());
+      if (!edited) throw new GameError(404, '없는 기록입니다.');
+      return memoryView(edited);
+    },
+
+    /** 기억을 지운다. 판 기록과 턴 원문은 남는다. 없거나 남의 기억이면 '없는 기록'(404)이다. */
+    async deleteMemory(userId: string, id: string): Promise<DeleteMemoryResponse> {
+      if (!(await deps.store.deleteMemory(userId, id))) throw new GameError(404, '없는 기록입니다.');
+      return { deleted: true };
     },
   };
 }
