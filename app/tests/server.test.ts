@@ -58,6 +58,7 @@ function setup(overrides: Partial<AppDeps> = {}) {
     models: mockSource(),
     limits: UNLIMITED,
     pickMode: (): Mode => 'engine',
+    memory: true,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-19T00:00:00Z'),
     ...overrides,

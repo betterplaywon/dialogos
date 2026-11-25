@@ -113,6 +113,7 @@ function setup(deps: Pick<AppDeps, 'models' | 'limits'> & Partial<AppDeps>) {
   const app = createApp({
     topics,
     pickMode: () => 'engine',
+    memory: true,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-19T00:00:00Z'),
     // 로그인을 붙이면 userOf가 사람을 가린다. 여기서는 머리글로 사용자를 흉내 낸다.

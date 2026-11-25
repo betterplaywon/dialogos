@@ -155,6 +155,34 @@ export interface EndRecordRequest {
  */
 export type MemoryKind = 'claim' | 'ground' | 'shift' | 'weakness';
 
+/** 사용자의 기억 하나. 판이 끝나고 기록을 남길 때 서버가 규칙으로 만들고, 사용자가 고치거나 지운다. */
+export interface MemoryView {
+  id: string;
+  /** 기억이 나온 판. 기억을 지워도 판은 남는다. */
+  gameId: string;
+  topicId: string;
+  /** 그 판에서 사용자가 지킨 입장. */
+  side: SideIndex;
+  kind: MemoryKind;
+  /** 한 줄 글. 상대에게 넘기는 글과 같다. */
+  text: string;
+  createdAt: string;
+  /** 사용자가 고친 적이 있으면 true. */
+  edited: boolean;
+}
+
+export interface MemoriesResponse {
+  memories: MemoryView[];
+}
+
+export interface EditMemoryRequest {
+  text: string;
+}
+
+export interface DeleteMemoryResponse {
+  deleted: true;
+}
+
 export interface ErrorResponse {
   error: string;
 }

@@ -16,6 +16,8 @@ export interface DevSetup {
   models: ModelSource;
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
+  /** 끝 기록을 남길 때 기억을 만드는지. 방식을 고르는 법(APP_MODE)이 정한다. */
+  memory: boolean;
   /** 서버의 첫 줄에 알릴 말. */
   label: string;
   /** 서버와 화면의 포트. 화면 설정(web/vite.config.ts)도 같은 환경 변수를 같은 함수로 읽는다. */
@@ -23,14 +25,15 @@ export interface DevSetup {
 }
 
 /**
- * APP_MODE로 판마다 방식을 고르는 법과 첫 줄에 알릴 말을 고른다.
+ * APP_MODE로 판마다 방식을 고르는 법, 기억을 만드는지, 첫 줄에 알릴 말을 고른다.
  * 없으면 engine이다. 개인 사용에서 모든 판이 판정기를 거쳐 근거 없이는 물러서지 않게 하려는 것이다.
  * random은 판마다 지시문 방식과 엔진 방식을 반씩 고른다. 사람이 어느 쪽인지 모른 채 두 방식을 견주는 눈가림 비교에 쓴다.
+ * 기억은 engine에서 켜고 random에서 끈다. 기억의 근거와 약점이 판정기의 판단을 드러내 눈가림을 깨기 때문이다(M6 A).
  */
-function modeFromEnv(env: Env): Pick<DevSetup, 'pickMode' | 'label'> {
+function modeFromEnv(env: Env): Pick<DevSetup, 'pickMode' | 'memory' | 'label'> {
   const choice = env.APP_MODE || 'engine';
-  if (choice === 'engine') return { pickMode: () => 'engine', label: '엔진 방식' };
-  if (choice === 'random') return { pickMode: randomMode, label: '방식 반씩 무작위(눈가림 비교)' };
+  if (choice === 'engine') return { pickMode: () => 'engine', memory: true, label: '엔진 방식, 기억 켬' };
+  if (choice === 'random') return { pickMode: randomMode, memory: false, label: '방식 반씩 무작위(눈가림 비교), 기억 끔' };
   throw new Error('APP_MODE에는 engine(모든 판을 엔진 방식으로, 기본값)이나 random(판마다 지시문 방식과 엔진 방식을 반씩 무작위로, 눈가림 비교)을 적습니다.');
 }
 
@@ -42,9 +45,9 @@ function modeFromEnv(env: Env): Pick<DevSetup, 'pickMode' | 'label'> {
  */
 export async function devSetup(env: Env): Promise<DevSetup> {
   const ports = portsFromEnv(env);
-  const { pickMode, label: mode } = modeFromEnv(env);
+  const { pickMode, memory, label: mode } = modeFromEnv(env);
   const choice = env.APP_MODEL || 'mock';
-  if (choice === 'mock') return { models: mockSource(), pickMode, label: `${mode}, 모의 모델`, ports };
+  if (choice === 'mock') return { models: mockSource(), pickMode, memory, label: `${mode}, 모의 모델`, ports };
   if (choice !== 'local') throw new Error('APP_MODEL에는 mock(모의 모델, 기본값)이나 local(이 컴퓨터의 로컬 모델)을 적습니다.');
   // 설정이 틀렸거나 주소가 이 컴퓨터가 아니면 여기서 멈춘다. 그 주소로는 모델 목록도 묻지 않는다.
   const config = localConfigFromEnv(env);
@@ -56,6 +59,7 @@ export async function devSetup(env: Env): Promise<DevSetup> {
   return {
     models,
     pickMode,
+    memory,
     label: `${mode}, 로컬 모델 ${names}, 생각: ${THINK_LABELS[config.think]}, 무료: 이 컴퓨터 안의 주소만`,
     ports,
   };
