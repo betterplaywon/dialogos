@@ -256,17 +256,29 @@ function checkPrText(words) {
   const title = optionValue(command, ['--title', '-t']);
   if (words[2] === 'create' && title !== null && !/^\S.* - \S/.test(title))
     return `PR 제목 형식 위반: "${title}". 형식은 <대단위> - <소규모>(한국어). 어휘는 .github/pull_request_template.md 머리말.`;
-  // 본문은 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체를 본다.
-  let text = command;
-  const bodyFile = optionValue(command, ['--body-file', '-F']);
-  if (bodyFile) {
+  return bodyTextProblem(command);
+}
+
+// 글을 파일로 넘기면 명령 글자에는 본문이 없다. 그 파일까지 읽어 함께 검사한다.
+// 읽지 못하는 파일(표준 입력 `-` 포함)은 검사할 수 없으므로 막는다.
+function readTextFiles(files) {
+  let text = '';
+  for (const file of files) {
+    if (file === '-') return { problem: '글을 표준 입력(-)으로 넘기지 않는다. 가드가 읽을 수 있는 파일로 넘긴다.' };
     try {
-      text += `\n${readFileSync(path.resolve(cwd, bodyFile), 'utf8')}`;
+      text += `\n${readFileSync(path.resolve(cwd, file), 'utf8')}`;
     } catch {
-      return `PR 본문 파일을 읽지 못했다: ${bodyFile}`;
+      return { problem: `글 파일을 읽지 못했다: ${file}` };
     }
   }
-  return publicTextProblem(text);
+  return { text };
+}
+
+/** gh pr·gh issue의 글. 본문은 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체와 --body-file(-F)의 파일을 본다. */
+function bodyTextProblem(cmd) {
+  const bodyFile = optionValue(cmd, ['--body-file', '-F']);
+  const files = readTextFiles(bodyFile ? [bodyFile] : []);
+  return files.problem ?? publicTextProblem(cmd + files.text);
 }
 
 const GH_API_VALUE_FLAGS = new Set(['-H', '--header', '-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-q', '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview']);
@@ -287,12 +299,31 @@ function checkGhApi(seg, words) {
   const method = explicit ?? (hasBody ? 'POST' : 'GET');
   if (method === 'GET') return null;
   if (method !== 'POST') return `gh api ${method} 금지. 저장소와 설정 변경은 사용자 몫이다.`;
+  const files = readTextFiles(ghApiBodyFiles(words));
+  if (files.problem) return files.problem;
   if (/graphql/i.test(endpoint)) {
-    return /\bmutation\b/i.test(seg) ? 'gh api graphql mutation 금지. 머지는 gh pr merge --merge, 설정은 사용자 몫.' : null;
+    return /\bmutation\b/i.test(seg + files.text) ? 'gh api graphql mutation 금지. 머지는 gh pr merge --merge, 설정은 사용자 몫.' : null;
   }
   if (/(merge|protection|rulesets|hooks|secrets|keys|collaborators|dispatches|releases|transfer)/i.test(endpoint))
     return 'gh api로 머지·보호 규칙·비밀·설정을 바꾸지 않는다. 머지는 gh pr merge --merge, 설정은 사용자 몫.';
-  return publicTextProblem(command);
+  return publicTextProblem(command + files.text);
+}
+
+// gh api가 본문을 파일에서 읽는 자리: -F/--field의 key=@파일과 --input 파일.
+function ghApiBodyFiles(words) {
+  const files = [];
+  for (let i = 2; i < words.length; i += 1) {
+    const w = words[i];
+    let field = null;
+    if (w === '-F' || w === '--field') field = words[(i += 1)] ?? '';
+    else if (w.startsWith('--field=')) field = w.slice('--field='.length);
+    else if (/^-F./.test(w)) field = w.slice(2);
+    else if (w === '--input') files.push(words[(i += 1)] ?? '-');
+    else if (w.startsWith('--input=')) files.push(w.slice('--input='.length));
+    const fromFile = field?.match(/^[^=]*=@(.*)$/s);
+    if (fromFile) files.push(fromFile[1]);
+  }
+  return files;
 }
 
 function prNumber(words) {
@@ -481,7 +512,7 @@ function checkSegment(seg, words, assigns) {
     if (second === 'pr' && third === 'merge') return checkMerge(words);
     if (second === 'api') return checkGhApi(seg, words);
     if (second === 'pr' && ['create', 'edit', 'comment', 'review'].includes(third)) return checkPrText(words);
-    if (second === 'issue') return publicTextProblem(command);
+    if (second === 'issue') return bodyTextProblem(command);
     return null;
   }
   if (first === 'rm' || first === 'unlink') return checkRm(words);
