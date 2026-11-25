@@ -14,7 +14,7 @@ const FIREFOX = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:160.0) Gecko/2
 const RECOGNITION = { port: 'recognition' };
 const SPEECH = { port: 'speech' };
 
-/** 만드는 함수 둘과, 어느 함수가 불렸는지 적는 기록. 실제 브라우저에서는 이 함수가 음성 서비스를 건드린다. */
+/** 실제로는 browserRecognition과 browserSpeech 자리다. 이들이 만든 객체를 거쳐 [음성으로 하기]가 음성 서비스를 부르므로, 앱 안의 브라우저에서는 아예 만들지 않는다. */
 function makers() {
   const made: string[] = [];
   const make = {

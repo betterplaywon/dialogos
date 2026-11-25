@@ -5,7 +5,6 @@
 // 부르는 순간 페이지를 끝낸 것으로 본다(추정). 함수가 있는지로는 가를 수 없어 User-Agent로 가린다.
 // Electron 앱은 기본으로 User-Agent에 'Electron/'을 넣는다. 이를 지운 앱과, Electron이 아닌 앱 안 브라우저는 가리지 못한다.
 
-/** 앱 안의 브라우저면 둘 다 null이고, 아니면 만드는 함수가 준 값 그대로다. */
 type GatedVoice<R, S> =
   | { embedded: true; recognition: null; speech: null }
   | { embedded: false; recognition: R; speech: S };

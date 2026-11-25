@@ -15,7 +15,7 @@ export interface Voice {
 
 /** 화면 전체에서 한 번만 쓴다(App). 판을 바꿔도 음성은 켜진 채로 남고, 페이지를 새로 열면 꺼져 있다. */
 export function useVoice(): Voice {
-  // 인식과 합성은 gateVoice를 거쳐서만 만든다. 앱 안의 브라우저에서 불렀다가 페이지가 강제로 닫힌 일이 있다(embedded-browser.ts).
+  // 인식과 합성은 gateVoice를 거쳐서만 만든다. 앱 안의 브라우저에서 음성 서비스를 불렀다가 페이지가 강제로 닫힌 일이 있다(embedded-browser.ts).
   const [{ embedded, ...ports }] = useState(() =>
     gateVoice(navigator.userAgent, { recognition: browserRecognition, speech: browserSpeech }),
   );
