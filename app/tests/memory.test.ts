@@ -165,7 +165,7 @@ test('밀어붙이기는 두 번부터 약점이고, 판정기를 읽지 못한 
 test('기억 글은 늘 한 줄이다: 말, 전제, 입장의 줄바꿈과 탭은 공백 하나가 된다', () => {
   const matchup = x01.sides[0].matchup;
   if (!matchup) throw new Error('x01 첫째 쪽의 상대가 없습니다.');
-  const premises = [{ id: 'P1', flaw: 'overgeneralization' as const, text: '줄이\n나뉜\t전제입니다.' }];
+  const premises = [{ id: 'P1', flaw: 'overgeneralization' as const, text: '줄이 나뉜\t전제입니다.' }];
   const topic: Topic = {
     ...x01,
     sides: [
@@ -176,7 +176,7 @@ test('기억 글은 늘 한 줄이다: 말, 전제, 입장의 줄바꿈과 탭�
   const game = recorded(
     {
       turns: [
-        turn(1, '첫 줄입니다.\r\n\t둘째 줄입니다.', argument('P1')),
+        turn(1, '첫 줄입니다.\r\n\u0085\t둘째 줄입니다.', argument('P1')),
         turn(2, '\n되풀이\n\n합니다.', push('repeat')),
         turn(3, '되풀이 합니다.', push('repeat')),
       ],
@@ -190,7 +190,7 @@ test('기억 글은 늘 한 줄이다: 말, 전제, 입장의 줄바꿈과 탭�
     ['shift', '생각이 바뀜: 대체로 "그렇게 해도 됩니다." → 확실히 "그렇게 해서는 안 됩니다."'],
     ['weakness', '근거 없이 밀어붙인 턴: 같은 주장 되풀이 2번'],
   ]);
-  for (const [, text] of texts) assert.doesNotMatch(String(text), /[^\S ]|\s{2}|^\s|\s$/);
+  for (const [, text] of texts) assert.doesNotMatch(String(text), /[^\S ]|\u0085|\s{2}|^\s|\s$/);
 });
 
 test('긴 입장과 말은 정한 글자 수로 자르고 끝에 말줄임표를 붙인다(이모지도 한 자로 센다)', () => {
@@ -368,8 +368,9 @@ test('기억 고치기는 제어 문자를 지우고 한 줄로 만든 뒤 1~200
     { text: null },
     { text: '' },
     { text: '   ' },
-    // 줄바꿈과 탭만 있는 글은 한 줄로 만들면 빈 글이다.
+    // 줄바꿈과 탭만 있는 글은 한 줄로 만들면 빈 글이다. JS의 \s에 없는 유니코드 줄바꿈(NEL, U+0085)도 줄바꿈으로 본다.
     { text: '\n\r\n\t' },
+    { text: '\u0085  ' },
     { text: '\u0000\u0001' },
     { text: '가'.repeat(201) },
     { text: `${'가'.repeat(200)}\u0000나` },
@@ -384,7 +385,7 @@ test('기억 고치기는 제어 문자를 지우고 한 줄로 만든 뒤 1~200
   assert.equal(crossSite.status, 415);
   assert.deepEqual((await memoriesOfUser())[0], first);
 
-  const edited = await call<MemoryView>('POST', edit, { text: '  고친\u0000 글\r\n\t입니다.  ' });
+  const edited = await call<MemoryView>('POST', edit, { text: '  고친\u0000 글\r\n\t\u0085입니다.  ' });
   assert.equal(edited.status, 200);
   assert.deepEqual(edited.data, { ...first, text: '고친 글 입니다.', edited: true });
   assert.deepEqual((await memoriesOfUser())[0], edited.data);

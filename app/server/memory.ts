@@ -37,10 +37,11 @@ export const memoryLength = (text: string): number => [...text].length;
 
 /**
  * 기억 글을 한 줄로 만든다. 공백 문자 묶음(줄바꿈, 탭 포함)을 공백 하나로 바꾸고 앞뒤를 다듬는다.
+ * JS의 \s에 없는 유니코드 줄바꿈 NEL(U+0085)도 함께 바꾼다(U+2028, U+2029는 \s에 있다).
  * 상대의 지시문은 기억마다 '- ' 한 줄로 넣는데, 턴 원문에는 줄바꿈이 남아 있을 수 있다.
  * 기억을 만들 때(턴 원문, 전제 글, 입장 글)와 사용자가 고친 글을 받을 때 모두 이것을 거친 뒤에 길이를 재고 자른다.
  */
-export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+export const oneLine = (text: string): string => text.replace(/[\s\u0085]+/g, ' ').trim();
 
 /** 한 줄로 만든 뒤, n자를 넘으면 n-1자에 '…'를 붙여 n자로 줄인다. 기억 글에 넣는 조각은 모두 이것을 거친다. */
 function clip(text: string, n: number): string {
