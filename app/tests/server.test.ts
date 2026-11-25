@@ -204,37 +204,65 @@ test('지시문 방식이면 판정기를 부르지 않는다', async () => {
   assert.equal(saved?.turns[0]?.decision, undefined);
 });
 
-test('턴마다 말을 넣은 방식을 남기고, 판과 목록에서 말로 넣은 턴과 고쳐 보낸 턴을 센다', async () => {
+test('턴마다 말을 넣은 방식과 다시 말한 횟수를 남기고, 판과 목록에서 말로 넣은 턴, 고쳐 보낸 턴, 다시 말한 턴을 센다', async () => {
   const { app, store } = setup({ pickMode: () => 'prompt' });
   const game = await startQ01(app);
-  assert.deepEqual(game.voice, { turns: 0, edited: 0 });
+  assert.deepEqual(game.voice, { turns: 0, edited: 0, redone: 0 });
   const turns = `/api/games/${game.id}/turns`;
   const bodies = [
-    // 넣은 방식을 적지 않은 요청은 글로 넣은 턴이다.
+    // 넣은 방식을 적지 않은 요청은 글로 넣은 턴이다. 다시 말한 횟수를 적지 않으면 0이다.
     { text: '글로 쓴 말입니다.' },
-    { text: '말로 한 말입니다', input: 'voice' },
+    { text: '말로 한 말입니다', input: 'voice', redone: 2 },
     { text: '말로 한 뒤 고쳐 보낸 말입니다.', input: 'voice-edited' },
-    { text: '다시 글로 쓴 말입니다.', input: 'text' },
+    { text: '다시 글로 쓴 말입니다.', input: 'text', redone: 0 },
     { text: '또 말로 한 말입니다', input: 'voice' },
   ];
   for (const body of bodies) assert.equal((await call(app, 'POST', turns, { body })).status, 200, JSON.stringify(body));
 
   const saved = await store.get(game.id);
   assert.deepEqual(
-    saved?.turns.map((turn) => turn.input),
-    ['text', 'voice', 'voice-edited', 'text', 'voice'],
+    saved?.turns.map((turn) => [turn.input, turn.redone]),
+    [
+      ['text', 0],
+      ['voice', 2],
+      ['voice-edited', 0],
+      ['text', 0],
+      ['voice', 0],
+    ],
   );
   const view = await call<GameView>(app, 'GET', `/api/games/${game.id}`);
-  assert.deepEqual([view.data.turn, view.data.voice], [5, { turns: 3, edited: 1 }]);
+  assert.deepEqual([view.data.turn, view.data.voice], [5, { turns: 3, edited: 1, redone: 1 }]);
   const listed = await call<GamesResponse>(app, 'GET', '/api/games');
   assert.deepEqual(
     listed.data.games.map((g) => [g.id, g.turn, g.voice]),
-    [[game.id, 5, { turns: 3, edited: 1 }]],
+    [[game.id, 5, { turns: 3, edited: 1, redone: 1 }]],
   );
   // 판을 끝내고 기록을 남긴 뒤의 판에도 같은 값이 실린다(끝 화면이 이 값을 보인다).
   await call(app, 'POST', `/api/games/${game.id}/end`);
   const recorded = await call<GameView>(app, 'POST', `/api/games/${game.id}/record`, { body: { lean: 0, verdict: 'debate' } });
-  assert.deepEqual(recorded.data.voice, { turns: 3, edited: 1 });
+  assert.deepEqual(recorded.data.voice, { turns: 3, edited: 1, redone: 1 });
+});
+
+test('다시 말한 횟수는 0부터 1000까지의 정수만 받고, 글로 넣은 턴에는 받지 않는다', async () => {
+  const { app, store } = setup({ pickMode: () => 'prompt' });
+  const game = await startQ01(app);
+  const turns = `/api/games/${game.id}/turns`;
+  const rejected = [
+    { text: '말입니다', input: 'voice', redone: -1 },
+    { text: '말입니다', input: 'voice', redone: 1.5 },
+    { text: '말입니다', input: 'voice', redone: 1001 },
+    { text: '말입니다', input: 'voice', redone: '2' },
+    { text: '말입니다', input: 'voice', redone: null },
+    // 글로만 넣은 턴에는 다시 말할 인식 글이 없다. 넣은 방식을 적지 않으면 글로 넣은 턴이다.
+    { text: '글입니다', input: 'text', redone: 1 },
+    { text: '글입니다', redone: 1 },
+  ];
+  for (const body of rejected) assert.equal((await call(app, 'POST', turns, { body })).status, 400, JSON.stringify(body));
+  // 거절한 요청은 턴을 남기지 않는다.
+  assert.deepEqual((await store.get(game.id))?.turns, []);
+  // 상한 값은 받는다.
+  assert.equal((await call(app, 'POST', turns, { body: { text: '말입니다', input: 'voice', redone: 1000 } })).status, 200);
+  assert.deepEqual((await store.get(game.id))?.turns.map((turn) => turn.redone), [1000]);
 });
 
 test('말을 넣은 방식은 상대와 판정기에게 가지 않아, 같은 말이면 같은 대화가 된다', async () => {
@@ -545,7 +573,7 @@ test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할
   assert.equal(reopened.status, 200);
   assert.equal(reopened.data.turn, 1);
   assert.equal(reopened.data.messages.length, 4);
-  assert.deepEqual(reopened.data.voice, { turns: 1, edited: 1 });
+  assert.deepEqual(reopened.data.voice, { turns: 1, edited: 1, redone: 0 });
   const next = await call<TurnResponse>(second, 'POST', `/api/games/${game.id}/turns`, { body: { text: '둘째 반론입니다.', input: 'voice' } });
   assert.deepEqual([next.status, next.data.turn], [200, 2]);
   const saved = await secondStore.get(game.id);
@@ -559,7 +587,7 @@ test('SQLite 저장소면 서버를 다시 띄워도 판이 남고 이어서 할
   assert.equal(saved?.history.length, 6);
   // 말로 넣은 턴과 고쳐 보낸 턴의 수도 다시 띄운 뒤의 판과 목록에 그대로 실린다.
   const listed = (await call<GamesResponse>(second, 'GET', '/api/games')).data.games.find((g) => g.id === game.id);
-  assert.deepEqual([listed?.turn, listed?.voice], [2, { turns: 2, edited: 1 }]);
+  assert.deepEqual([listed?.turn, listed?.voice], [2, { turns: 2, edited: 1, redone: 0 }]);
   const recorded = await call<GameView>(second, 'GET', `/api/games/${other.id}`);
   assert.deepEqual(
     [recorded.data.side, recorded.data.startLean, recorded.data.endReason, recorded.data.record],
