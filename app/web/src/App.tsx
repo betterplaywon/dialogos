@@ -5,13 +5,13 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { GameSummaryView, GameView, Lean, SideIndex, TopicView, Verdict } from '../../server/contract.ts';
 import { api } from './api.ts';
-import { takeDictation, turnInputOf, voiceTallyText } from './dictation.ts';
+import { NEW_TURN, takeDictation, turnEntryOf, voiceTallyText, type TurnDictation } from './dictation.ts';
 import { LEAN_STEPS, leanAccessibleName, leanLabel, sideOfLean, VERDICT_LABEL } from './lean.ts';
-import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES, type ListenResult } from './listen.ts';
+import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES } from './listen.ts';
 import { SPEAK_PROBLEMS } from './speak.ts';
 import { sendTurn } from './turn-flow.ts';
 import { useVoice, type Voice } from './use-voice.ts';
-import type { ReadRequest, VoiceState } from './voice-control.ts';
+import type { Heard, ReadRequest, VoiceState } from './voice-control.ts';
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
@@ -539,8 +539,8 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
   const bottom = useRef<HTMLDivElement | null>(null);
   /** 입력 칸의 최신 글. 듣기가 끝날 때 불리는 함수는 오래된 렌더의 값을 잡고 있을 수 있어 여기서 읽는다. */
   const latestDraft = useRef('');
-  /** 이 턴에 음성 인식으로 입력 칸에 들어간 조각들. 보낼 때 넣은 방식을 정한다. */
-  const segments = useRef<string[]>([]);
+  /** 이 턴의 받아쓰기 기록(인식 조각과 다시 말한 횟수). 보낼 때 넣은 방식과 다시 말한 횟수를 정한다. */
+  const dictation = useRef<TurnDictation>(NEW_TURN);
   const draftBox = useRef<HTMLTextAreaElement | null>(null);
   const { state, control } = voice;
   const wasBlocked = useRef(state.blocked !== null);
@@ -582,7 +582,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
     const text = draft.trim();
     if (!text || waiting || ending || game.ended || state.listening) return;
     const before = game;
-    const input = turnInputOf(text, segments.current);
+    const entry = turnEntryOf(text, dictation.current);
     control.stopReading();
     setWaiting(true);
     setError(null);
@@ -591,12 +591,12 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
     setGame({ ...before, messages: [...before.messages, { speaker: 'user', text }] });
     changeDraft('');
     try {
-      const settled = await sendTurn(api, before, text, input);
+      const settled = await sendTurn(api, before, text, entry);
       setGame(settled.game);
       changeDraft(settled.draft);
       setError(settled.error);
-      // 보내기에 성공해 입력 칸이 비워졌을 때만 조각을 비운다. 글이 입력 칸으로 돌아오면 조각도 그대로 둔다.
-      if (settled.draft === '') segments.current = [];
+      // 보내기에 성공해 입력 칸이 비워졌을 때만 기록을 비운다. 글이 입력 칸으로 돌아오면 기록도 그대로 둔다.
+      if (settled.draft === '') dictation.current = NEW_TURN;
       // 새로 온 상대의 답을 읽는다. 응답을 잃었다가 서버에서 되찾은 답도 읽는다(음성이 꺼져 있으면 아무 일도 없다).
       const reply = settled.game.turn > before.turn ? lastOpponentRequest(settled.game) : null;
       if (reply) control.read(reply);
@@ -605,10 +605,15 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
     }
   }
 
-  /** 듣기가 끝났다. 들은 글로 입력 칸의 글을 바꾸고(takeDictation) 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다. */
-  function onHeard(result: ListenResult) {
-    const taken = takeDictation(latestDraft.current, segments.current, result.transcript, game.maxTextLength);
-    segments.current = taken.segments;
+  /**
+   * 듣기가 끝났다. 들은 글을 입력 칸에 넣고(takeDictation) 무슨 일이 있었는지 알린다. 보내는 것은 사용자가 한다.
+   * 음성을 끄면서 넘긴 글이면 알림이 보이지 않으므로 입력 칸의 글을 바꾸지 않고 끝에 붙인다.
+   */
+  function onHeard(result: Heard) {
+    const taken = takeDictation(latestDraft.current, dictation.current, result.transcript, game.maxTextLength, {
+      appendOnly: result.turnedOff === true,
+    });
+    dictation.current = taken.turn;
     if (taken.draft !== latestDraft.current) changeDraft(taken.draft);
     // 음성 입력을 끄는 문제는 음성 줄이 이유를 보인다. 같은 말을 두 곳에서 알리지 않는다.
     const problem = result.problem !== null && !LISTEN_PROBLEMS[result.problem].blocks ? LISTEN_PROBLEMS[result.problem].message : null;

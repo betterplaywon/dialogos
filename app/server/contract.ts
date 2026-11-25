@@ -26,10 +26,20 @@ export type EndReason = 'max-turns' | 'user';
  */
 export type TurnInput = 'text' | 'voice' | 'voice-edited';
 
-/** 말로 넣은 턴의 수와, 그 가운데 고쳐 보낸 턴의 수. */
+/**
+ * 한 턴을 넣은 방식과, 그 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수.
+ * 고친 턴(input)은 마지막 인식 글로 세고, 다시 말한 일은 redone에 따로 남는다. 글로 넣은 턴의 redone은 0이다.
+ */
+export interface TurnEntry {
+  input: TurnInput;
+  redone: number;
+}
+
+/** 말로 넣은 턴의 수, 그 가운데 고쳐 보낸 턴의 수, 다시 말한 적이 있는 턴의 수. */
 export interface VoiceTally {
   turns: number;
   edited: number;
+  redone: number;
 }
 
 export interface CharacterView {
@@ -121,6 +131,8 @@ export interface TurnRequest {
   text: string;
   /** 말을 넣은 방식. 없으면 'text'다. */
   input?: TurnInput;
+  /** 앞서 인식된 글을 다시 말해 바꾼 횟수. 없으면 0이다. 'text'로 넣은 턴은 0이어야 한다. */
+  redone?: number;
 }
 
 export interface TurnResponse {

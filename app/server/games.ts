@@ -13,6 +13,7 @@ import type {
   MessageView,
   SideIndex,
   TopicView,
+  TurnEntry,
   TurnInput,
   TurnResponse,
   Verdict,
@@ -61,6 +62,10 @@ export const isLean = (value: unknown): value is Lean =>
 export const isVerdict = (value: unknown): value is Verdict => value === 'debate' || value === 'lecture';
 export const isTurnInput = (value: unknown): value is TurnInput =>
   value === 'text' || value === 'voice' || value === 'voice-edited';
+/** 한 턴에서 다시 말한 횟수의 상한. 화면이 알려 준 값이라, 사람이 낼 수 없는 큰 값은 받지 않는다. */
+export const MAX_REDONE = 1000;
+export const isRedone = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_REDONE;
 
 export interface GameDeps {
   topics: ReadonlyMap<string, Topic>;
@@ -277,8 +282,8 @@ export function createGames(deps: GameDeps) {
       return viewOf(await load(userId, id));
     },
 
-    /** input은 사용자가 이 말을 넣은 방식이다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다. */
-    async turn(userId: string, id: string, rawText: string, input: TurnInput): Promise<TurnResponse> {
+    /** entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다. */
+    async turn(userId: string, id: string, rawText: string, entry: TurnEntry): Promise<TurnResponse> {
       const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
       if (text.length > MAX_TEXT_LENGTH) throw new GameError(400, `한 턴에는 ${MAX_TEXT_LENGTH}자까지 보낼 수 있습니다.`);
@@ -303,7 +308,8 @@ export function createGames(deps: GameDeps) {
           game.turns.push({
             n,
             user: text,
-            input,
+            input: entry.input,
+            redone: entry.redone,
             reply: outcome.reply,
             ...(outcome.decision ? { decision: outcome.decision } : {}),
             ...(outcome.judge ? { judge: outcome.judge } : {}),

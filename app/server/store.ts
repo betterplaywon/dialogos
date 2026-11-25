@@ -35,6 +35,8 @@ export interface TurnLog {
   user: string;
   /** 사용자가 이 말을 넣은 방식. 스키마 2까지의 턴은 모두 글로 넣었다. */
   input: TurnInput;
+  /** 이 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수. 스키마 4까지의 턴은 남기지 않아 0이다. */
+  redone: number;
   reply: string;
   decision?: JudgeDecision;
   judge?: TurnRecord['judge'];
@@ -105,11 +107,13 @@ export interface GameStore {
   totalSpendMicroUsd(): Promise<number>;
 }
 
-/** 말로 넣은 턴과 그 가운데 고쳐 보낸 턴을 센다. SQLite 저장소의 목록은 같은 값을 SQL로 센다. */
-export function voiceTallyOf(turns: readonly Pick<TurnLog, 'input'>[]): VoiceTally {
+/** 말로 넣은 턴, 그 가운데 고쳐 보낸 턴, 다시 말한 적이 있는 턴을 센다. SQLite 저장소의 목록은 같은 값을 SQL로 센다. */
+export function voiceTallyOf(turns: readonly Pick<TurnLog, 'input' | 'redone'>[]): VoiceTally {
+  const spoken = turns.filter((turn) => turn.input !== 'text');
   return {
-    turns: turns.filter((turn) => turn.input !== 'text').length,
-    edited: turns.filter((turn) => turn.input === 'voice-edited').length,
+    turns: spoken.length,
+    edited: spoken.filter((turn) => turn.input === 'voice-edited').length,
+    redone: spoken.filter((turn) => turn.redone > 0).length,
   };
 }
 

@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ErrorResponse, GamesResponse, TopicsResponse } from './contract.ts';
-import { createGames, GameError, isLean, isSide, isTurnInput, isVerdict, LOCAL_USER, type GameDeps } from './games.ts';
+import { createGames, GameError, isLean, isRedone, isSide, isTurnInput, isVerdict, LOCAL_USER, MAX_REDONE, type GameDeps } from './games.ts';
 
 export interface AppDeps extends GameDeps {
   /**
@@ -77,12 +77,20 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/games/:id', async (c) => c.json(await games.get(userOf(c.req.raw), c.req.param('id'))));
 
   app.post('/api/games/:id/turns', async (c) => {
-    const { text, input } = await readBody(c.req);
+    const { text, input, redone } = await readBody(c.req);
     if (typeof text !== 'string') throw new GameError(400, '보낼 말(text)이 필요합니다.');
     if (input !== undefined && !isTurnInput(input)) {
       throw new GameError(400, "말을 넣은 방식(input)은 'text', 'voice', 'voice-edited' 가운데 하나입니다.");
     }
-    return c.json(await games.turn(userOf(c.req.raw), c.req.param('id'), text, input ?? 'text'));
+    if (redone !== undefined && !isRedone(redone)) {
+      throw new GameError(400, `다시 말한 횟수(redone)는 0부터 ${MAX_REDONE}까지의 정수입니다.`);
+    }
+    const entry = { input: input ?? 'text', redone: redone ?? 0 };
+    // 글로만 넣은 턴에는 다시 말할 인식 글이 없다. 화면이 잘못 셌거나 손으로 만든 요청이다.
+    if (entry.input === 'text' && entry.redone > 0) {
+      throw new GameError(400, "글로 넣은 턴(input 'text')은 다시 말한 횟수(redone)가 0입니다.");
+    }
+    return c.json(await games.turn(userOf(c.req.raw), c.req.param('id'), text, entry));
   });
 
   app.post('/api/games/:id/end', async (c) => c.json(await games.end(userOf(c.req.raw), c.req.param('id'))));

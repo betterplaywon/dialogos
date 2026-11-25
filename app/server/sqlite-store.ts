@@ -57,6 +57,9 @@ export const MIGRATIONS: readonly string[] = [
      output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
      cost_micro_usd INTEGER NOT NULL CHECK (cost_micro_usd >= 0)
    );`,
+  // 5: 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수. 그 전에 저장한 턴은 이 횟수를 남기지 않았으므로 0으로 둔다
+  // (다시 말하면 바꾸는 동작이 들어온 PR #28부터 이 스키마 전까지 다시 말한 턴도 0이다).
+  `ALTER TABLE turns ADD COLUMN redone INTEGER NOT NULL DEFAULT 0 CHECK (redone >= 0);`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -84,6 +87,7 @@ interface TurnRow {
   n: number;
   user_text: string;
   input: string;
+  redone: number;
   reply: string;
   decision: string | null;
   judge_calls: number | null;
@@ -102,6 +106,7 @@ interface SummaryRow {
   turns: number;
   voice_turns: number;
   voice_edited: number;
+  voice_redone: number;
   started_at: string;
   ended_at: string | null;
   end_lean: number | null;
@@ -120,6 +125,7 @@ function turnOf(row: TurnRow): TurnLog {
     n: row.n,
     user: row.user_text,
     input: row.input as TurnInput,
+    redone: row.redone,
     reply: row.reply,
     ...(row.decision !== null ? { decision: JSON.parse(row.decision) as JudgeDecision } : {}),
     ...(row.judge_calls !== null ? { judge: { calls: row.judge_calls, readable: row.judge_readable === 1 } } : {}),
@@ -183,8 +189,8 @@ export class SqliteGameStore implements GameStore {
   /** 아직 저장하지 않은 턴만 넣는다. 한 번 저장한 턴은 바꾸지 않는다. */
   #insertTurns(game: GameRecord): void {
     const insert = this.#db.prepare(
-      `INSERT INTO turns (game_id, n, user_text, input, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO turns (game_id, n, user_text, input, redone, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (game_id, n) DO NOTHING`,
     );
     for (const turn of game.turns) {
@@ -193,6 +199,7 @@ export class SqliteGameStore implements GameStore {
         turn.n,
         turn.user,
         turn.input,
+        turn.redone,
         turn.reply,
         turn.decision ? JSON.stringify(turn.decision) : null,
         turn.judge ? turn.judge.calls : null,
@@ -290,7 +297,8 @@ export class SqliteGameStore implements GameStore {
                 g.end_lean, g.verdict, g.recorded_at,
                 (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id) AS turns,
                 (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input <> 'text') AS voice_turns,
-                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input = 'voice-edited') AS voice_edited
+                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input = 'voice-edited') AS voice_edited,
+                (SELECT COUNT(*) FROM turns t WHERE t.game_id = g.id AND t.input <> 'text' AND t.redone > 0) AS voice_redone
          FROM games g
          WHERE g.user_id = ?
          ORDER BY g.started_at DESC, g.rowid DESC
@@ -306,7 +314,7 @@ export class SqliteGameStore implements GameStore {
         cardId: row.card_id,
         startLean: row.start_lean as Lean | null,
         turns: row.turns,
-        voice: { turns: row.voice_turns, edited: row.voice_edited },
+        voice: { turns: row.voice_turns, edited: row.voice_edited, redone: row.voice_redone },
         startedAt: row.started_at,
         ...(row.ended_at !== null ? { endedAt: row.ended_at } : {}),
         ...(record ? { record } : {}),
