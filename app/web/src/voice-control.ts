@@ -99,16 +99,22 @@ export interface VoiceState<V extends VoiceLike = VoiceLike> {
   speakProblem: SpeakProblem | null;
 }
 
+/**
+ * 화면에 넘기는 들은 글. 음성을 끄면서 넘긴 것이면 turnedOff가 true다.
+ * 그때는 듣기 알림 줄이 그려지지 않으므로(state.on이 false), 화면은 입력 칸의 글을 바꾸지 않고 끝에 붙인다(dictation.ts의 appendOnly).
+ */
+export type Heard = ListenResult & { turnedOff?: true };
+
 export interface VoiceControl<V extends VoiceLike = VoiceLike> {
   getState(): VoiceState<V>;
   /** 상태가 바뀔 때마다 listener를 부른다. 돌려준 함수를 부르면 그만 부른다. */
   subscribe(listener: () => void): () => void;
   /** 음성을 켠다. 사용자의 누름 안에서 부른다. first는 켜자마자 읽을 말이다. */
   turnOn(first: ReadRequest | null): void;
-  /** 듣기와 읽기를 멈추고 음성을 끈다. 듣는 중이었으면 그때까지 들은 글을 onHeard로 넘긴다. */
+  /** 듣기와 읽기를 멈추고 음성을 끈다. 듣는 중이었으면 그때까지 들은 글을 turnedOff 표시와 함께 onHeard로 넘긴다. */
   turnOff(): void;
   /** 읽던 것을 끊고 한 발화를 듣는다. 다 들으면 onHeard를 한 번 부른다. 들을 수 없는 때에는 아무것도 하지 않는다. */
-  listen(onHeard: (result: ListenResult) => void): void;
+  listen(onHeard: (result: Heard) => void): void;
   /** 사용자가 말을 마쳤다. 확정된 글을 받아 onHeard로 넘긴다. */
   finishListening(): void;
   /** 듣기를 버린다. onHeard를 부르지 않는다. */
@@ -151,7 +157,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
   let current: ReadRequest | null = null;
   let awaitingVoice = false;
   /** 듣는 중인 발화의 글을 받을 곳. 듣는 중에 끄면 그때까지 들은 글을 여기로 넘긴다. */
-  let deliver: ((result: ListenResult) => void) | null = null;
+  let deliver: ((result: Heard) => void) | null = null;
   /** 기기 안 인식이 한 번 확인되면 다시 켤 때 준비를 되풀이하지 않는다. */
   let onDeviceReady = false;
   /** 진행 중인 기기 안 인식 준비. 껐다 켜도 같은 준비를 기다리고, install을 겹쳐 부르지 않는다. */
@@ -276,6 +282,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
     turnOff() {
       if (!state.on) return;
       // 듣는 중에 끄면 그때까지 들은 글을 버리지 않고 넘긴다. 말한 것이 알림 없이 사라지지 않게 한다.
+      // 끄면서 넘긴 글이라고 표시해, 화면이 입력 칸에 쓰던 글을 알림 없이 바꾸지 않게 한다.
       const heardSoFar = state.listening ? state.interim : '';
       const onHeard = deliver;
       session?.cancel();
@@ -287,7 +294,7 @@ export function createVoiceControl<V extends VoiceLike>(ports: VoicePorts<V>): V
       unwatch?.();
       unwatch = null;
       set({ on: false, place: null, packPending: false, listening: false, interim: '', reading: null, speakProblem: null });
-      if (heardSoFar && onHeard) onHeard({ transcript: heardSoFar, problem: null });
+      if (heardSoFar && onHeard) onHeard({ transcript: heardSoFar, problem: null, turnedOff: true });
     },
 
     listen(onHeard) {

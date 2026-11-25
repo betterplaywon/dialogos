@@ -38,6 +38,7 @@ const engineTurn: TurnLog = {
   n: 1,
   user: '반론입니다.',
   input: 'text',
+  redone: 0,
   reply: 'P1을 거둡니다.',
   decision: { tactic: 'argument', defeats: 'P1', reason: '반례' },
   judge: { calls: 2, readable: true },
@@ -48,6 +49,7 @@ const unreadableTurn: TurnLog = {
   n: 2,
   user: '같은 말입니다.',
   input: 'text',
+  redone: 0,
   reply: '물러서지 않습니다.',
   decision: { tactic: 'other', defeats: null, reason: '판정기의 답을 읽지 못했습니다.' },
   judge: { calls: 2, readable: false },
@@ -55,13 +57,22 @@ const unreadableTurn: TurnLog = {
   at: '2026-11-19T00:02:00.000Z',
 };
 /** 지시문 방식의 턴. 판정도 판정기 기록도 없다. */
-const promptTurn: TurnLog = { n: 1, user: '반론입니다.', input: 'text', reply: '답입니다.', ms: { opponent: 7 }, at: '2026-11-19T00:01:00.000Z' };
+const promptTurn: TurnLog = {
+  n: 1,
+  user: '반론입니다.',
+  input: 'text',
+  redone: 0,
+  reply: '답입니다.',
+  ms: { opponent: 7 },
+  at: '2026-11-19T00:01:00.000Z',
+};
 
-/** 넣은 방식만 다른 턴 넷: 글, 말 그대로, 말을 고쳐서, 말 그대로. */
+/** 넣은 방식과 다시 말한 횟수만 다른 턴 넷: 글, 말 그대로(두 번 다시 말함), 말을 고쳐서, 말 그대로. */
 const mixedInputTurns: TurnLog[] = (['text', 'voice', 'voice-edited', 'voice'] as const).map((input, index) => ({
   ...promptTurn,
   n: index + 1,
   input,
+  redone: index === 1 ? 2 : 0,
 }));
 
 /** 저장한 시각만 다른 지시문 방식의 턴. */
@@ -161,21 +172,26 @@ for (const [name, open] of stores) {
     assert.equal(loaded?.mode, 'prompt');
   });
 
-  test(`${name} 저장소: 턴마다 말을 넣은 방식이 남고, 목록은 말로 넣은 턴과 고쳐 보낸 턴을 센다`, async (t) => {
+  test(`${name} 저장소: 턴마다 말을 넣은 방식과 다시 말한 횟수가 남고, 목록은 말로 넣은 턴, 고쳐 보낸 턴, 다시 말한 턴을 센다`, async (t) => {
     const store = open();
     t.after(() => store.close?.());
     await store.create(sample({ mode: 'prompt' }));
-    assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 0, edited: 0 });
+    assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 0, edited: 0, redone: 0 });
     // 턴은 한 번에 하나씩 덧붙는다. 덧붙일 때마다 센 값이 따라온다.
     await store.save(sample({ mode: 'prompt', turns: mixedInputTurns.slice(0, 2) }));
-    assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 1, edited: 0 });
+    assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 1, edited: 0, redone: 1 });
     await store.save(sample({ mode: 'prompt', turns: mixedInputTurns }));
     assert.deepEqual(
-      (await store.get('g1'))?.turns.map((turn) => turn.input),
-      ['text', 'voice', 'voice-edited', 'voice'],
+      (await store.get('g1'))?.turns.map((turn) => [turn.input, turn.redone]),
+      [
+        ['text', 0],
+        ['voice', 2],
+        ['voice-edited', 0],
+        ['voice', 0],
+      ],
     );
     const [summary] = await store.list('local', 1);
-    assert.deepEqual([summary?.turns, summary?.voice], [4, { turns: 3, edited: 1 }]);
+    assert.deepEqual([summary?.turns, summary?.voice], [4, { turns: 3, edited: 1, redone: 1 }]);
   });
 
   test(`${name} 저장소: 같은 판을 두 번 만들거나 없는 판을 저장하면 실패한다`, async (t) => {
@@ -209,7 +225,7 @@ for (const [name, open] of stores) {
       cardId: 'utilitarian',
       startLean: -1,
       turns: 1,
-      voice: { turns: 0, edited: 0 },
+      voice: { turns: 0, edited: 0, redone: 0 },
       startedAt: '2026-11-19T09:00:00.000Z',
     });
     assert.equal(all[1]?.endedAt, '2026-11-19T08:30:00.000Z');
@@ -300,9 +316,9 @@ test('메모리 저장소와 SQLite 저장소는 같은 판들에 같은 요약�
   assert.deepEqual(
     fromMemory.map((summary) => [summary.id, summary.voice]),
     [
-      ['all-edited', { turns: 1, edited: 1 }],
-      ['spoken', { turns: 3, edited: 1 }],
-      ['typed', { turns: 0, edited: 0 }],
+      ['all-edited', { turns: 1, edited: 1, redone: 0 }],
+      ['spoken', { turns: 3, edited: 1, redone: 1 }],
+      ['typed', { turns: 0, edited: 0, redone: 0 }],
     ],
   );
 });
@@ -364,18 +380,19 @@ test('SQLite 저장소: 스키마 2의 파일을 열면 남은 스키마를 더�
   t.after(() => store.close());
   assert.equal(store.schemaVersion, MIGRATIONS.length);
   const game = await store.get('old');
+  // 예전 턴은 글로 넣었고 다시 말한 횟수는 0으로 읽는다.
   assert.deepEqual(
-    game?.turns.map((turn) => [turn.n, turn.user, turn.input]),
+    game?.turns.map((turn) => [turn.n, turn.user, turn.input, turn.redone]),
     [
-      [1, '첫 반론입니다.', 'text'],
-      [2, '둘째 반론입니다.', 'text'],
+      [1, '첫 반론입니다.', 'text', 0],
+      [2, '둘째 반론입니다.', 'text', 0],
     ],
   );
-  assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 0, edited: 0 });
+  assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 0, edited: 0, redone: 0 });
   // 예전 판을 말로 이어 가면 새 턴부터 센다.
-  await store.save({ ...game!, turns: [...game!.turns, { ...promptTurn, n: 3, input: 'voice-edited' }] });
+  await store.save({ ...game!, turns: [...game!.turns, { ...promptTurn, n: 3, input: 'voice-edited', redone: 1 }] });
   assert.deepEqual((await store.get('old'))?.turns.map((turn) => turn.input), ['text', 'text', 'voice-edited']);
-  assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 1, edited: 1 });
+  assert.deepEqual((await store.list('local', 1))[0]?.voice, { turns: 1, edited: 1, redone: 1 });
 });
 
 test('SQLite 저장소: 정해지지 않은 방식의 턴은 저장하지 않는다', async (t) => {
@@ -384,6 +401,14 @@ test('SQLite 저장소: 정해지지 않은 방식의 턴은 저장하지 않는
   await store.create(sample({ mode: 'prompt' }));
   const unknown = { ...promptTurn, input: 'dictated' as TurnLog['input'] };
   await assert.rejects(store.save(sample({ mode: 'prompt', turns: [unknown] })));
+  assert.deepEqual((await store.get('g1'))?.turns, []);
+});
+
+test('SQLite 저장소: 다시 말한 횟수가 음수인 턴은 저장하지 않는다', async (t) => {
+  const store = new SqliteGameStore(':memory:');
+  t.after(() => store.close());
+  await store.create(sample({ mode: 'prompt' }));
+  await assert.rejects(store.save(sample({ mode: 'prompt', turns: [{ ...promptTurn, input: 'voice', redone: -1 }] })));
   assert.deepEqual((await store.get('g1'))?.turns, []);
 });
 
@@ -453,8 +478,9 @@ test('SQLite 저장소: 스키마 3의 파일을 열면 원장을 더하고, 예
     history: [],
     conceded: [],
     turns: [
-      { n: 1, user: '첫 반론입니다.', input: 'voice', ...oldTurn, at: '2026-11-21T00:01:00.000Z' },
-      { n: 2, user: '둘째 반론입니다.', input: 'text', ...oldTurn, at: '2026-11-21T00:02:00.000Z' },
+      // 다시 말한 횟수는 남기지 않던 때의 턴이라 0이다.
+      { n: 1, user: '첫 반론입니다.', input: 'voice', redone: 0, ...oldTurn, at: '2026-11-21T00:01:00.000Z' },
+      { n: 2, user: '둘째 반론입니다.', input: 'text', redone: 0, ...oldTurn, at: '2026-11-21T00:02:00.000Z' },
     ],
     startedAt: '2026-11-21T00:00:00.000Z',
   });

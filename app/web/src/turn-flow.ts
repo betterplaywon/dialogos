@@ -4,11 +4,11 @@
 // 서버가 아직 답을 만드는 중이라 화면이 다시 불러온 판에 그 턴이 아직 없을 수 있다.
 // 그래서 실패하면 판을 다시 불러 보고, 성공했는데 턴 번호가 하나씩 늘지 않았으면 서버의 판으로 통째로 맞춘다.
 
-import type { GameView, TurnInput, TurnResponse, VoiceTally } from '../../server/contract.ts';
+import type { GameView, TurnEntry, TurnResponse, VoiceTally } from '../../server/contract.ts';
 import { ApiError } from './api.ts';
 
 export interface TurnApi {
-  turn(gameId: string, text: string, input: TurnInput): Promise<TurnResponse>;
+  turn(gameId: string, text: string, entry: TurnEntry): Promise<TurnResponse>;
   get(gameId: string): Promise<GameView>;
 }
 
@@ -25,22 +25,27 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : '알 수 없는 문제가 생겼습니다.';
 }
 
-/** 방금 보낸 턴을 서버가 세는 것과 같은 방법으로 더한다. */
-function tallied(voice: VoiceTally, input: TurnInput): VoiceTally {
-  return { turns: voice.turns + (input === 'text' ? 0 : 1), edited: voice.edited + (input === 'voice-edited' ? 1 : 0) };
+/** 방금 보낸 턴을 서버가 세는 것과 같은 방법으로 더한다(store.ts의 voiceTallyOf). */
+function tallied(voice: VoiceTally, entry: TurnEntry): VoiceTally {
+  if (entry.input === 'text') return voice;
+  return {
+    turns: voice.turns + 1,
+    edited: voice.edited + (entry.input === 'voice-edited' ? 1 : 0),
+    redone: voice.redone + (entry.redone > 0 ? 1 : 0),
+  };
 }
 
-/** before는 보내기 전의 판이고, input은 이 말을 넣은 방식이다. 돌려준 game이 화면에 보일 판이다. */
-export async function sendTurn(api: TurnApi, before: GameView, text: string, input: TurnInput): Promise<TurnSettled> {
+/** before는 보내기 전의 판이고, entry는 이 말을 넣은 방식과 다시 말한 횟수다. 돌려준 game이 화면에 보일 판이다. */
+export async function sendTurn(api: TurnApi, before: GameView, text: string, entry: TurnEntry): Promise<TurnSettled> {
   try {
-    const result = await api.turn(before.id, text, input);
+    const result = await api.turn(before.id, text, entry);
     const appended: GameView = {
       ...before,
       turn: result.turn,
       ended: result.ended,
       endReason: result.endReason,
       messages: [...before.messages, { speaker: 'user', text }, { speaker: 'opponent', text: result.reply }],
-      voice: tallied(before.voice, input),
+      voice: tallied(before.voice, entry),
     };
     if (result.turn === before.turn + 1) return { game: appended, draft: '', error: null };
     // 앞서 응답을 잃은 턴이 서버에 저장되어 있었다. 서버의 판으로 통째로 맞춘다.
