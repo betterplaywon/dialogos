@@ -179,7 +179,7 @@ export function createHarness(feature, title, options) {
       closers.push(stop);
 
       for (let i = 0; i < 150; i += 1) {
-        if (child.exitCode !== null) break;
+        if (child.exitCode !== null || child.signalCode !== null) break;
         try {
           if ((await fetch(`${url}api/topics`)).ok) return { url, api, web, dbPath: file(dbName), db: dbName, log };
         } catch {
