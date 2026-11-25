@@ -82,11 +82,14 @@ function storeWith(inner: GameStore, overrides: Partial<GameStore>): GameStore {
   return {
     create: (game) => inner.create(game),
     get: (id) => inner.get(id),
-    save: (game) => inner.save(game),
+    save: (game, newMemories) => inner.save(game, newMemories),
     list: (userId, limit) => inner.list(userId, limit),
     countTurnsSince: (userId, since) => inner.countTurnsSince(userId, since),
     addSpend: (entry) => inner.addSpend(entry),
     totalSpendMicroUsd: () => inner.totalSpendMicroUsd(),
+    listMemories: (userId, query) => inner.listMemories(userId, query),
+    editMemory: (userId, id, text, at) => inner.editMemory(userId, id, text, at),
+    deleteMemory: (userId, id) => inner.deleteMemory(userId, id),
     ...overrides,
   };
 }
@@ -110,6 +113,7 @@ function setup(deps: Pick<AppDeps, 'models' | 'limits'> & Partial<AppDeps>) {
   const app = createApp({
     topics,
     pickMode: () => 'engine',
+    memory: true,
     newId: () => `g${++next}`,
     now: () => new Date('2026-11-19T00:00:00Z'),
     // 로그인을 붙이면 userOf가 사람을 가린다. 여기서는 머리글로 사용자를 흉내 낸다.
