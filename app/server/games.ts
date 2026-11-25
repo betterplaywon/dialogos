@@ -233,7 +233,7 @@ export function createGames(deps: GameDeps) {
   async function passedOf(game: GameRecord): Promise<PassedTurnView[]> {
     const turns = game.turns.filter((turn) => turn.memoryIds.length > 0);
     if (turns.length === 0) return [];
-    const ids = [...new Set(turns.flatMap((turn) => turn.memoryIds))];
+    const ids = turns.flatMap((turn) => turn.memoryIds);
     const found = new Map((await deps.store.findMemories(game.userId, ids)).map((memory) => [memory.id, memory]));
     return turns.map((turn) => ({
       turn: turn.n,

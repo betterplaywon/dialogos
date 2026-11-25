@@ -126,7 +126,7 @@ export interface GameStore {
    * (한 판의 기억은 claim, ground, shift, weakness 순). topicId가 있으면 그 주제만.
    */
   listMemories(userId: string, query: { topicId?: string; limit: number }): Promise<MemoryRecord[]>;
-  /** ids에 든 그 사용자의 기억. 지웠거나 없거나 남의 것은 빠진다. 차례는 정하지 않는다. */
+  /** ids에 든 그 사용자의 기억. 지웠거나 없거나 남의 것은 빠진다. ids가 겹쳐도 기억은 한 번씩만 낸다. 차례는 정하지 않는다. */
   findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]>;
   /** 그 사용자의 기억 글을 바꾸고 고친 시각을 남긴다. 없거나 남의 것이면 undefined. */
   editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined>;
