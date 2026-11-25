@@ -233,15 +233,21 @@ export function createGames(deps: GameDeps) {
   async function passedOf(game: GameRecord): Promise<PassedTurnView[]> {
     const turns = game.turns.filter((turn) => turn.memoryIds.length > 0);
     if (turns.length === 0) return [];
-    const ids = turns.flatMap((turn) => turn.memoryIds);
-    const found = new Map((await deps.store.findMemories(game.userId, ids)).map((memory) => [memory.id, memory]));
-    return turns.map((turn) => ({
-      turn: turn.n,
-      memories: turn.memoryIds.map((id): PassedMemoryView => {
-        const memory = found.get(id);
-        return memory ? keptView(memory) : { id, state: 'deleted' };
-      }),
-    }));
+    const found = await currentMemories(game.userId, turns.flatMap((turn) => turn.memoryIds));
+    return turns.map((turn) => ({ turn: turn.n, memories: passedViews(found, turn.memoryIds) }));
+  }
+
+  /** ids의 지금 기억. 지운 기억은 빠진다. */
+  async function currentMemories(userId: string, ids: readonly string[]): Promise<ReadonlyMap<string, MemoryRecord>> {
+    return new Map((await deps.store.findMemories(userId, ids)).map((memory) => [memory.id, memory]));
+  }
+
+  /** 넘긴 id를 지금의 기억과 잇는다. 지금 없는 기억(지웠다)은 글 없이 'deleted'다. */
+  function passedViews(found: ReadonlyMap<string, MemoryRecord>, ids: readonly string[]): PassedMemoryView[] {
+    return ids.map((id) => {
+      const memory = found.get(id);
+      return memory ? keptView(memory) : { id, state: 'deleted' };
+    });
   }
 
   async function viewOf(game: GameRecord): Promise<GameView> {
@@ -381,12 +387,16 @@ export function createGames(deps: GameDeps) {
             game.endReason = 'max-turns';
           }
           await deps.store.save(game);
+          // 넘긴 기억은 모델을 부르기 전에 찾았다. 답을 기다리는 사이에 다른 탭에서 지우거나 고쳤을 수 있으므로,
+          // 응답에는 지금의 기억과 다시 이어 보낸다. 그래야 지운 기억의 글이 답과 함께 화면에 다시 나오지 않는다.
+          const passedIds = passed.map((memory) => memory.id);
+          const memories = passedIds.length > 0 ? passedViews(await currentMemories(userId, passedIds), passedIds) : [];
           return {
             turn: n,
             reply: outcome.reply,
             ended: game.endedAt !== undefined,
             endReason: game.endReason ?? null,
-            memories: passed.map(keptView),
+            memories,
           };
         });
       });
