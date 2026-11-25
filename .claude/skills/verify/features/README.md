@@ -6,9 +6,11 @@
 | --- | --- | --- | --- |
 | `flow` | 다섯 명령이 사람이 쓰는 순서대로 이어지고, 이어 돌리기·표본의 눈가림·일치율 계산이 맞다 | `eval:run` → `eval:label` → `eval:score` → `eval:sample` → `eval:agreement` | [flow.md](flow.md) |
 | `plan-gate` | 실제 모델 실행이 `--confirm` 없이는 계획만 출력하고 아무것도 만들지 않는다 | `eval:run`, `eval:label`의 `--provider api` | [plan-gate.md](plan-gate.md) |
+| `screen` | 글로 한 판이 화면에서 사람이 하는 차례대로 이어지고, 새로 고쳐도 판이 그대로이며, 끝 기록이 목록과 판 파일에 남는다 | `app:dev`(빈 포트, 모의 모델) → 창 없는 Chrome | [screen.md](screen.md) |
 
 ## 다음 여정 후보
 
 - 실패한 대화에서 멈춘 뒤 같은 명령으로 빠진 것만 이어 돌리기. 모의 모델에는 실패를 일으키는 장치가 없어 지금은 `eval/tests/cli.test.ts`가 맡는다.
 - 3번 기준의 재실행을 합친 판정(`eval:score -- --run 첫실행,재실행`).
-- 화면, 음성, 서버가 생기면 그 표면의 여정.
+- 지난 판 [다시 보기]와 기록 전에 나간 판의 [기록 남기기].
+- 30턴을 다 써서 끝나는 판. 지금은 `app/tests/server.test.ts`가 맡는다.

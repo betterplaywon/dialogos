@@ -1,9 +1,11 @@
-// verify 스킬의 공용 도우미: 실제 모델을 부를 수 없는 실행 환경, eval 명령 실행과 기록, 단계 기록, 증거 폴더.
+// verify 스킬의 공용 도우미: 실제 모델을 부를 수 없는 실행 환경, eval 명령 실행과 기록, 앱과 Chrome 띄우기, 단계 기록, 증거 폴더.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { launchChrome } from './browser.mjs';
 
 export const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
@@ -17,7 +19,38 @@ export function safeEnv() {
   return env;
 }
 
+/**
+ * 앱(app/dev.ts)을 띄우는 환경. safeEnv에서 APP_*를 모두 지운다. 그래서 모델은 모의 모델(APP_MODEL 없음)이고,
+ * 로컬 모델 설정(APP_LOCAL_*)과 판의 방식(APP_MODE)은 이 컴퓨터의 값이 섞이지 않는다. 포트와 판 파일만 여정이 정한다.
+ */
+function appEnv({ api, web, dbPath }) {
+  const env = safeEnv();
+  for (const name of Object.keys(env)) if (/^APP_/.test(name)) delete env[name];
+  return { ...env, APP_PORT: String(api), APP_WEB_PORT: String(web), APP_DB_PATH: dbPath };
+}
+
+/** 사용자가 띄워 두는 개발 서버의 포트(app/server/port.ts의 기본값). 여정은 이 포트를 쓰지 않는다. */
+const USER_PORTS = [8787, 5173];
+
+/** 이 컴퓨터가 고른 빈 포트 n개. 동시에 잡았다가 놓아 서로 다르다. */
+async function freePorts(n) {
+  const servers = await Promise.all(
+    Array.from({ length: n }, () => new Promise((resolve, reject) => {
+      const server = createServer();
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve(server));
+    })),
+  );
+  const ports = servers.map((server) => server.address().port);
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  assert.ok(ports.every((port) => !USER_PORTS.includes(port)), `빈 포트로 사용자의 개발 서버 포트를 받았다: ${ports.join(', ')}`);
+  return ports;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pad = (n) => String(n).padStart(2, '0');
+/** 터미널 색 코드를 뗀 글. Vite의 출력에 들어 있다. */
+const plain = (text) => text.replace(/\u001b\[[0-9;]*m/g, '');
 
 export function stamp(now = new Date()) {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
@@ -55,6 +88,8 @@ export function createHarness(feature, title, options) {
   const startedAt = new Date();
   let commands = 0;
   const file = (name) => path.join(dir, name);
+  /** 여정이 띄운 것(앱, Chrome)을 닫는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
+  const closers = [];
 
   return {
     feature,
@@ -82,6 +117,88 @@ export function createHarness(feature, title, options) {
       ];
       writeFileSync(file(log), lines.join('\n'));
       return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '', log };
+    },
+
+    /**
+     * 앱을 npm run app:dev와 같은 진입점(app/dev.ts)으로 빈 포트 둘에 띄우고, 화면을 거친 /api가 답할 때까지 기다린다.
+     * 모의 모델이고 .env를 읽지 않는다. 판 파일은 증거 폴더의 새 파일이다. 출력은 닫을 때 cmd-NN-app.txt에 남는다.
+     */
+    async app() {
+      commands += 1;
+      const log = `cmd-${pad(commands)}-app.txt`;
+      const dbName = `app-${pad(commands)}.sqlite`;
+      const [api, web] = await freePorts(2);
+      const started = Date.now();
+      const child = spawn(process.execPath, ['--import', 'tsx', path.join('app', 'dev.ts')], {
+        cwd: ROOT,
+        env: appEnv({ api, web, dbPath: file(dbName) }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let output = '';
+      child.stdout.on('data', (chunk) => (output += chunk));
+      child.stderr.on('data', (chunk) => (output += chunk));
+      const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+      const url = `http://127.0.0.1:${web}/`;
+      let ending = null;
+
+      const writeLog = (end) => {
+        const lines = [
+          `$ APP_PORT=${api} APP_WEB_PORT=${web} APP_DB_PATH=${path.relative(ROOT, file(dbName))} npm run app:dev`,
+          '(.env를 읽지 않고, APP_*와 모델 연결 정보를 지운 환경에서 실행. 모델은 모의 모델)',
+          `${end} · ${Date.now() - started}ms`,
+          '',
+          '--- 출력 ---',
+          plain(output),
+        ];
+        writeFileSync(file(log), lines.join('\n'));
+      };
+
+      /** SIGTERM으로 끄고, 5초 안에 끝나지 않으면 SIGKILL로 끝낸다. 여러 번 불러도 한 번만 끈다. */
+      const stop = () =>
+        (ending ??= (async () => {
+          const running = child.exitCode === null && child.signalCode === null;
+          if (running) {
+            child.kill('SIGTERM');
+            let timer;
+            const done = await Promise.race([exited, new Promise((resolve) => (timer = setTimeout(resolve, 5_000, null)))]);
+            clearTimeout(timer);
+            if (!done) child.kill('SIGKILL');
+          }
+          const { code, signal } = await exited;
+          writeLog(`${running ? '여정이 끔' : '스스로 끝남'}(종료 코드 ${code}, 신호 ${signal ?? '없음'})`);
+        })());
+      closers.push(stop);
+
+      for (let i = 0; i < 150; i += 1) {
+        if (child.exitCode !== null) break;
+        try {
+          if ((await fetch(`${url}api/topics`)).ok) return { url, api, web, dbPath: file(dbName), db: dbName, log };
+        } catch {
+          // 아직 뜨지 않았다.
+        }
+        await sleep(200);
+      }
+      await stop();
+      const tail = plain(output).trim().split('\n').slice(-5).join(' / ');
+      throw new Error(`앱이 30초 안에 뜨지 않았다(${log}): ${tail}`);
+    },
+
+    /** 창 없는 Chrome을 증거 폴더의 새 사용자 폴더(chrome-profile/)로 띄운다. 화면 사진도 증거 폴더에 남는다. */
+    async browser() {
+      const page = await launchChrome({ profileDir: file('chrome-profile'), shotsDir: dir });
+      closers.push(page.close);
+      return page;
+    },
+
+    /** 여정이 띄운 것을 모두 닫는다. 입구 스크립트가 여정이 끝난 뒤(실패해도) 부른다. */
+    async close() {
+      for (const closeOne of closers.splice(0).reverse()) {
+        try {
+          await closeOne();
+        } catch (error) {
+          console.error(`닫다가 실패: ${error instanceof Error ? error.message : error}`);
+        }
+      }
     },
 
     ok(result) {
