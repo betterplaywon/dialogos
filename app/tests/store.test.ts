@@ -412,6 +412,25 @@ for (const [name, open] of stores) {
     assert.deepEqual(idsOf(await store.listMemories('someone-else', { limit: 10 })), ['g4-z']);
   });
 
+  test(`${name} 저장소: id로 찾으면 그 사용자의 지금 기억만 나오고, 지웠거나 없거나 남의 기억은 빠진다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await seedMemories(store);
+    const sortedIds = (memories: readonly MemoryRecord[]) => idsOf(memories).sort();
+    assert.deepEqual(await store.findMemories('local', []), []);
+    // 고친 기억은 고친 글과 시각으로 나온다.
+    await store.editMemory('local', 'g2-y', '고친 글', '2026-11-20T00:00:00.000Z');
+    const found = await store.findMemories('local', ['g2-y', 'g4-z', '없는기억', 'g1-x', 'g2-y']);
+    assert.deepEqual(sortedIds(found), ['g1-x', 'g2-y']);
+    assert.deepEqual(
+      found.find((m) => m.id === 'g2-y'),
+      { ...memoriesFor(recordedAt('g2', '2026-11-19T03:00:00.000Z'), ['claim', 'weakness'])[1], text: '고친 글', editedAt: '2026-11-20T00:00:00.000Z' },
+    );
+    await store.deleteMemory('local', 'g1-x');
+    assert.deepEqual(sortedIds(await store.findMemories('local', ['g1-x', 'g2-y'])), ['g2-y']);
+    assert.deepEqual(sortedIds(await store.findMemories('someone-else', ['g2-y', 'g4-z'])), ['g4-z']);
+  });
+
   test(`${name} 저장소: 기억을 넣지 못하면 끝 기록과 판의 변경도 남지 않는다`, async (t) => {
     const store = open();
     t.after(() => store.close?.());

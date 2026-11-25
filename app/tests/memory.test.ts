@@ -4,7 +4,7 @@ import { NOT_JUDGED_DECISION, UNREADABLE_DECISION } from '../../eval/src/dialogu
 import type { ChatModel, JudgeDecision } from '../../eval/src/types.ts';
 import { createApp, type AppDeps } from '../server/app.ts';
 import type { ModelSource } from '../server/budget.ts';
-import type { GameView, GamesResponse, Lean, MemoriesResponse, MemoryView } from '../server/contract.ts';
+import type { GameView, GamesResponse, Lean, MemoriesResponse, MemoryView, PassedMemoryView, TurnResponse } from '../server/contract.ts';
 import { devSetup } from '../server/dev-setup.ts';
 import type { Topic } from '../server/games.ts';
 import { memoriesOf } from '../server/memory.ts';
@@ -572,5 +572,52 @@ test('다른 주제의 기억과 남의 기억은 넘기지 않는다', async ()
   assert.deepEqual(systems.slice(before).map(passedTexts), [null, null]);
   for (const id of [others.data.id, elsewhere.data.id]) {
     assert.deepEqual((await store.get(id))?.turns.map((turn) => turn.memoryIds), [[]]);
+  }
+});
+
+// ---- 서버: 넘긴 기억을 화면에 싣기 ----
+
+const kept = (memory: MemoryView, text = memory.text, edited = memory.edited): PassedMemoryView => ({
+  id: memory.id,
+  state: 'kept',
+  kind: memory.kind,
+  text,
+  edited,
+});
+
+test('턴 응답과 판은 넘긴 기억을 싣고, 지운 기억은 글 없이 지운 기록으로, 고친 기억은 지금 글과 고침 표시로 보인다', async (t) => {
+  for (const store of [new MemoryGameStore(), new SqliteGameStore(':memory:')]) {
+    t.after(() => (store instanceof SqliteGameStore ? store.close() : undefined));
+    const { call, playQ01, memoriesOfUser } = server({ store, now: ticking() });
+    const first = await playQ01();
+    // 기억이 없던 판은 넘긴 기록이 없다.
+    assert.deepEqual((await call<GameView>('GET', `/api/games/${first}`)).data.passed, []);
+    await call('POST', `/api/games/${first}/record`, { lean: 1, verdict: 'debate' });
+    const [claim, ground, shift, weakness] = await memoriesOfUser();
+    if (!claim || !ground || !shift || !weakness) throw new Error('기억이 넷이 아닙니다.');
+
+    const started = await call<GameView>('POST', '/api/games', { topicId: 'q01', side: 0, lean: -1 });
+    assert.deepEqual(started.data.passed, []);
+    const turns = `/api/games/${started.data.id}/turns`;
+    const one = await call<TurnResponse>('POST', turns, { text: '둘째 판의 첫 말입니다.' });
+    assert.deepEqual(one.data.memories, [kept(claim), kept(ground), kept(shift)]);
+
+    assert.equal((await call('POST', `/api/memories/${ground.id}/delete`)).status, 200);
+    assert.equal((await call('POST', `/api/memories/${claim.id}/edit`, { text: '고친 주장입니다.' })).status, 200);
+    const two = await call<TurnResponse>('POST', turns, { text: '둘째 판의 둘째 말입니다.' });
+    assert.deepEqual(two.data.memories, [kept(claim, '고친 주장입니다.', true), kept(shift), kept(weakness)]);
+
+    const view = await call<GameView>('GET', `/api/games/${started.data.id}`);
+    assert.deepEqual(view.data.passed, [
+      { turn: 1, memories: [kept(claim, '고친 주장입니다.', true), { id: ground.id, state: 'deleted' }, kept(shift)] },
+      { turn: 2, memories: [kept(claim, '고친 주장입니다.', true), kept(shift), kept(weakness)] },
+    ]);
+    // 지운 기억의 글과, 상대가 받았던 고치기 전 글은 판 화면에 다시 나오지 않는다.
+    for (const gone of [ground.text, claim.text]) assert.ok(!JSON.stringify(view.data).includes(gone), gone);
+    // 끝내기와 끝 기록의 응답도 같은 판이다.
+    const ended = await call<GameView>('POST', `/api/games/${started.data.id}/end`);
+    assert.deepEqual(ended.data.passed, view.data.passed);
+    const recorded = await call<GameView>('POST', `/api/games/${started.data.id}/record`, { lean: -1, verdict: 'debate' });
+    assert.deepEqual(recorded.data.passed, view.data.passed);
   }
 });

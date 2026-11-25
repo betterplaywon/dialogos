@@ -100,6 +100,8 @@ export interface GameView {
   record: EndRecordView | null;
   /** 이 판에서 말로 넣은 턴과 그 가운데 고쳐 보낸 턴. 음성 인식을 올릴지 정하는 기준을 잰다. */
   voice: VoiceTally;
+  /** 상대에게 기억을 넘긴 턴만, 턴 번호 차례로. 기억을 끈 서버의 판과 기억이 없던 판은 빈 목록이다. */
+  passed: PassedTurnView[];
 }
 
 /** 지난 판 목록의 한 줄. */
@@ -142,6 +144,8 @@ export interface TurnResponse {
   ended: boolean;
   /** 이 턴으로 판이 끝났으면 끝난 방식(턴을 모두 씀), 아니면 null. */
   endReason: EndReason | null;
+  /** 이 턴의 답을 만들 때 상대에게 넘긴 기억(넘긴 차례대로). 넘기지 않았으면 빈 목록이다. */
+  memories: PassedMemoryView[];
 }
 
 export interface EndRecordRequest {
@@ -169,6 +173,20 @@ export interface MemoryView {
   createdAt: string;
   /** 사용자가 고친 적이 있으면 true. */
   edited: boolean;
+}
+
+/**
+ * 한 턴에 상대에게 넘긴 기억 하나. 턴에는 id만 남기고 보일 때 지금의 기억과 잇는다.
+ * 고친 기억은 지금 글이다(상대가 받은 글은 고치기 전 글일 수 있다). 지운 기억은 글 없이 남아, 지운 글이 판 화면에 다시 나오지 않는다.
+ */
+export type PassedMemoryView =
+  | { id: string; state: 'kept'; kind: MemoryKind; text: string; edited: boolean }
+  | { id: string; state: 'deleted' };
+
+/** 한 턴에 넘긴 기억들. turn번째 답을 만들 때 상대가 받은 것이다. */
+export interface PassedTurnView {
+  turn: number;
+  memories: PassedMemoryView[];
 }
 
 export interface MemoriesResponse {

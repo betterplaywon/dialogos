@@ -120,6 +120,8 @@ export interface GameStore {
    * (한 판의 기억은 claim, ground, shift, weakness 순). topicId가 있으면 그 주제만.
    */
   listMemories(userId: string, query: { topicId?: string; limit: number }): Promise<MemoryRecord[]>;
+  /** ids에 든 그 사용자의 기억. 지웠거나 없거나 남의 것은 빠진다. 차례는 정하지 않는다. */
+  findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]>;
   /** 그 사용자의 기억 글을 바꾸고 고친 시각을 남긴다. 없거나 남의 것이면 undefined. */
   editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined>;
   /** 그 사용자의 기억을 지운다(기억 줄만, 판 기록은 남는다). 지웠으면 true. */
@@ -234,6 +236,13 @@ export class MemoryGameStore implements GameStore {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, query.limit)
       .map((memory) => structuredClone(memory));
+  }
+
+  async findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]> {
+    return [...new Set(ids)].flatMap((id) => {
+      const memory = this.#memories.get(id);
+      return memory?.userId === userId ? [structuredClone(memory)] : [];
+    });
   }
 
   async editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined> {

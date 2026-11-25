@@ -13,6 +13,8 @@ import type {
   Lean,
   MemoryView,
   MessageView,
+  PassedMemoryView,
+  PassedTurnView,
   SideIndex,
   TopicView,
   TurnEntry,
@@ -131,6 +133,11 @@ function memoryView(memory: MemoryRecord): MemoryView {
   };
 }
 
+/** 턴에 넘긴 기억의 지금 모습. 고쳤으면 지금 글과 고침 표시다. */
+function keptView(memory: MemoryRecord): PassedMemoryView {
+  return { id: memory.id, state: 'kept', kind: memory.kind, text: memory.text, edited: memory.editedAt !== undefined };
+}
+
 function messagesOf(game: GameRecord): MessageView[] {
   return game.history.map((m) => ({ speaker: m.role === 'assistant' ? 'opponent' : 'user', text: m.content }));
 }
@@ -218,7 +225,25 @@ export function createGames(deps: GameDeps) {
     return matchup;
   }
 
-  function viewOf(game: GameRecord): GameView {
+  /**
+   * 턴마다 넘긴 기억의 id를 지금의 기억과 잇는다. 지금 없는 기억(지웠다)은 글 없이 'deleted'로 보인다.
+   * 턴에 글을 떠 두지 않으므로, 지운 기억의 글은 판 화면에 다시 나오지 않는다.
+   */
+  async function passedOf(game: GameRecord): Promise<PassedTurnView[]> {
+    const turns = game.turns.filter((turn) => turn.memoryIds.length > 0);
+    if (turns.length === 0) return [];
+    const ids = [...new Set(turns.flatMap((turn) => turn.memoryIds))];
+    const found = new Map((await deps.store.findMemories(game.userId, ids)).map((memory) => [memory.id, memory]));
+    return turns.map((turn) => ({
+      turn: turn.n,
+      memories: turn.memoryIds.map((id): PassedMemoryView => {
+        const memory = found.get(id);
+        return memory ? keptView(memory) : { id, state: 'deleted' };
+      }),
+    }));
+  }
+
+  async function viewOf(game: GameRecord): Promise<GameView> {
     return {
       id: game.id,
       topic: topicView(topicOf(game)),
@@ -232,6 +257,7 @@ export function createGames(deps: GameDeps) {
       endReason: game.endReason ?? null,
       record: recordView(game.record),
       voice: voiceTallyOf(game.turns),
+      passed: await passedOf(game),
     };
   }
 
@@ -353,7 +379,13 @@ export function createGames(deps: GameDeps) {
             game.endReason = 'max-turns';
           }
           await deps.store.save(game);
-          return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined, endReason: game.endReason ?? null };
+          return {
+            turn: n,
+            reply: outcome.reply,
+            ended: game.endedAt !== undefined,
+            endReason: game.endReason ?? null,
+            memories: passed.map(keptView),
+          };
         });
       });
     },

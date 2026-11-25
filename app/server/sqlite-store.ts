@@ -423,6 +423,14 @@ export class SqliteGameStore implements GameStore {
     return rows.map(memoryOf);
   }
 
+  /** ids는 JSON 배열 하나로 넘겨 SQLite의 json_each로 편다. id가 몇 개든 자리표시자가 하나다. */
+  async findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]> {
+    const rows = this.#db
+      .prepare('SELECT * FROM memories WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))')
+      .all(userId, JSON.stringify(ids)) as unknown as MemoryRow[];
+    return rows.map(memoryOf);
+  }
+
   async editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined> {
     const row = this.#db
       .prepare('UPDATE memories SET text = ?, edited_at = ? WHERE id = ? AND user_id = ? RETURNING *')
