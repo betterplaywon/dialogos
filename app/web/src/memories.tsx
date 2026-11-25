@@ -289,7 +289,8 @@ export function MyMemories({ topics }: { topics: TopicView[] | null }) {
       </p>
     );
   }
-  if (!memories || memories.length === 0) return null;
+  // 주제를 불러오기 전에는 그리지 않는다. 그리면 모든 묶음이 '지금은 없는 주제'로 보인다.
+  if (!memories || memories.length === 0 || !topics) return null;
   const groups = new Map<string, PassedMemoryView[]>();
   for (const memory of memories) {
     const list = groups.get(memory.topicId) ?? [];
@@ -302,7 +303,7 @@ export function MyMemories({ topics }: { topics: TopicView[] | null }) {
       <p className="muted">판을 끝내고 기록을 남기면 생깁니다. 같은 주제의 다음 판에서 상대에게 최근 {MEMORIES_PER_TURN}개까지 넘깁니다.</p>
       {[...groups].map(([topicId, list]) => (
         <div key={topicId} className="memory-group">
-          <h3>{topics?.find((topic) => topic.id === topicId)?.question ?? '지금은 없는 주제'}</h3>
+          <h3>{topics.find((topic) => topic.id === topicId)?.question ?? '지금은 없는 주제'}</h3>
           <MemoryList memories={list} show={show} onChange={change} />
         </div>
       ))}
