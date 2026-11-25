@@ -406,7 +406,7 @@ VS Code처럼 앱 안에 들어 있는 브라우저에서는 음성을 켜지 �
 | `GET /api/games/:id` | 판 다시 불러오기. `voice`와 `passed`가 실립니다. `passed`는 기억을 넘긴 턴마다 `{ turn, memories }`이고, 기억은 `{ id, state: 'kept', kind, text, edited }`(고쳤으면 지금 글)나 지운 기억 `{ id, state: 'deleted' }`입니다 |
 | `POST /api/games/:id/turns` `{ text, input, redone }` | 한 턴. 상대의 답과, 그 답을 만들 때 넘긴 기억(`memories`, 넘기지 않았으면 빈 목록)이 옵니다. `input`은 말을 넣은 방식(`text`, `voice`, `voice-edited`)이고, 없으면 `text`입니다. `redone`은 그 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수(0~1000)이고, 없으면 0입니다. 다른 판에 보낸 턴의 답을 기다리는 중이면 409, 서비스의 비용 상한에 닿았거나 원장이 닫혔으면 503, 하루 턴 수를 다 썼으면 429입니다 |
 | `POST /api/games/:id/end` | 판 끝내기 |
-| `POST /api/games/:id/record` `{ lean, verdict }` | 끝난 판의 기록. 사후 입장(-2~2)과 훈계 문항의 답(`debate`, `lecture`)을 한 번만 받습니다. 기억이 켜져 있으면 그 판의 기억을 함께 저장합니다 |
+| `POST /api/games/:id/record` `{ lean, verdict }` | 끝난 판의 기록. 사후 입장(-2~2)과 훈계 문항의 답(`debate`, `lecture`)을 한 번만 받습니다. 판이 기억을 쓰면(위 '상대에게 넘기는 규칙') 그 판의 기억을 함께 저장합니다 |
 | `GET /api/memories?topicId=…` | 내 기억 목록(최근 100개). 만든 시각이 늦은 것부터, 한 판 안에서는 `claim`, `ground`, `shift`, `weakness` 차례입니다. `topicId`가 없으면 모든 주제입니다. 기억마다 `{ id, gameId, topicId, side, kind, text, createdAt, edited }`가 옵니다 |
 | `POST /api/memories/:id/edit` `{ text }` | 기억 글 고치기. 제어 문자를 지우고 한 줄로 만든 뒤 1~200자만 받고, 아니면 400입니다. 고친 기억이 옵니다 |
 | `POST /api/memories/:id/delete` | 기억 지우기. `{ deleted: true }`가 옵니다. 판 기록은 남습니다 |

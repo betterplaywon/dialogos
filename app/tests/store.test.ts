@@ -633,7 +633,7 @@ test('SQLite 저장소: 스키마 6의 파일을 열면 판의 기억 사용과 
   // 어떻게 시작했는지(눈가림 비교였는지) 모르는 판이라 기억을 끈 판으로 읽는다.
   assert.equal(game?.memory, false);
   assert.deepEqual(game?.turns, [promptTurn]);
-  // 예전 판을 이어 가면 새 턴부터 넘긴 기억이 남는다.
+  // 저장소는 예전 판에 붙인 새 턴의 넘긴 기억 id도 그대로 남긴다(판 진행에서는 예전 판이 기억을 쓰지 않는 판이라 빈 목록이 된다).
   await store.save({ ...game!, turns: [...game!.turns, { ...promptTurn, n: 2, memoryIds: ['m1', 'm2'] }] });
   assert.deepEqual((await store.get('old'))?.turns.map((turn) => turn.memoryIds), [[], ['m1', 'm2']]);
 });
