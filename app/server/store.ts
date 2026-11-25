@@ -38,6 +38,11 @@ export interface TurnLog {
   input: TurnInput;
   /** 이 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수. 스키마 4까지의 턴은 남기지 않아 0이다. */
   redone: number;
+  /**
+   * 이 턴의 답을 만들 때 상대에게 넘긴 기억의 id(memory.ts). 글은 떠 두지 않고 화면에 보일 때 지금의 기억과 잇는다.
+   * 그래서 지운 기억의 글은 판 화면에 다시 나오지 않는다. 스키마 6까지의 턴과 기억을 끈 서버의 턴은 빈 목록이다.
+   */
+  memoryIds: string[];
   reply: string;
   decision?: JudgeDecision;
   judge?: TurnRecord['judge'];

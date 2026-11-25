@@ -333,6 +333,7 @@ export function createGames(deps: GameDeps) {
             user: text,
             input: entry.input,
             redone: entry.redone,
+            memoryIds: [],
             reply: outcome.reply,
             ...(outcome.decision ? { decision: outcome.decision } : {}),
             ...(outcome.judge ? { judge: outcome.judge } : {}),

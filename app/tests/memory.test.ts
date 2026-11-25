@@ -33,6 +33,7 @@ function turn(n: number, user: string, decision?: JudgeDecision): TurnLog {
     user,
     input: 'text',
     redone: 0,
+    memoryIds: [],
     reply: '답입니다.',
     ...(decision ? { decision } : {}),
     ms: { opponent: 1 },

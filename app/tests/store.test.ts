@@ -40,6 +40,7 @@ const engineTurn: TurnLog = {
   user: '반론입니다.',
   input: 'text',
   redone: 0,
+  memoryIds: [],
   reply: 'P1을 거둡니다.',
   decision: { tactic: 'argument', defeats: 'P1', reason: '반례' },
   judge: { calls: 2, readable: true },
@@ -51,6 +52,7 @@ const unreadableTurn: TurnLog = {
   user: '같은 말입니다.',
   input: 'text',
   redone: 0,
+  memoryIds: [],
   reply: '물러서지 않습니다.',
   decision: { tactic: 'other', defeats: null, reason: '판정기의 답을 읽지 못했습니다.' },
   judge: { calls: 2, readable: false },
@@ -63,6 +65,7 @@ const promptTurn: TurnLog = {
   user: '반론입니다.',
   input: 'text',
   redone: 0,
+  memoryIds: [],
   reply: '답입니다.',
   ms: { opponent: 7 },
   at: '2026-11-19T00:01:00.000Z',
@@ -249,6 +252,22 @@ for (const [name, open] of stores) {
     );
     const [summary] = await store.list('local', 1);
     assert.deepEqual([summary?.turns, summary?.voice], [4, { turns: 3, edited: 1, redone: 1 }]);
+  });
+
+  test(`${name} 저장소: 턴마다 상대에게 넘긴 기억의 id가 넘긴 차례대로 남고, 넘기지 않은 턴은 빈 목록이다`, async (t) => {
+    const store = open();
+    t.after(() => store.close?.());
+    await store.create(sample());
+    const turns: TurnLog[] = [
+      { ...engineTurn, memoryIds: ['m3', 'm1', 'm2'] },
+      { ...unreadableTurn, memoryIds: [] },
+      { ...unreadableTurn, n: 3, memoryIds: ['m1'] },
+    ];
+    await store.save(sample({ turns }));
+    assert.deepEqual(
+      (await store.get('g1'))?.turns.map((turn) => turn.memoryIds),
+      [['m3', 'm1', 'm2'], [], ['m1']],
+    );
   });
 
   test(`${name} 저장소: 같은 판을 두 번 만들거나 없는 판을 저장하면 실패한다`, async (t) => {
@@ -493,7 +512,7 @@ test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고,
 
   const store = new SqliteGameStore(path);
   t.after(() => store.close());
-  assert.equal(store.schemaVersion, 6);
+  assert.equal(store.schemaVersion, MIGRATIONS.length);
   const game = await store.get('old');
   assert.deepEqual(game, {
     id: 'old',
@@ -517,6 +536,39 @@ test('SQLite 저장소: 스키마 5의 파일을 열면 기억 표를 더하고,
   await store.save(game!, [added]);
   assert.deepEqual(await store.listMemories('local', { limit: 10 }), [added]);
   assert.deepEqual(await store.get('old'), game);
+});
+
+test('SQLite 저장소: 스키마 6의 파일을 열면 턴에 넘긴 기억 칸을 더하고, 예전 턴은 기억을 넘기지 않은 턴(빈 목록)으로 읽는다', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dialogos-migrate-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'app.sqlite');
+  // 스키마 6까지만 적용한 파일(기억을 상대에게 넘기기 전의 서버가 만든 파일)을 흉내 낸다. 그때의 턴에는 넘긴 기억 칸이 없다.
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY)');
+  for (const sql of MIGRATIONS.slice(0, 6)) old.exec(sql);
+  old.exec('INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6)');
+  old
+    .prepare(
+      `INSERT INTO games (id, user_id, topic_id, side, card_id, mode, history, conceded, start_lean, started_at)
+       VALUES ('old', 'local', 'q01', 0, 'utilitarian', 'prompt', '[]', '[]', -1, '2026-11-25T00:00:00.000Z')`,
+    )
+    .run();
+  old
+    .prepare(
+      `INSERT INTO turns (game_id, n, user_text, input, redone, reply, ms_opponent, at)
+       VALUES ('old', 1, '반론입니다.', 'text', 0, '답입니다.', 7, '2026-11-19T00:01:00.000Z')`,
+    )
+    .run();
+  old.close();
+
+  const store = new SqliteGameStore(path);
+  t.after(() => store.close());
+  assert.equal(store.schemaVersion, MIGRATIONS.length);
+  const game = await store.get('old');
+  assert.deepEqual(game?.turns, [promptTurn]);
+  // 예전 판을 이어 가면 새 턴부터 넘긴 기억이 남는다.
+  await store.save({ ...game!, turns: [...game!.turns, { ...promptTurn, n: 2, memoryIds: ['m1', 'm2'] }] });
+  assert.deepEqual((await store.get('old'))?.turns.map((turn) => turn.memoryIds), [[], ['m1', 'm2']]);
 });
 
 test('SQLite 저장소: 파일을 다시 열면 판이 남고, 스키마는 한 번만 적용한다', async (t) => {
@@ -711,7 +763,8 @@ test('SQLite 저장소: 스키마 3의 파일을 열면 원장을 더하고, 예
   const store = new SqliteGameStore(path);
   t.after(() => store.close());
   assert.equal(store.schemaVersion, MIGRATIONS.length);
-  const oldTurn = { reply: '답입니다.', ms: { opponent: 7 } };
+  // 상대에게 기억을 넘기기 전의 턴이라 넘긴 기억은 빈 목록이다.
+  const oldTurn = { memoryIds: [], reply: '답입니다.', ms: { opponent: 7 } };
   assert.deepEqual(await store.get('old'), {
     id: 'old',
     userId: 'local',

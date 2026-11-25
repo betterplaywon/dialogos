@@ -75,6 +75,9 @@ export const MIGRATIONS: readonly string[] = [
      edited_at TEXT
    );
    CREATE INDEX memories_by_user ON memories (user_id, topic_id, created_at);`,
+  // 7: 턴마다 상대에게 넘긴 기억의 id(JSON 배열). 글은 남기지 않아, 지운 기억의 글이 판 화면에 다시 나오지 않는다.
+  // 그 전에 저장한 턴은 기억을 넘기지 않았으므로 빈 목록이다.
+  `ALTER TABLE turns ADD COLUMN memory_ids TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 /** 다른 연결의 쓰기를 기다리는 최대 시간. */
@@ -103,6 +106,7 @@ interface TurnRow {
   user_text: string;
   input: string;
   redone: number;
+  memory_ids: string;
   reply: string;
   decision: string | null;
   judge_calls: number | null;
@@ -167,6 +171,7 @@ function turnOf(row: TurnRow): TurnLog {
     user: row.user_text,
     input: row.input as TurnInput,
     redone: row.redone,
+    memoryIds: JSON.parse(row.memory_ids) as string[],
     reply: row.reply,
     ...(row.decision !== null ? { decision: JSON.parse(row.decision) as JudgeDecision } : {}),
     ...(row.judge_calls !== null ? { judge: { calls: row.judge_calls, readable: row.judge_readable === 1 } } : {}),
@@ -230,8 +235,8 @@ export class SqliteGameStore implements GameStore {
   /** 아직 저장하지 않은 턴만 넣는다. 한 번 저장한 턴은 바꾸지 않는다. */
   #insertTurns(game: GameRecord): void {
     const insert = this.#db.prepare(
-      `INSERT INTO turns (game_id, n, user_text, input, redone, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO turns (game_id, n, user_text, input, redone, memory_ids, reply, decision, judge_calls, judge_readable, ms_judge, ms_opponent, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (game_id, n) DO NOTHING`,
     );
     for (const turn of game.turns) {
@@ -241,6 +246,7 @@ export class SqliteGameStore implements GameStore {
         turn.user,
         turn.input,
         turn.redone,
+        JSON.stringify(turn.memoryIds),
         turn.reply,
         turn.decision ? JSON.stringify(turn.decision) : null,
         turn.judge ? turn.judge.calls : null,
