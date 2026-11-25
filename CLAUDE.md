@@ -62,16 +62,16 @@ PR 리뷰는 독립 검증이 맡습니다(2026-11-26 사용자 결정). 사람�
 | `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준, 질문, 대본이 바뀌었다면 그 사용자 결정이 PR 1번에 있는지 |
 | `app/topics/*.json` | 주제 카드의 글(상대의 전제와 타당한 반론)이 바뀌었다면 그 사용자 결정이 있는지 |
 | `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정, 통과 판정 계산이 결정 없이 바뀌지 않았는지, 고정해 둔 검사(지시문 해시 등)를 결정 없이 고치지 않았는지 |
-| `eval/src/providers/api.ts` | 키를 출력하거나 남기지 않는지, `--confirm` 없이 돈이 드는 호출로 가는 길이 없는지 |
-| `package.json`, `package-lock.json` | 새 의존성과 설치 스크립트, `check`와 `test`가 검사를 빼거나 약하게 하지 않았는지 |
+| `eval/src/providers/api.ts`, `eval/src/run.ts`, `eval/src/label.ts`, `app/server/models.ts` | 키를 출력하거나 남기지 않는지, 확인(`--confirm`) 없이 돈이 드는 호출로 가는 길이나 이 컴퓨터 밖의 모델로 가는 길이 새로 생기지 않았는지 |
+| `package.json`, `package-lock.json` | 새 의존성과 설치 스크립트, `check`와 `test`가 검사를 빼거나 약하게 하지 않았는지, 스크립트에 `--provider api`나 `--confirm`을 새로 넣지 않았는지(가드의 확인 창은 명령 글자만 본다) |
 | `.env.example`, `.gitignore` | `.env`, `runs/`, `notes/`가 계속 커밋되지 않는지 |
 | `README.md` | 공개 문서: 수치가 실측인지, 사용자가 쓸 과정 글의 본문을 대신 쓰지 않았는지 |
 | `.claude/`(아래 표 밖), `.agents/`, `.github/`(아래 표 밖) | 검증과 규칙을 약하게 하지 않았는지 |
 
 | 사람이 머지하는 경로 | 까닭 |
 | --- | --- |
-| `.claude/hooks/`, `.claude/settings.json` | 가드와 훅, 권한. 에이전트가 고쳐 스스로 머지하면 자기 제약을 풀 수 있다 |
-| `.github/workflows/` | CI. 머지 조건의 하나다 |
+| `.claude/hooks/`, `.claude/settings*.json` | 가드와 훅, 권한과 로컬 설정(로컬 설정은 훅을 끌 수 있다). 에이전트가 고쳐 스스로 머지하면 자기 제약을 풀 수 있다 |
+| `.github/workflows/`, `.npmrc` | CI와 게이트. 머지 조건의 하나다(`.npmrc`는 `npm run check`를 돌리는 셸까지 바꿀 수 있다) |
 | `CLAUDE.md`, `AGENTS.md` | 에이전트의 규칙과 이 자율 범위 |
 
 **멈추고 사용자에게 묻습니다.** 아직 내려지지 않은 제품·설계 결정(묻기 전에 개념과 선택지별 장단점을 먼저 설명합니다), 확정된 결정과 통과 기준의 변경, 실제 모델 호출, 비밀값과 키, GitHub 설정, 데이터와 브랜치 삭제, 배포, 외부 발행. 되돌릴 수 있는 일은 묻지 않고 하고 결과를 보고합니다.
@@ -96,7 +96,7 @@ PR 리뷰는 독립 검증이 맡습니다(2026-11-26 사용자 결정). 사람�
 | main 직접 커밋·push 금지, 커밋 제목 형식, 커밋 작성자는 noreply 주소, 커밋 전 `npm run check` | 같은 훅 |
 | 커밋 메시지(`-F` 파일 포함), 커밋할 변경, push할 커밋의 변경, PR과 이슈의 글(`--body-file`, `gh api`의 본문 파일 포함)에 비밀값, 이메일, 전화번호, 금칙어 금지. 표준 입력으로 넘긴 글은 막음 | 같은 훅(금칙어 목록은 `notes/forbidden-words.txt`) |
 | 한 명령 안에서 스테이지에 올리고 커밋하기, 커밋하고 push하기 금지(가드는 실행 전에 한 번만 본다) | 같은 훅 |
-| 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 녹색이 아닌 머지, head를 못박지 않은 머지 금지 | 같은 훅 |
+| 사람이 머지하는 경로, 관리자 머지, merge commit이 아닌 머지, 체크가 없거나 녹색이 아닌 머지, head를 못박지 않은 머지, PR 번호를 글자로 적지 않은 머지 금지 | 같은 훅 |
 | 저장소 설정, 비밀, 워크플로우, 릴리스 변경 금지 | 같은 훅 |
 | PR 단계와 판정 실험의 진행 | `.agents/playbooks/`(앵커는 pstack의 `check-playbooks.mjs`가 검사) |
 | 형식 검사와 검사 | CI verify(필수 체크 등록은 사용자 몫) |

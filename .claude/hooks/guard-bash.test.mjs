@@ -1,7 +1,7 @@
 // 가드 훅의 판정을 검사한다. 위험한 명령의 패턴은 이 파일과 guard-bash.mjs에만 적는다(AGENTS.md 4번의 예외).
 // 명령은 실행되지 않는다. 가드에 문자열로 넘겨 판정(허용, 확인 요청, 차단)만 본다.
-// 금칙어 목록은 커밋되지 않는 로컬 파일이라 임시 폴더에 시험용 목록을 둔다. 임시 폴더의 package.json 이름은 dialogos가 아니라서
-// 커밋 전 게이트(npm run check)는 돌지 않는다.
+// 금칙어 목록은 커밋되지 않는 로컬 파일이라 임시 폴더에 시험용 목록을 둔다. 임시 폴더에는 가드 파일(.claude/hooks/guard-bash.mjs)이
+// 없어서 커밋 전 게이트(npm run check)는 돌지 않는다. 게이트를 보는 검사만 가드 파일을 따로 만든다.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -162,23 +162,32 @@ test('커밋할 변경에 금칙어나 비밀값이 있으면 막는다', (t) =>
   assert.equal(verdict('git commit -m "docs: 추가"', { cwd: dir }), 'allow');
 });
 
-test('가드와 훅, 권한, CI, 규칙 문서를 건드린 PR의 머지만 막는다', (t) => {
-  // gh 대신 정해 둔 PR 정보를 내는 가짜 gh를 PATH 앞에 둔다. 실제 GitHub에는 묻지 않는다.
+// gh 대신 정해 둔 PR 정보를 내는 가짜 gh를 PATH 앞에 둔다. 실제 GitHub에는 묻지 않는다.
+function fakeGh(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-gh-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(path.join(dir, 'gh'), '#!/bin/sh\ncat "$FAKE_GH_JSON"\n', { mode: 0o755 });
-  const merge = (changed, head = '--match-head-commit abc1234') => {
-    const json = path.join(dir, `${changed.replace(/\W/g, '_')}.json`);
-    const checks = [{ name: 'verify', conclusion: 'SUCCESS' }];
-    writeFileSync(json, JSON.stringify({ files: [{ path: changed }], isDraft: false, state: 'OPEN', statusCheckRollup: checks }));
-    return guard(`gh pr merge 7 --merge ${head}`, { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
+  let n = 0;
+  return (command, pr = {}) => {
+    const json = path.join(dir, `pr-${(n += 1)}.json`);
+    const info = { files: [{ path: 'app/README.md' }], isDraft: false, state: 'OPEN', statusCheckRollup: [{ name: 'verify', conclusion: 'SUCCESS' }], ...pr };
+    writeFileSync(json, JSON.stringify(info));
+    return guard(command, { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
   };
+}
+
+test('가드와 훅, 권한, CI, 규칙 문서를 건드린 PR의 머지만 막는다', (t) => {
+  const ask = fakeGh(t);
+  const merge = (changed, head = '--match-head-commit abc1234') => ask(`gh pr merge 7 --merge ${head}`, { files: [{ path: changed }] });
   const humanMerge = [
     '.claude/hooks/guard-bash.mjs',
     '.claude/hooks/_shared.mjs',
     '.claude/hooks/on-stop.mjs',
+    '.claude/hooks/lib/x.mjs',
     '.claude/settings.json',
+    '.claude/settings.local.json',
     '.github/workflows/ci.yml',
+    '.npmrc',
     'CLAUDE.md',
     'AGENTS.md',
   ];
@@ -202,6 +211,10 @@ test('가드와 훅, 권한, CI, 규칙 문서를 건드린 PR의 머지만 막�
     '.github/pull_request_template.md',
     'app/server/topics.ts',
     'app/README.md',
+    // 이름만 비슷한 경로는 사람 몫이 아니다.
+    '.claude/hooks2/x.mjs',
+    'docs/CLAUDE.md',
+    '.github/workflows-old/x.yml',
   ];
   for (const changed of agentMerge) {
     assert.equal(merge(changed).verdict, 'allow', changed);
@@ -214,6 +227,70 @@ test('머지는 검증한 head를 --match-head-commit으로 못박아야 한다'
     const result = guard(command);
     assert.equal(result.verdict, 'block', command);
     assert.match(result.reason, /--match-head-commit/, command);
+  }
+});
+
+test('머지할 PR은 글자 그대로의 번호로 받고, draft·체크 없음·녹색 아님은 막는다', (t) => {
+  const ask = fakeGh(t);
+  const head = '--merge --match-head-commit abc1234';
+  assert.equal(ask(`gh pr merge 7 ${head}`).verdict, 'allow');
+  assert.equal(ask(`gh pr merge https://github.com/o/r/pull/7 ${head}`).verdict, 'allow');
+  assert.equal(ask(`gh pr merge ${head} 7`).verdict, 'allow');
+  // 번호를 빼거나 변수·브랜치 이름으로 주면 가드가 보는 PR과 gh가 머지하는 PR이 달라질 수 있다.
+  for (const command of [
+    `gh pr merge ${head}`,
+    `gh pr merge $N ${head}`,
+    `gh pr merge feat/x ${head}`,
+    `gh pr merge 7 ${head} -R o/other`,
+    // 전역 옵션이 하위 명령 앞에 와도 머지로 본다.
+    `gh -R o/other pr merge 7 ${head}`,
+    `gh --repo=o/other pr merge 7 ${head}`,
+    'gh -R o/r pr merge 7 --squash',
+  ]) {
+    assert.equal(ask(command).verdict, 'block', command);
+  }
+  assert.match(ask(`gh pr merge 7 ${head}`, { isDraft: true }).reason, /draft/);
+  assert.match(ask(`gh pr merge 7 ${head}`, { statusCheckRollup: [] }).reason, /체크가 하나도 없다/);
+  assert.match(ask(`gh pr merge 7 ${head}`, { statusCheckRollup: [{ name: 'verify', conclusion: 'FAILURE' }] }).reason, /녹색이 아니다/);
+  assert.match(ask(`gh pr merge 7 ${head}`, { statusCheckRollup: [{ name: 'verify', status: 'IN_PROGRESS' }] }).reason, /녹색이 아니다/);
+});
+
+test('셸 예약어와 함수 정의 안의 명령도 같은 규칙을 적용한다', () => {
+  for (const command of [
+    'for n in 43; do gh pr merge $n --merge; done',
+    'if true; then gh pr merge 43 --merge --admin; fi',
+    'for b in x; do git push --force origin $b; done',
+    'if true; then git push origin main; fi',
+    'if false; then true; else git push origin main; fi',
+    'while true; do git push origin main; done',
+    'until false; do git push origin main; done',
+    'if git push origin main; then true; fi',
+    'f() { git push origin main; }',
+    'echo `gh pr merge 43 --merge`',
+    'echo `git push origin main`',
+    'function f { git push origin main; }',
+  ]) {
+    assert.equal(verdict(command), 'block', command);
+  }
+  for (const command of ['for f in a b; do echo $f; done', 'if true; then git status; fi', 'while false; do ls; done']) {
+    assert.equal(verdict(command), 'allow', command);
+  }
+});
+
+test('커밋 전 게이트는 package.json의 이름이 아니라 가드 파일로 이 저장소를 알아본다', (t) => {
+  // package.json은 에이전트가 머지하는 경로라, 이름을 바꿔 게이트를 끌 수 있으면 안 된다.
+  const { dir, git } = gitRepo(t);
+  writeList(dir);
+  const pkg = (name) => writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, scripts: { check: 'exit 1' } }));
+  writeFileSync(path.join(dir, 'a.txt'), '평범한 줄\n');
+  git('add', 'a.txt');
+  pkg('dialogos');
+  assert.equal(verdict('git commit -m "docs: 추가"', { cwd: dir }), 'allow');
+  mkdirSync(path.join(dir, '.claude', 'hooks'), { recursive: true });
+  writeFileSync(path.join(dir, '.claude', 'hooks', 'guard-bash.mjs'), '');
+  for (const name of ['dialogos', 'renamed']) {
+    pkg(name);
+    assert.match(guard('git commit -m "docs: 추가"', { cwd: dir }).reason, /커밋 전 게이트 실패/, name);
   }
 });
 
