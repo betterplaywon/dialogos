@@ -62,7 +62,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `screen`: 앱을 빈 포트에 띄워 글로 한 판을 한다. 주제 목록 → 주제와 생각 고르기 → 글로 두 턴 → 새로 고친 뒤 이어 하기 → 끝내기 → 사후 입장과 훈계 문항 → 목록의 기록 → 판 파일의 턴과 끝 기록. 이 Mac에서 단계 합계 약 6초. [features/screen.md](features/screen.md)
 - `voice-screen`: 페이지보다 먼저 도는 스크립트로 브라우저의 음성 인식과 음성 합성을 가짜로 바꾸고 한 판을 한다. 음성 켜기 → 말하기 → 다시 말하기(바꿈) → 손댄 뒤 말하기(붙임) → 보내기(판 파일의 input, redone과 상대의 답 읽기) → 듣는 중에 끄기(붙임) → 보내기 → VS Code 꼴 User-Agent의 안내. 이 Mac에서 단계 합계 약 9초. [features/voice-screen.md](features/voice-screen.md)
 
-화면 여정은 실패하거나 Ctrl+C(두 번 눌러도), 종료 신호, 터미널 닫기로 멈춰도 띄운 앱과 Chrome을 닫고 임시 사용자 폴더를 지운 뒤에 끝난다. 닫는 데 앱과 Chrome마다 많아야 5초 걸린다.
+화면 여정은 실패하거나 Ctrl+C(두 번 눌러도), 종료 신호, 터미널 닫기, 잡히지 않은 오류로 멈춰도 띄운 앱과 Chrome을 닫고 임시 사용자 폴더를 지운 뒤에 끝난다. 출력을 받는 쪽이 먼저 끝나도(`| head`) 여정은 끝까지 돌고 결과는 `steps.md`에 남는다. 닫는 데 앱과 Chrome마다 많아야 5초 걸린다.
 
 맵에 없는 것을 확인하려면 여정을 하나 더 쓴다. `scripts/journeys/<id>.mjs`가 `export const title`과 `export async function run(h)`를 내보내면 입구 스크립트가 그 id를 바로 받는다. `h`는 `scripts/lib.mjs`의 하네스다.
 
@@ -102,6 +102,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - 화면 여정은 이 Mac의 창 없는 Chrome 한 가지로만 본다. Safari, Firefox, 좁은 화면은 사람이 본다.
 - 실제 인식기(정확도, 쉼에서 끊기는 때), 실제 목소리(고르기, 속도, 기기 밖 목소리), 실제 마이크와 권한 창, 인식 팩 내려받기는 증명하지 않는다. 여전히 사람이 Chrome에서 직접 본다. `voice-screen`은 그 위의 화면 규칙만 본다.
 - 앱 안 브라우저는 User-Agent만 바꾼 Chrome으로 흉내 낸다. 실제 VS Code 안에서 페이지가 닫히는지는 보지 않는다.
+- SIGKILL처럼 잡을 수 없는 신호로 입구 스크립트가 끝나면 여정의 앱과 Chrome, 임시 사용자 폴더(`dialogos-verify-chrome-*`)가 남는다. 앱은 `--import tsx app/dev.ts`, Chrome은 `--user-data-dir`에 그 폴더가 있는 프로세스다.
 - 기억은 아직 없다. 생기면 여정을 더한다.
 
 ## 유지보수
