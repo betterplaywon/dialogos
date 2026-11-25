@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadCards, loadQuestions } from '../src/data.ts';
-import { openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
+import { NOT_JUDGED_DECISION, openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
 import { engineSystem, plainSystem, promptSystem } from '../src/prompts.ts';
 import { createMockModel } from '../src/providers/mock.ts';
 import { buildScript, openingStatement } from '../src/script.ts';
@@ -162,6 +162,20 @@ test('지난 판의 기록은 상대의 지시문에만 들어가고, 지시문 
   const plainOpponent = recorder(() => '답입니다.');
   await runTurn(openingState(question), { question, card, condition: 'plain', models: { opponent: plainOpponent, judge: recorder(() => '{}') }, text: '반론입니다.', memories });
   assert.equal(systemOf(plainOpponent.calls[0]), plainSystem());
+});
+
+test('엔진이 전제를 모두 거둔 뒤의 턴에도 기록을 같은 칸으로 넘기고, 판정기는 부르지 않는다', async () => {
+  const memories = ['지킨 입장: 시험 입장. 첫 말: "시험 첫 말"', '근거 없이 밀어붙인 턴: 같은 주장 되풀이 2번'];
+  const all = new Set(question.premises.map((p) => p.id));
+  const state = { ...openingState(question), conceded: new Set(all) };
+  const judge = recorder(() => '{"tactic":"repeat","defeats":null,"reason":"시험"}');
+  const opponent = recorder(() => '답입니다.');
+  const outcome = await runTurn(state, { question, card, condition: 'engine', models: { opponent, judge }, text: '반론입니다.', memories });
+  assert.equal(judge.calls.length, 0);
+  assert.deepEqual(outcome.decision, NOT_JUDGED_DECISION);
+  const system = systemOf(opponent.calls[0]);
+  assert.equal(system, engineSystem(card, question, all, NOT_JUDGED_DECISION, memories));
+  assert.ok(memories.every((memory) => system.includes(`\n- ${memory}\n`)), system);
 });
 
 test('판정 실험(runDialogue)은 기억을 넘기지 않는다', async () => {
