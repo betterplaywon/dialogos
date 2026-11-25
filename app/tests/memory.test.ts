@@ -193,7 +193,7 @@ test('기억 글은 늘 한 줄이다: 말, 전제, 입장의 줄바꿈과 탭�
   for (const [, text] of texts) assert.doesNotMatch(String(text), /[^\S ]|\u0085|\s{2}|^\s|\s$/);
 });
 
-test('긴 입장과 말은 정한 글자 수로 자르고 끝에 말줄임표를 붙인다(이모지도 한 자로 센다)', () => {
+test('긴 입장과 말은 정한 글자 수로 자르고 끝에 말줄임표를 붙인다(😀 같은 이모지도 한 자로 센다)', () => {
   const longStance = `${'가'.repeat(70)}.`;
   const topic: Topic = { ...x01, sides: [{ ...x01.sides[0], stance: longStance }, x01.sides[1]] };
   const longPremise = '전'.repeat(60);

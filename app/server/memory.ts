@@ -24,14 +24,13 @@ export interface MemoryRecord {
   editedAt?: string;
 }
 
-/** 기억 한 개의 글자 수 상한. 로컬 모델의 맥락(4096)을 생각해 짧게 둔다. */
+/** 기억 한 개의 글자 수 상한. 로컬 모델의 맥락 길이(이 컴퓨터의 Ollama 기본값 4096 토큰, app/README.md)를 생각해 짧게 둔다. */
 export const MAX_MEMORY_TEXT = 200;
-/** 한 턴에 상대에게 넘기는 기억 수(M2 A). */
-export const MEMORIES_PER_TURN = 3;
 
 /**
  * 기억 글의 글자 수. 코드 포인트로 세어 SQLite의 length()와 같게 한다.
- * 자르기(clip)와 고친 글의 상한 확인이 같은 셈을 쓰고, 그래서 이모지를 반으로 자르지 않는다.
+ * clip도 코드 포인트로 자르므로 😀처럼 한 코드 포인트인 이모지는 반으로 자르지 않는다.
+ * 국기, 피부색, ZWJ로 묶인 이모지처럼 여러 코드 포인트로 된 글자는 중간에서 잘릴 수 있다.
  */
 export const memoryLength = (text: string): number => [...text].length;
 
@@ -39,7 +38,8 @@ export const memoryLength = (text: string): number => [...text].length;
  * 기억 글을 한 줄로 만든다. 공백 문자 묶음(줄바꿈, 탭 포함)을 공백 하나로 바꾸고 앞뒤를 다듬는다.
  * JS의 \s에 없는 유니코드 줄바꿈 NEL(U+0085)도 함께 바꾼다(U+2028, U+2029는 \s에 있다).
  * 상대의 지시문은 기억마다 '- ' 한 줄로 넣는데, 턴 원문에는 줄바꿈이 남아 있을 수 있다.
- * 기억을 만들 때(턴 원문, 전제 글, 입장 글)와 사용자가 고친 글을 받을 때 모두 이것을 거친 뒤에 길이를 재고 자른다.
+ * 기억을 만들 때(턴 원문, 전제 글, 입장 글)와 사용자가 고친 글을 받을 때 모두 이것을 거친 뒤에 길이를 잰다.
+ * 만들 때는 넘는 글을 자르고, 고칠 때는 넘으면 받지 않는다.
  */
 export const oneLine = (text: string): string => text.replace(/[\s\u0085]+/g, ' ').trim();
 
@@ -63,7 +63,8 @@ const isPush = (tactic: string): tactic is Tactic => Object.hasOwn(PUSH_LABELS, 
 const WEAKNESS_MIN = 2;
 
 /**
- * 끝 기록을 남긴 판에서 규칙으로 기억을 만든다(M1 A). 모델을 부르지 않는 순수 함수다.
+ * 끝 기록을 남긴 판에서 모델 없이 규칙으로 기억을 만든다(2026-11-25 사용자 결정).
+ * 받은 newId를 기억마다 한 번 부르는 것 말고는 밖을 읽거나 바꾸지 않는다.
  * 사용자의 턴이 하나도 없는 판은 기억을 만들지 않는다. 순서는 claim, ground(턴 순서), shift, weakness.
  * 근거와 약점은 엔진 판의 판정에서만 나온다. 지시문 방식 판에는 판정이 없어 claim과 shift만 생긴다.
  */

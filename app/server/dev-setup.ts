@@ -28,7 +28,7 @@ export interface DevSetup {
  * APP_MODE로 판마다 방식을 고르는 법, 기억을 만드는지, 첫 줄에 알릴 말을 고른다.
  * 없으면 engine이다. 개인 사용에서 모든 판이 판정기를 거쳐 근거 없이는 물러서지 않게 하려는 것이다.
  * random은 판마다 지시문 방식과 엔진 방식을 반씩 고른다. 사람이 어느 쪽인지 모른 채 두 방식을 견주는 눈가림 비교에 쓴다.
- * 기억은 engine에서 켜고 random에서 끈다. 기억의 근거와 약점이 판정기의 판단을 드러내 눈가림을 깨기 때문이다(M6 A).
+ * 기억은 engine에서 켜고 random에서 끈다. 기억의 근거와 약점이 판정기의 판단을 드러내 눈가림을 깨기 때문이다(2026-11-25 사용자 결정).
  */
 function modeFromEnv(env: Env): Pick<DevSetup, 'pickMode' | 'memory' | 'label'> {
   const choice = env.APP_MODE || 'engine';

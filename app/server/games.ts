@@ -83,7 +83,7 @@ export interface GameDeps {
   pickMode: () => Mode;
   /**
    * 끝 기록을 남길 때 기억을 만드는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
-   * 눈가림 비교(APP_MODE=random)에서는 끈다(M6 A, dev-setup.ts).
+   * 눈가림 비교(APP_MODE=random)에서는 끈다(2026-11-25 사용자 결정, dev-setup.ts).
    */
   memory: boolean;
   newId: () => string;
