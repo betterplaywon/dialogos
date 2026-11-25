@@ -4,6 +4,7 @@
 // .env를 읽지 않는다. 로컬 모델은 이 컴퓨터 안의 주소로만 부르고 단가가 0이라 돈이 들지 않는다.
 // 판은 data/app.sqlite에 남는다. 토론 기록이 들어 있으므로 data/는 커밋하지 않는다.
 // APP_DB_PATH로 다른 파일을 쓰거나, ':memory:'로 파일 없이 메모리에만 둘 수 있다.
+// 포트는 APP_PORT(서버, 기본 8787)와 APP_WEB_PORT(화면, 기본 5173)로 바꾼다(server/port.ts).
 
 import { serve } from '@hono/node-server';
 import { mkdirSync } from 'node:fs';
@@ -13,7 +14,6 @@ import { createServer } from 'vite';
 import { createApp } from './server/app.ts';
 import { LIMITS } from './server/budget.ts';
 import { devSetup } from './server/dev-setup.ts';
-import { API_PORT } from './server/port.ts';
 import { SqliteGameStore } from './server/sqlite-store.ts';
 import { loadTopics } from './server/topics.ts';
 
@@ -24,7 +24,7 @@ function stop(reason: string): never {
 }
 
 // 설정을 고르지 못하면 판 파일을 만들지 않고 멈추도록, 저장소보다 먼저 고른다.
-const { models, pickMode, label } = await devSetup(process.env).catch((error: unknown) =>
+const { models, pickMode, label, ports } = await devSetup(process.env).catch((error: unknown) =>
   stop(error instanceof Error ? error.message : String(error)),
 );
 
@@ -42,10 +42,10 @@ const app = createApp({
   newId: () => crypto.randomUUID(),
   now: () => new Date(),
   // 화면 서버는 /api를 넘길 때 주소를 이 서버의 것으로 바꾼다(vite.config.ts의 changeOrigin).
-  allowedHosts: [`127.0.0.1:${API_PORT}`, `localhost:${API_PORT}`],
+  allowedHosts: [`127.0.0.1:${ports.api}`, `localhost:${ports.api}`],
 });
 
-serve({ fetch: app.fetch, port: API_PORT, hostname: '127.0.0.1' }, (info) => {
+serve({ fetch: app.fetch, port: ports.api, hostname: '127.0.0.1' }, (info) => {
   console.log(`서버: http://127.0.0.1:${info.port}/api (${label}, 판 저장: ${where})`);
 });
 
