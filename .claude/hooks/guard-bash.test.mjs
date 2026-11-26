@@ -451,22 +451,26 @@ test('이력 다시 쓰기와 받은 코드 바로 실행을 막는다', () => {
 });
 
 test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행한다', (t) => {
-  // 의존성 셋 가운데 둘(tsx, typescript)만 깔린 시험용 프로젝트. @scope/missing은 적혀 있지만 깔리지 않았다.
+  // 의존성 둘(tsx, typescript)이 깔린 시험용 프로젝트.
   const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-npx-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const manifest = (at, value) => {
     mkdirSync(at, { recursive: true });
     writeFileSync(path.join(at, 'package.json'), JSON.stringify(value));
   };
-  manifest(dir, { name: 'p', devDependencies: { tsx: '^4', typescript: '^7', '@scope/missing': '^1' } });
+  manifest(dir, { name: 'p', devDependencies: { tsx: '^4', typescript: '^7' } });
   manifest(path.join(dir, 'node_modules', 'tsx'), { name: 'tsx', bin: './dist/cli.mjs' });
   manifest(path.join(dir, 'node_modules', 'typescript'), { name: 'typescript', bin: { tsc: './bin/tsc', tsserver: './bin/tsserver' } });
   // 의존성이 아닌 패키지가 node_modules에 있어도(다른 패키지의 의존성) 실행하지 않는다.
   manifest(path.join(dir, 'node_modules', 'esbuild'), { name: 'esbuild', bin: { esbuild: './bin/esbuild' } });
   mkdirSync(path.join(dir, 'sub'));
-  // 안쪽의 다른 프로젝트. npx는 가장 가까운 package.json을 보므로, cd로 들어가면 그 프로젝트의 의존성만 된다.
+  // 안쪽의 다른 프로젝트. 가드는 가장 가까운 package.json의 의존성만 두므로, cd로 들어가면 그 프로젝트의 의존성만 된다.
   manifest(path.join(dir, 'tool'), { name: 'tool', devDependencies: { prettier: '^3' } });
   manifest(path.join(dir, 'tool', 'node_modules', 'prettier'), { name: 'prettier', bin: { prettier: './bin/prettier.cjs' } });
+  // npm ci 전의 프로젝트. 의존성이 적혀 있지만 하나도 깔리지 않았다.
+  manifest(path.join(dir, 'fresh'), { name: 'fresh', devDependencies: { typescript: '^7', '@scope/missing': '^1' } });
+  // package.json이 위로도 없는 폴더(시험용 금칙어 목록만 있는 project).
+  const bare = project;
 
   for (const command of [
     'npx prettier --check README.md',
@@ -484,11 +488,33 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     'cd tool && npx tsx a.ts',
     'env CI=1 npx prettier --check .',
     'timeout 5 npx prettier --check .',
+    // -p의 값은 패키지 이름이다. tsc는 typescript의 명령이지만 -p tsc는 tsc라는 다른 패키지를 받는다.
+    'npx -p tsc tsc --noEmit',
+    // 서브셸과 묶음 안의 cd, env -C로 package.json이 없는 폴더에서 돌리면 그 폴더에서 받는다.
+    `(cd ${bare} && npx tsx a.ts)`,
+    `{ cd ${bare}; npx tsc --noEmit; }`,
+    `env -C ${bare} npx tsx a.ts`,
+    `env --chdir=${bare} npx tsx a.ts`,
+    `npx --prefix ${bare} tsx a.ts`,
+    // 하위 명령 앞의 옵션이 값을 받아도 npm exec로 본다.
+    'npm --loglevel silent exec prettier',
+    'npm --prefix . exec prettier -- --check .',
+    'npm -g x prettier',
+    // 같은 일을 하는 다른 패키지 관리자의 명령.
+    'pnpx prettier --check .',
+    'pnpm dlx prettier --check .',
+    'yarn dlx prettier --check .',
+    'bunx prettier --check .',
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'block', command);
   }
-  assert.match(guard('npx @scope/missing', { cwd: dir }).reason, /npm ci/);
   assert.match(guard('npx prettier --check README.md', { cwd: dir }).reason, /의존성\(package\.json\)에 없는/);
+  // npm ci 전이면 명령 이름(tsc)이 깔리지 않은 의존성(typescript)의 것일 수 있어, 먼저 설치하라고 알린다.
+  for (const command of ['cd fresh && npx tsc --noEmit', 'cd fresh && npx @scope/missing']) {
+    const { verdict: v, reason } = guard(command, { cwd: dir });
+    assert.equal(v, 'block', command);
+    assert.match(reason, /npm ci/, command);
+  }
 
   for (const command of [
     'npx tsx --test app/tests/a.test.ts',
@@ -499,9 +525,16 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     'npm exec -- tsc --noEmit',
     'cd sub && npx tsx a.ts',
     'cd tool && npx prettier --check .',
+    'npx --prefix tool prettier --check .',
+    'npm --prefix tool exec -- prettier --check .',
+    '(cd sub && npx tsc --noEmit)',
+    'env -C sub npx tsx a.ts',
+    'npm --loglevel silent exec tsc --noEmit',
     'npx --version',
     'npm run check',
+    'npm -s run check',
     'npm ci',
+    'pnpm --version',
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'allow', command);
   }
