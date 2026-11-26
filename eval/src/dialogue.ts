@@ -154,7 +154,7 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
   if (condition === 'plain') {
     system = plainSystem();
   } else if (condition === 'prompt') {
-    // 판정은 쓰지 않는다. 부른 횟수와 걸린 시간만 남긴다.
+    // 판정은 쓰지 않는다. 부른 횟수, 답을 읽었는지, 걸린 시간만 남긴다.
     if (input.decoyJudge) judged = await judgeTurn(models.judge, { card, question, conceded, lastReply, text }, opts);
     system = promptSystem(card, question, memories);
   } else {
