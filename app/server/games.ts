@@ -4,7 +4,7 @@
 import { openingState, runTurn } from '../../eval/src/dialogue.ts';
 import { DEFAULT_TURNS } from '../../eval/src/script.ts';
 import type { Card, Question } from '../../eval/src/types.ts';
-import { limitRefusal, meteredModels, type Limits, type ModelSource, type Refusal } from './budget.ts';
+import { LEDGER_CLOSED_MESSAGE, limitRefusal, meteredModels, type Limits, type ModelSource, type Refusal } from './budget.ts';
 import type {
   DeleteMemoryResponse,
   EndRecordView,
@@ -189,18 +189,22 @@ export function createGames(deps: GameDeps) {
    */
   let ledgerClosed = false;
 
-  /** 턴이 원장에 남기는 길. 남기지 못하면 원장을 닫고, 실패는 그대로 던져 그 턴도 실패한다. */
+  /**
+   * 턴이 원장에 남기는 길. 남기지 못하면 원장을 닫고, 그 턴도 닫힌 뒤의 턴과 같은 503과 까닭으로 실패한다.
+   * 실패의 내용은 실패마다 서버 오류로 남기고, 닫힌다는 줄은 처음 닫힐 때 한 번만 남긴다.
+   * 요청 헤더와 본문, 원장 항목(사용자 id 등)은 남기지 않는다(AGENTS.md 1번).
+   */
   const ledger: Pick<GameStore, 'addSpend'> = {
     async addSpend(entry) {
       try {
         await deps.store.addSpend(entry);
       } catch (error) {
+        console.error(`서버 오류: ${error instanceof Error ? error.message : String(error)}`);
         if (!ledgerClosed) {
           ledgerClosed = true;
-          // 실패의 내용은 app.ts가 서버 오류로 남긴다. 요청 헤더와 본문은 남기지 않는다(AGENTS.md 1번).
           console.error('원장에 남기지 못해, 서버를 다시 띄울 때까지 새 판과 턴을 막습니다. 다시 띄우기 전에 제공사의 사용량과 원장을 맞춰 보세요.');
         }
-        throw error;
+        throw new GameError(503, LEDGER_CLOSED_MESSAGE);
       }
     },
   };

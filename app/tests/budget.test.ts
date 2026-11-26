@@ -397,7 +397,7 @@ test('판정기 뒤에 상대가 실패하면 500이고, 받은 응답의 양은
   assert.equal((await turn(app, game.id, '네 번째 반론입니다.')).status, 429);
 });
 
-test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으며, 그 뒤로는 서버를 다시 띄울 때까지 누구의 새 판과 턴도 503으로 막는다', async () => {
+test('원장에 남기지 못하면 그 턴은 닫힌 까닭과 함께 503으로 실패하고 판에 남지 않으며, 그 뒤로는 서버를 다시 띄울 때까지 누구의 새 판과 턴도 503으로 막는다', async () => {
   const inner = new MemoryGameStore();
   let ledgerDown = true;
   let ledgerUnreadable = false;
@@ -417,7 +417,9 @@ test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으
   const theirs = await start(app, 'b');
 
   const { result, logged } = await quietly(() => turn(app, mine.id, '원장에 남지 못할 반론입니다.'));
-  assert.equal(result.status, 500);
+  // 원장을 닫은 턴의 화면에도 닫힌 뒤의 턴과 같은 까닭이 보인다.
+  assert.equal(result.status, 503);
+  assert.match(result.data.error ?? '', /모델 사용량을 기록하지 못해/);
   assert.match(logged.join('\n'), /원장 쓰기 실패/);
   // 닫히는 때 운영자가 알 수 있게 한 줄을 남긴다. 보낸 말은 남기지 않는다.
   assert.equal(logged.filter((line) => /서버를 다시 띄울 때까지 새 판과 턴을 막습니다/.test(line)).length, 1);
@@ -457,6 +459,69 @@ test('원장에 남기지 못하면 그 턴은 실패하고 판에 남지 않으
   const restarted = setup({ store, models: source, limits: NO_LIMITS }).app;
   assert.equal((await turn(restarted, theirs.id, '다시 띄운 뒤 b가 보낸 반론입니다.', 'b')).status, 200);
   assert.equal(await inner.totalSpendMicroUsd(), JUDGE_CALL + OPPONENT_CALL);
+});
+
+test('닫히기 전에 시작한 턴의 원장 쓰기가 닫힌 뒤에 성공해도 원장은 닫힌 채다. 닫힌다는 기록은 실패가 여럿이어도 한 줄이고 원장 항목을 담지 않는다', async () => {
+  const inner = new MemoryGameStore();
+  // user-alpha의 쓰기만 된다.
+  const store = storeWith(inner, {
+    async addSpend(entry) {
+      if (entry.userId !== 'user-alpha') throw new Error('원장 쓰기 실패: 시험용 오류');
+      return inner.addSpend(entry);
+    },
+  });
+  // 판정기는 사용자마다 그 사용자의 문이 열릴 때까지 답하지 않는다.
+  const doors = { alpha: gate(), bravo: gate(), charlie: gate() };
+  const { source } = fakeProvider(async (role, said) => {
+    if (role !== 'judge') return '답입니다.';
+    const who = (['alpha', 'bravo', 'charlie'] as const).find((name) => said.includes(`${name}의 반론`));
+    if (who) await doors[who].opened;
+    return DECISION;
+  });
+  const { app } = setup({ store, models: source, limits: NO_LIMITS });
+  const alpha = await start(app, 'user-alpha');
+  const bravo = await start(app, 'user-bravo');
+  const charlie = await start(app, 'user-charlie');
+
+  const { result, logged } = await quietly(async () => {
+    // 원장이 열려 있을 때 세 턴이 모두 상한 확인을 지나 판정기를 기다린다.
+    const pendingAlpha = turn(app, alpha.id, 'alpha의 반론입니다.', 'user-alpha');
+    const pendingBravo = turn(app, bravo.id, 'bravo의 반론입니다.', 'user-bravo');
+    const pendingCharlie = turn(app, charlie.id, 'charlie의 반론입니다.', 'user-charlie');
+    await delay(20);
+    // bravo와 charlie의 쓰기가 실패해 원장이 닫힌다.
+    doors.bravo.open();
+    doors.charlie.open();
+    const failed = [await pendingBravo, await pendingCharlie];
+    // 닫히기 전에 시작한 alpha의 턴은 막지 않고, 그 쓰기는 닫힌 뒤에 성공한다.
+    doors.alpha.open();
+    const finished = await pendingAlpha;
+    // 그 성공이 원장을 다시 열지 않는다.
+    const after = [
+      await turn(app, alpha.id, 'alpha의 다음 반론입니다.', 'user-alpha'),
+      await call(app, 'POST', '/api/games', START_Q01, 'user-alpha'),
+    ];
+    return { failed, finished, after };
+  });
+
+  for (const response of result.failed) {
+    assert.equal(response.status, 503);
+    assert.match(response.data.error ?? '', /모델 사용량을 기록하지 못해/);
+  }
+  assert.equal(result.finished.status, 200);
+  assert.equal(await inner.totalSpendMicroUsd(), JUDGE_CALL + OPPONENT_CALL);
+  for (const response of result.after) {
+    assert.equal(response.status, 503);
+    assert.match(response.data.error ?? '', /모델 사용량을 기록하지 못해/);
+  }
+
+  // 실패의 내용은 실패마다 남고, 닫힌다는 줄은 한 번이다.
+  assert.equal(logged.filter((line) => /원장 쓰기 실패/.test(line)).length, 2);
+  assert.equal(logged.filter((line) => /서버를 다시 띄울 때까지 새 판과 턴을 막습니다/.test(line)).length, 1);
+  // 어느 줄에도 사용자, 판, 모델, 보낸 말이 없다.
+  for (const secret of ['user-', bravo.id, charlie.id, 'fake-', '의 반론']) {
+    assert.ok(!logged.some((line) => line.includes(secret)), secret);
+  }
 });
 
 test('상한을 확인하다 원장을 읽지 못하면 그 요청만 실패하고 닫지 않는다. 모델을 부르지 않아 기록 없이 나간 돈이 없다', async () => {
