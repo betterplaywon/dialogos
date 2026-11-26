@@ -450,8 +450,8 @@ test('이력 다시 쓰기와 받은 코드 바로 실행을 막는다', () => {
   assert.equal(verdict('git merge origin/main'), 'allow');
 });
 
-test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행한다', (t) => {
-  // 의존성 둘(tsx, typescript)이 깔린 시험용 프로젝트.
+/** npx 검사에 쓰는 시험용 폴더. dir은 의존성 둘(tsx, typescript)이 깔린 프로젝트, bare는 package.json이 위로도 없는 폴더다. */
+function npxProject(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'guard-bash-npx-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const manifest = (at, value) => {
@@ -469,8 +469,12 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
   manifest(path.join(dir, 'tool', 'node_modules', 'prettier'), { name: 'prettier', bin: { prettier: './bin/prettier.cjs' } });
   // npm ci 전의 프로젝트. 의존성이 적혀 있지만 하나도 깔리지 않았다.
   manifest(path.join(dir, 'fresh'), { name: 'fresh', devDependencies: { typescript: '^7', '@scope/missing': '^1' } });
-  // package.json이 위로도 없는 폴더(시험용 금칙어 목록만 있는 project).
-  const bare = project;
+  // 시험용 금칙어 목록만 있는 project에는 package.json이 위로도 없다.
+  return { dir, bare: project };
+}
+
+test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행한다', (t) => {
+  const { dir, bare } = npxProject(t);
 
   for (const command of [
     'npx prettier --check README.md',
@@ -500,11 +504,32 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     'npm --loglevel silent exec prettier',
     'npm --prefix . exec prettier -- --check .',
     'npm -g x prettier',
+    // npm은 -- 뒤의 첫 단어도 하위 명령으로 읽고, 다른 명령과 겹치지 않는 줄임말도 받는다.
+    'npm -- exec prettier',
+    'npm --loglevel silent -- exec prettier',
+    'npm -- x prettier',
+    'npm exe prettier',
+    // npm init <이름>(create, innit과 그 줄임말)은 create-<이름> 패키지를 받아 실행한다.
+    'npm init vite',
+    'npm create vite',
+    'npm innit vite',
+    'npm ini vite',
+    'npm cr vite@latest',
+    'npm -- init vite',
+    'npm init -y vite',
+    'npm init -w sub vite',
+    'npm init -- vite',
     // 같은 일을 하는 다른 패키지 관리자의 명령.
     'pnpx prettier --check .',
     'pnpm dlx prettier --check .',
     'yarn dlx prettier --check .',
     'bunx prettier --check .',
+    'pnpm create vite',
+    'yarn create vite',
+    'bun create vite',
+    'corepack pnpm dlx prettier --check .',
+    'corepack yarn@4 dlx prettier --check .',
+    'corepack enable',
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'block', command);
   }
@@ -530,11 +555,22 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     '(cd sub && npx tsc --noEmit)',
     'env -C sub npx tsx a.ts',
     'npm --loglevel silent exec tsc --noEmit',
+    'npm -- exec tsc --noEmit',
+    'npm exe -- tsc --noEmit',
     'npx --version',
     'npm run check',
     'npm -s run check',
+    'npm -- run check',
     'npm ci',
+    // 이름 없는 npm init은 package.json만 만든다. exec나 init으로 읽히지 않는 하위 명령과 스크립트 이름은 그대로 둔다.
+    'npm init -y',
+    'npm init -w sub -y',
+    'npm explain tsx',
+    'npm it',
+    'npm run create',
+    'npm run exec',
     'pnpm --version',
+    'yarn --version',
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'allow', command);
   }
@@ -542,6 +578,107 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
   assert.equal(verdict('npx tsx a.ts'), 'block');
   // 이 저장소에서 쓰는 명령(의존성 tsx)은 그대로 된다.
   assert.equal(verdict('npx tsx --test app/tests/local-model.test.ts', { cwd: path.resolve(import.meta.dirname, '..', '..') }), 'allow');
+});
+
+test('npx가 도는 폴더를 sh -c, eval, 명령 치환 안까지 따라가고, 읽지 못하면 막는다', (t) => {
+  const { dir, bare } = npxProject(t);
+  // 프로젝트에서 시작해 package.json이 없는 폴더로 가서 돌리는 꼴. 그 폴더에서는 의존성의 명령(tsx)도 받아서 실행하게 된다.
+  for (const command of [
+    `sh -c 'cd ${bare} && npx tsx a.ts'`,
+    `bash -c "(cd ${bare} && npx tsx a.ts)"`,
+    `cd ${bare} && sh -c 'npx tsx a.ts'`,
+    `sh -c "cd ${bare}; sh -c 'npx tsx a.ts'"`,
+    `eval "cd ${bare}" && npx tsx a.ts`,
+    `eval 'cd ${bare}; npx tsx a.ts'`,
+    `cd ${bare} && echo $(npx tsx a.ts)`,
+    `cd ${bare} ; x=\`npx tsx a.ts\``,
+    `cd ${bare} && cat <(npx tsx a.ts)`,
+    `cd -- ${bare} && npx tsx a.ts`,
+    `cd -P ${bare} && npx tsx a.ts`,
+    `cd ${bare} > /dev/null && npx tsx a.ts`,
+    `chdir ${bare} && npx tsx a.ts`,
+    `pushd ${bare} && npx tsx a.ts`,
+    `pushd ${bare}; npx tsx a.ts; popd`,
+    `env -C${bare} npx tsx a.ts`,
+    `env -iC ${bare} npx tsx a.ts`,
+    // 앞의 감싼 cd가 닿은 폴더를 뒤의 cd가 지우지 않는다.
+    `{ cd ${bare}; (cd ${dir}); npx tsx a.ts; }`,
+    // cd가 실패해도 도는 자리(; 뒤, || 뒤)의 npx는 떠나온 폴더에서도 돌 수 있다. 떠나온 폴더(dir)에는 prettier가 없다.
+    'cd tool; npx prettier --check .',
+    'cd tool && ls || npx prettier --check .',
+  ]) {
+    assert.equal(verdict(command, { cwd: dir }), 'block', command);
+  }
+  // 집 폴더로 가는 cd(~, $HOME, 인자 없는 cd)는 풀어서 읽는다. 집이 package.json 없는 폴더면 막고, 프로젝트면 둔다.
+  for (const command of ['cd && npx tsx a.ts', 'cd ~ && npx tsx a.ts', 'cd $HOME && npx tsx a.ts', 'cd "${HOME}/x" && npx tsx a.ts', 'npx --prefix ~ tsx a.ts']) {
+    const { verdict: v, reason } = guard(command, { cwd: dir, env: { HOME: bare } });
+    assert.equal(v, 'block', command);
+    assert.match(reason, /package\.json\)에 없는/, command);
+  }
+  for (const command of ['cd ~/sub && npx tsx a.ts', 'cd $HOME/sub && npx tsc --noEmit', 'cd && npx tsx a.ts']) {
+    assert.equal(verdict(command, { cwd: bare, env: { HOME: dir } }), 'allow', command);
+  }
+  // 어디로 가는지 글자로 읽을 수 없는 폴더 바꾸기 뒤의 npx. 마지막은 닿을 수 있는 폴더가 너무 많아 따라가기를 그만둔 꼴이다.
+  for (const command of [
+    'cd "$SOMEWHERE" && npx tsx a.ts',
+    'cd $(pwd) && npx tsx a.ts',
+    'cd - && npx tsx a.ts',
+    'cd ~other && npx tsx a.ts',
+    'cd sub tool && npx tsx a.ts',
+    'popd && npx tsx a.ts',
+    'pushd -n sub && npx tsx a.ts',
+    'pushd && npx tsx a.ts',
+    'npx --prefix "$X" tsx a.ts',
+    'env -C "$X" npx tsx a.ts',
+    '(cd a); (cd b); (cd c); (cd d); (cd e); (cd f); npx tsx a.ts',
+  ]) {
+    const { verdict: v, reason } = guard(command, { cwd: dir });
+    assert.equal(v, 'block', command);
+    assert.match(reason, /어느 폴더에서 돌지 읽을 수 없다/, command);
+  }
+  // package.json이 없는 폴더에서 시작해, 뒤의 명령을 확실히 옮기지는 않는 cd로 프로젝트에 들르는 꼴.
+  for (const command of [
+    `(cd ${dir}) && npx tsx a.ts`,
+    `(cd ${dir} && ls) ; npx tsx a.ts`,
+    `(ls && cd ${dir}) ; npx tsx a.ts`,
+    `echo $(cd ${dir} && ls) && npx tsx a.ts`,
+    `sh -c 'ls && cd ${dir} && ls' ; npx tsx a.ts`,
+    `cd ${dir} & npx tsx a.ts`,
+    `cd ${dir}; npx tsx a.ts`,
+    `cd ${dir} && ls; npx tsx a.ts`,
+    `cd ${dir}/none && ls || npx tsx a.ts`,
+    `cd ${dir} && cd - && npx tsx a.ts`,
+  ]) {
+    assert.equal(verdict(command, { cwd: bare }), 'block', command);
+  }
+
+  for (const command of [
+    "sh -c 'cd sub && npx tsx a.ts'",
+    "cd sub && sh -c 'npx tsx a.ts'",
+    'cd sub && echo $(npx tsx a.ts)',
+    'cd -- sub && npx tsx a.ts',
+    'cd sub 2>/dev/null && npx tsx a.ts',
+    'cd sub > /dev/null && npx tsx a.ts',
+    'chdir sub && npx tsx a.ts',
+    'pushd sub && npx tsx a.ts && popd',
+    'env -Csub npx tsx a.ts',
+    'diff <(npx tsx a.ts) <(npx tsc --version)',
+    // npx 뒤의 폴더 바꾸기는 그 npx에 미치지 않는다.
+    `npx tsx a.ts; cd ${bare}`,
+    `x=$(npx tsx a.ts) && cd ${bare} && ls`,
+    // 맨 앞의 `cd 폴더 &&` 뒤에서는 그 폴더의 의존성만 본다. npx 뒤의 |와 ;는 그 npx에 미치지 않는다.
+    'cd tool && npx prettier --check . | tail -3',
+    'cd tool && npx prettier --check .; echo done',
+    'cd tool && echo $(npx prettier --version) && npx prettier --check .',
+    // 따옴표 안의 글은 cd가 아니다.
+    `echo "cd ${bare}" && npx tsx a.ts`,
+  ]) {
+    assert.equal(verdict(command, { cwd: dir }), 'allow', command);
+  }
+  // 맨 앞의 `cd 폴더 &&`는 뒤의 명령을 확실히 옮긴다. 시작 폴더에 package.json이 없어도 된다.
+  for (const command of [`cd ${dir} && npx tsx a.ts`, `cd ${dir}/sub && cd .. && npx tsc --noEmit 2>&1 | tail -5`]) {
+    assert.equal(verdict(command, { cwd: bare }), 'allow', command);
+  }
 });
 
 test('push와 머지의 규칙', () => {
@@ -836,6 +973,10 @@ test('묶음, sh -c, eval, 명령 치환 안의 명령도 같은 규칙을 적�
     // 프로세스 치환 <( … ), >( … ) 안의 명령.
     'diff <(git config --list) /dev/null',
     'ls > >(git push origin main)',
+    // 명령 치환 앞의 명령이 실행되지 않는 꼴(command -v)이어도, 치환이 명령의 맨 앞에서 시작해도 그 안은 본다.
+    'command -v $(git config --list)',
+    '$(git config --list)',
+    '`git config --list`',
   ]) {
     assert.equal(verdict(command), 'block', command);
   }
