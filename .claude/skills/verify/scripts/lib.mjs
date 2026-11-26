@@ -107,6 +107,8 @@ export function createHarness(feature, title, options) {
   const steps = [];
   const startedAt = new Date();
   let commands = 0;
+  /** 화면 사진 번호. 여정이 띄운 Chrome 모두가 같이 쓴다. */
+  let shots = 0;
   const file = (name) => path.join(dir, name);
   /** 여정이 띄우거나 만든 것(앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
   const closers = [];
@@ -228,7 +230,7 @@ export function createHarness(feature, title, options) {
           rmSync(profileDir, { recursive: true, force: true });
         }
       });
-      return launchChrome({ profileDir, shotsDir: dir, onSpawn: (close) => (closeChrome = close) });
+      return launchChrome({ profileDir, shotsDir: dir, nextShot: () => (shots += 1), onSpawn: (close) => (closeChrome = close) });
     },
 
     /**
