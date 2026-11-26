@@ -165,6 +165,22 @@ test('지시문 조건에서 decoyJudge를 켜면 판정기를 엔진 조건과 
   ]);
 });
 
+test('decoyJudge의 판정기는 답이 온 뒤에야 상대를 부른다. 두 호출의 시간이 더해져야 엔진 방식과 기다리는 시간이 같다', async () => {
+  const order: string[] = [];
+  const judge: ChatModel = {
+    name: 'slow-judge',
+    async complete() {
+      order.push('judge');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      order.push('judge-answered');
+      return '{"tactic":"repeat","defeats":null,"reason":"시험"}';
+    },
+  };
+  const opponent = recorder(() => (order.push('opponent'), '답입니다.'));
+  await runTurn(openingState(question), { question, card, condition: 'prompt', models: { opponent, judge }, text: '반론입니다.', decoyJudge: true });
+  assert.deepEqual(order, ['judge', 'judge-answered', 'opponent']);
+});
+
 test('decoyJudge의 판정기도 답을 읽지 못하면 엔진처럼 다시 부르고, 실패하면 턴이 실패해 상태를 바꾸지 않는다', async () => {
   const unreadable = recorder(() => '판정할 수 없습니다');
   const outcome = await runTurn(openingState(question), {
