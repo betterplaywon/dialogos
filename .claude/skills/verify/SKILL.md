@@ -81,7 +81,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 
 `runs/verify/<시각>-<기능>/`에 남는다. 이 폴더가 곧 그 검증의 eval 실행 폴더다. 화면 여정이면 앱의 판 파일과 화면 사진도 여기에 있다.
 
-- `steps.md`: 먼저 읽는 파일이다. 단계 번호, id, 설명, 결과, 관찰, 시간, 그리고 코드 상태(커밋, 커밋하지 않은 변경 수)와 옵션. 끝에 PASS 또는 FAIL.
+- `steps.md`: 먼저 읽는 파일이다. 단계 번호, id, 설명, 결과, 관찰, 시간, 그리고 시작할 때의 코드 상태(커밋, 커밋하지 않은 변경 수)와 옵션. 끝에 PASS 또는 FAIL.
 - `cmd-NN-<명령>.txt`: 실행한 명령, 종료 코드, 걸린 시간, 출력 전체.
 - eval이 쓴 파일: `transcripts.jsonl`, `labels.jsonl`, `meta.json`, `results.md`, `results.json`, `sample.csv`(사람 칸을 채운 것), `sample.key.json`.
 - `dialogue-<질문>-<조건>-<반복>.md`: 사람이 읽는 대화록. 턴마다 종류, 사용자의 말, 판정기의 결정(엔진만), 상대의 답, 채점기 라벨.

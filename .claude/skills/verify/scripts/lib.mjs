@@ -99,6 +99,10 @@ export function createHarness(feature, title, options) {
   const env = safeEnv();
   const steps = [];
   const startedAt = new Date();
+  // steps.md의 코드 상태는 시작할 때 읽는다. 검증하는 코드는 시작할 때의 것이고, 끝낼 때 읽으면
+  // 닫는 도중에 누른 두 번째 Ctrl+C가 git 자식까지 끝내 '커밋 없음'으로 적힌다.
+  const head = git(['rev-parse', '--short', 'HEAD']);
+  const dirty = (git(['status', '--short']) ?? '').split('\n').filter(Boolean).length;
   let commands = 0;
   const file = (name) => path.join(dir, name);
   /** 여정이 띄우거나 만든 것(eval 명령, 앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
@@ -292,8 +296,6 @@ export function createHarness(feature, title, options) {
 
     /** steps.md(먼저 읽는 파일)와 result.json을 쓴다. */
     finish(passed, error) {
-      const head = git(['rev-parse', '--short', 'HEAD']);
-      const dirty = (git(['status', '--short']) ?? '').split('\n').filter(Boolean).length;
       const md = [
         `# verify ${feature}: ${title}`,
         '',
