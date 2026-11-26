@@ -45,12 +45,18 @@ type Redirects = Readonly<Record<string, { status: number; location: string }>>;
  * Ollama처럼 OpenAI 호환 주소(/v1)로 답하는 가짜 서버. 이 컴퓨터(127.0.0.1)에만 열린다.
  * 모델 목록에는 listed만 있다. chat completions는 판정기 모델이면 판정을, 아니면 정해 둔 답을 낸다.
  * Ollama의 모델 목록(/api/tags)에는 remote에 든 모델을 원격 모델(remote_host, remote_model)로 적는다. native가 false면 그 목록이 없는(404) 서버다.
+ * tags를 주면 그 목록 대신 그 상태와 본문으로 답한다(깨진 답).
  * redirects에 적은 경로로 온 요청은 받아 적은 뒤 답 대신 넘긴다.
  */
 async function fakeOllama(
   t: TestContext,
   listed: readonly string[],
-  { remote = [], native = true, redirects = {} }: { remote?: readonly string[]; native?: boolean; redirects?: Redirects } = {},
+  {
+    remote = [],
+    native = true,
+    tags,
+    redirects = {},
+  }: { remote?: readonly string[]; native?: boolean; tags?: { status: number; body: string }; redirects?: Redirects } = {},
 ) {
   const received: { method?: string; path?: string; model?: string; reasoning_effort?: string }[] = [];
   const server = createServer((req, res) => {
@@ -66,6 +72,7 @@ async function fakeOllama(
       if (req.method === 'GET' && req.url === '/v1/models') {
         return json(200, { object: 'list', data: listed.map((id) => ({ id, object: 'model', created: 0, owned_by: 'library' })) });
       }
+      if (tags && req.method === 'GET' && req.url === '/api/tags') return res.writeHead(tags.status).end(tags.body);
       if (native && req.method === 'GET' && req.url === '/api/tags') {
         const upstream = (name: string) => (remote.includes(name) ? { remote_model: name, remote_host: 'https://upstream.invalid' } : {});
         return json(200, { models: listed.map((name) => ({ name, model: name, size: 0, ...upstream(name) })) });
@@ -353,6 +360,28 @@ test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 원격 모델로 
   // Ollama가 아닌 OpenAI 호환 서버에는 Ollama의 목록이 없다(404). 그런 서버에는 Ollama의 클라우드 모델도 없으므로 모델 목록만 확인한다.
   const plain = await fakeOllama(t, ['qwen3:14b'], { native: false });
   assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: plain.url })), null);
+});
+
+test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 404 밖의 오류나 읽을 수 없는 답이면, 원격 모델인지 모르므로 띄우지 않는다', async (t) => {
+  const broken = [
+    { status: 500, body: JSON.stringify({ error: 'internal' }) },
+    { status: 503, body: '' },
+    { status: 200, body: '<html>Ollama is running</html>' },
+    { status: 200, body: JSON.stringify({}) },
+    { status: 200, body: JSON.stringify({ models: 'qwen3:14b' }) },
+  ];
+  for (const tags of broken) {
+    const ollama = await fakeOllama(t, ['qwen3:14b'], { tags });
+    const problem = await localProblem(localConfigFromEnv({ APP_LOCAL_URL: ollama.url }));
+    const label = `${tags.status} ${tags.body}`;
+    assert.match(problem ?? '', /Ollama의 모델 목록\(\/api\/tags\)을 읽을 수 있게 알려 주지 않았습니다/, label);
+    assert.match(problem ?? '', new RegExp(`상태 ${tags.status}`), label);
+    // 목록만 읽고 모델은 부르지 않는다.
+    assert.ok(ollama.received.every((request) => request.method === 'GET'), label);
+  }
+  // 404만 그 목록이 없는 서버로 보고 건너뛴다(위 검사의 native: false와 같다).
+  const missing = await fakeOllama(t, ['qwen3:14b'], { tags: { status: 404, body: '' } });
+  assert.equal(await localProblem(localConfigFromEnv({ APP_LOCAL_URL: missing.url })), null);
 });
 
 test('개발 서버는 APP_MODE를 적지 않으면 모든 판을 엔진 방식으로 해, 판마다 턴에서 판정기를 부른다. 첫 줄은 엔진 방식이라고 알린다', async (t) => {
