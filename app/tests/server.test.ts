@@ -171,7 +171,7 @@ test('엔진 방식이면 판정기가 먼저 판정하고, 판정과 장부는 
 
   const { status, data } = await call<TurnResponse>(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '  반론입니다.  ' } });
   assert.equal(status, 200);
-  assert.deepEqual(data, { turn: 1, reply: 'P1을 거둡니다. 다른 근거는 어떻습니까?', ended: false, endReason: null });
+  assert.deepEqual(data, { turn: 1, reply: 'P1을 거둡니다. 다른 근거는 어떻습니까?', ended: false, endReason: null, memories: [] });
 
   const saved = await store.get(game.id);
   assert.deepEqual(saved?.conceded, ['P1']);
@@ -414,6 +414,7 @@ test('저장이 느려도 같은 판의 턴과 끝내기가 서로의 저장을 
     addSpend: (entry: SpendEntry) => inner.addSpend(entry),
     totalSpendMicroUsd: () => inner.totalSpendMicroUsd(),
     listMemories: (userId, query) => inner.listMemories(userId, query),
+    findMemories: (userId, ids) => inner.findMemories(userId, ids),
     editMemory: (userId, id, text, at) => inner.editMemory(userId, id, text, at),
     deleteMemory: (userId, id) => inner.deleteMemory(userId, id),
   };

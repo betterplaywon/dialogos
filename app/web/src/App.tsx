@@ -3,11 +3,12 @@
 // 음성은 켰을 때만 쓴다. 인식된 글은 입력 칸에 넣어 고치게 하고 자동으로 보내지 않는다. 글 입력은 언제나 된다.
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { GameSummaryView, GameView, Lean, SideIndex, TopicView, Verdict } from '../../server/contract.ts';
+import type { GameSummaryView, GameView, Lean, PassedMemoryView, SideIndex, TopicView, Verdict } from '../../server/contract.ts';
 import { api } from './api.ts';
 import { NEW_TURN, takeDictation, turnEntryOf, voiceTallyText, type TurnDictation } from './dictation.ts';
 import { LEAN_STEPS, leanAccessibleName, leanLabel, sideOfLean, VERDICT_LABEL } from './lean.ts';
 import { LISTEN_PROBLEMS, PACK_PENDING_NOTICE, PLACE_NOTICES } from './listen.ts';
+import { MyMemories, PassedMemories, TopicMemories, useMemoryChanges } from './memories.tsx';
 import { SPEAK_PROBLEMS } from './speak.ts';
 import { sendTurn } from './turn-flow.ts';
 import { useVoice, type Voice } from './use-voice.ts';
@@ -94,6 +95,7 @@ export function App() {
       <>
         <PastGames games={pastGames} busy={starting} onOpen={(id) => void open(() => api.get(id))} />
         <TopicList topics={topics} onPick={pick} />
+        <MyMemories topics={topics} />
       </>
     );
   }
@@ -310,6 +312,7 @@ function StartScreen({
           </button>
         </div>
       </form>
+      <TopicMemories topicId={topic.id} />
     </section>
   );
 }
@@ -519,6 +522,23 @@ function readRequestOf(game: GameView, index: number, text: string): ReadRequest
   return { key: `${game.id}:${index}`, text, characterId: game.topic.sides[game.side].opponent?.id };
 }
 
+/**
+ * 상대의 말 자리(messages의 번호)마다, 그 답을 만들 때 넘긴 기록. 기록을 넘긴 답만 든다.
+ * 상대의 k번째 말(0부터 셈)이 k번째 턴의 답이다. 0번째는 판을 시작할 때 나온 첫 발언이라 넘긴 기록이 없다.
+ */
+function passedAtMessages(game: GameView): Map<number, PassedMemoryView[]> {
+  const byTurn = new Map(game.passed.map((passed) => [passed.turn, passed.memories]));
+  const at = new Map<number, PassedMemoryView[]>();
+  let reply = 0;
+  game.messages.forEach((message, index) => {
+    if (message.speaker !== 'opponent') return;
+    const memories = byTurn.get(reply);
+    if (memories) at.set(index, memories);
+    reply += 1;
+  });
+  return at;
+}
+
 /** 판에서 마지막으로 나온 상대의 말을 읽어 달라는 요청. */
 function lastOpponentRequest(game: GameView): ReadRequest | null {
   for (let index = game.messages.length - 1; index >= 0; index--) {
@@ -544,6 +564,8 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
   const draftBox = useRef<HTMLTextAreaElement | null>(null);
   const { state, control } = voice;
   const wasBlocked = useRef(state.blocked !== null);
+  /** 이 판 화면에서 고치거나 지운 기억. 같은 기억이 여러 턴에 넘어갔으면 모두 바뀌어 보인다. */
+  const memoryChanges = useMemoryChanges();
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -662,6 +684,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
   /** 말하기 단추를 보일 때. 음성 입력이 막혔으면(blocked) 이 페이지에서는 글로만 넣는다. */
   const canDictate = state.on && state.canListen && state.blocked === null;
   const canRead = state.on && state.canSpeak && state.voice !== null;
+  const passedAt = passedAtMessages(game);
   return (
     <section className="game" aria-labelledby="game-title">
       <div className="game-head">
@@ -684,6 +707,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
       <ol className="messages" aria-live={canRead ? 'off' : 'polite'}>
         {game.messages.map((message, index) => {
           const reading = state.reading === `${game.id}:${index}`;
+          const passed = passedAt.get(index);
           return (
             <li key={index} className={`message ${message.speaker}${reading ? ' reading' : ''}`}>
               <span className="who">{message.speaker === 'user' ? (index === 0 ? '나 · 고른 입장' : '나') : name}</span>
@@ -698,6 +722,7 @@ function Game({ initial, voice, onLeave }: { initial: GameView; voice: Voice; on
                   {reading ? '멈춤' : '듣기'}
                 </button>
               )}
+              {passed && <PassedMemories memories={passed} show={memoryChanges.show} onChange={memoryChanges.change} />}
             </li>
           );
         })}

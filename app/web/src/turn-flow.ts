@@ -46,6 +46,8 @@ export async function sendTurn(api: TurnApi, before: GameView, text: string, ent
       endReason: result.endReason,
       messages: [...before.messages, { speaker: 'user', text }, { speaker: 'opponent', text: result.reply }],
       voice: tallied(before.voice, entry),
+      // 서버의 판(GameView.passed)과 같이, 기억을 넘긴 턴만 덧붙인다.
+      passed: result.memories.length > 0 ? [...before.passed, { turn: result.turn, memories: result.memories }] : before.passed,
     };
     if (result.turn === before.turn + 1) return { game: appended, draft: '', error: null };
     // 앞서 응답을 잃은 턴이 서버에 저장되어 있었다. 서버의 판으로 통째로 맞춘다.

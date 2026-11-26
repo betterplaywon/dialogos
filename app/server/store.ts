@@ -38,6 +38,11 @@ export interface TurnLog {
   input: TurnInput;
   /** 이 턴에서 앞서 인식된 글을 다시 말해 바꾼 횟수. 스키마 4까지의 턴은 남기지 않아 0이다. */
   redone: number;
+  /**
+   * 이 턴의 답을 만들 때 상대에게 넘긴 기억의 id(memory.ts). 글은 떠 두지 않고 화면에 보일 때 지금의 기억과 잇는다.
+   * 그래서 지운 기억의 글은 판 화면에 다시 나오지 않는다. 스키마 6까지의 턴, 기억을 쓰지 않는 판(GameRecord.memory가 false)의 턴, 같은 주제에 기억이 없던 턴은 빈 목록이다.
+   */
+  memoryIds: string[];
   reply: string;
   decision?: JudgeDecision;
   judge?: TurnRecord['judge'];
@@ -62,6 +67,12 @@ export interface GameRecord {
   /** 상대의 입장 카드. */
   cardId: string;
   mode: Mode;
+  /**
+   * 이 판의 턴에 기억을 넘기고 끝 기록 때 기억을 만드는지. 판을 시작할 때 서버 설정(GameDeps.memory)을 남기고 바꾸지 않는다.
+   * 눈가림 비교로 시작한 판을 기억을 켠 서버로 이어 해도 기억이 넘어가거나 생기지 않게 하려는 것이다.
+   * 스키마 7 전에 시작한 판은 어떻게 시작했는지 몰라 false(끔)다.
+   */
+  memory: boolean;
   /** 판을 시작할 때 고른 생각. 이 기록을 받기 전(스키마 1)에 만든 판은 null이다. */
   startLean: Lean | null;
   /** 상대 모델에게 넘기는 대화(runTurn의 상태). */
@@ -115,6 +126,8 @@ export interface GameStore {
    * (한 판의 기억은 claim, ground, shift, weakness 순). topicId가 있으면 그 주제만.
    */
   listMemories(userId: string, query: { topicId?: string; limit: number }): Promise<MemoryRecord[]>;
+  /** ids에 든 그 사용자의 기억. 지웠거나 없거나 남의 것은 빠진다. ids가 겹쳐도 기억은 한 번씩만 낸다. 차례는 정하지 않는다. */
+  findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]>;
   /** 그 사용자의 기억 글을 바꾸고 고친 시각을 남긴다. 없거나 남의 것이면 undefined. */
   editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined>;
   /** 그 사용자의 기억을 지운다(기억 줄만, 판 기록은 남는다). 지웠으면 true. */
@@ -177,7 +190,7 @@ export class MemoryGameStore implements GameStore {
   }
 
   /**
-   * 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않는다(SQLite 저장소와 같다).
+   * 끝난 시각, 끝난 방식, 끝 기록은 한 번 채우면 바꾸지 않고, 판이 기억을 쓰는지는 만들 때 정한 대로다(SQLite 저장소와 같다).
    * 기억의 id가 이미 있거나 겹치면 판도 기억도 저장하지 않는다(SQLite 저장소의 기본 키와 트랜잭션).
    */
   async save(game: GameRecord, newMemories: readonly MemoryRecord[] = []): Promise<void> {
@@ -188,6 +201,7 @@ export class MemoryGameStore implements GameStore {
       throw new Error(`이미 있는 기억입니다: ${game.id}`);
     }
     const next = structuredClone(game);
+    next.memory = saved.memory;
     if (saved.endedAt) next.endedAt = saved.endedAt;
     if (saved.endReason) next.endReason = saved.endReason;
     if (saved.record) next.record = saved.record;
@@ -229,6 +243,13 @@ export class MemoryGameStore implements GameStore {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, query.limit)
       .map((memory) => structuredClone(memory));
+  }
+
+  async findMemories(userId: string, ids: readonly string[]): Promise<MemoryRecord[]> {
+    return [...new Set(ids)].flatMap((id) => {
+      const memory = this.#memories.get(id);
+      return memory?.userId === userId ? [structuredClone(memory)] : [];
+    });
   }
 
   async editMemory(userId: string, id: string, text: string, at: string): Promise<MemoryRecord | undefined> {

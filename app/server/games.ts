@@ -13,6 +13,8 @@ import type {
   Lean,
   MemoryView,
   MessageView,
+  PassedMemoryView,
+  PassedTurnView,
   SideIndex,
   TopicView,
   TurnEntry,
@@ -20,7 +22,7 @@ import type {
   TurnResponse,
   Verdict,
 } from './contract.ts';
-import { MAX_MEMORY_TEXT, memoriesOf, memoryLength, oneLine, type MemoryRecord } from './memory.ts';
+import { MAX_MEMORY_TEXT, MEMORIES_PER_TURN, memoriesOf, memoryLength, oneLine, type MemoryRecord } from './memory.ts';
 import { voiceTallyOf, type EndRecord, type GameRecord, type GameStore, type Mode } from './store.ts';
 
 /** 한 판에서 사용자가 보낼 수 있는 턴 수. 판정 실험이 잰 대화 길이와 같다. */
@@ -82,8 +84,9 @@ export interface GameDeps {
   /** 판마다 방식을 고른다. 화면에는 알리지 않는다. */
   pickMode: () => Mode;
   /**
-   * 끝 기록을 남길 때 기억을 만드는지. 기억의 근거와 약점은 판정기의 판단을 드러내므로,
+   * 새 판이 기억을 쓰는지(턴마다 같은 주제의 기억을 상대에게 넘기고, 끝 기록 때 기억을 만든다). 기억의 근거와 약점은 판정기의 판단을 드러내므로,
    * 눈가림 비교(APP_MODE=random)에서는 끈다(2026-11-25 사용자 결정, dev-setup.ts).
+   * 판을 시작할 때 판에 남기고(GameRecord.memory), 그 판의 턴과 끝 기록은 이 설정이 아니라 판에 남긴 값을 따른다.
    */
   memory: boolean;
   newId: () => string;
@@ -129,6 +132,11 @@ function memoryView(memory: MemoryRecord): MemoryView {
     createdAt: memory.createdAt,
     edited: memory.editedAt !== undefined,
   };
+}
+
+/** 턴에 넘긴 기억의 지금 모습. 고쳤으면 지금 글과 고침 표시다. */
+function keptView(memory: MemoryRecord): PassedMemoryView {
+  return { id: memory.id, state: 'kept', kind: memory.kind, text: memory.text, edited: memory.editedAt !== undefined };
 }
 
 function messagesOf(game: GameRecord): MessageView[] {
@@ -218,7 +226,31 @@ export function createGames(deps: GameDeps) {
     return matchup;
   }
 
-  function viewOf(game: GameRecord): GameView {
+  /**
+   * 턴마다 넘긴 기억의 id를 지금의 기억과 잇는다. 지금 없는 기억(지웠다)은 글 없이 'deleted'로 보인다.
+   * 턴에 글을 떠 두지 않으므로, 지운 기억의 글은 판 화면에 다시 나오지 않는다.
+   */
+  async function passedOf(game: GameRecord): Promise<PassedTurnView[]> {
+    const turns = game.turns.filter((turn) => turn.memoryIds.length > 0);
+    if (turns.length === 0) return [];
+    const found = await currentMemories(game.userId, turns.flatMap((turn) => turn.memoryIds));
+    return turns.map((turn) => ({ turn: turn.n, memories: passedViews(found, turn.memoryIds) }));
+  }
+
+  /** ids의 지금 기억. 지운 기억은 빠진다. */
+  async function currentMemories(userId: string, ids: readonly string[]): Promise<ReadonlyMap<string, MemoryRecord>> {
+    return new Map((await deps.store.findMemories(userId, ids)).map((memory) => [memory.id, memory]));
+  }
+
+  /** 넘긴 id를 지금의 기억과 잇는다. 지금 없는 기억(지웠다)은 글 없이 'deleted'다. */
+  function passedViews(found: ReadonlyMap<string, MemoryRecord>, ids: readonly string[]): PassedMemoryView[] {
+    return ids.map((id) => {
+      const memory = found.get(id);
+      return memory ? keptView(memory) : { id, state: 'deleted' };
+    });
+  }
+
+  async function viewOf(game: GameRecord): Promise<GameView> {
     return {
       id: game.id,
       topic: topicView(topicOf(game)),
@@ -232,6 +264,7 @@ export function createGames(deps: GameDeps) {
       endReason: game.endReason ?? null,
       record: recordView(game.record),
       voice: voiceTallyOf(game.turns),
+      passed: await passedOf(game),
     };
   }
 
@@ -291,6 +324,7 @@ export function createGames(deps: GameDeps) {
         side,
         cardId: matchup.card.id,
         mode: deps.pickMode(),
+        memory: deps.memory,
         startLean: lean,
         history: state.history,
         conceded: [...state.conceded],
@@ -305,7 +339,11 @@ export function createGames(deps: GameDeps) {
       return viewOf(await load(userId, id));
     },
 
-    /** entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다. */
+    /**
+     * entry는 사용자가 이 말을 넣은 방식과 다시 말한 횟수다. 화면이 알려 준 대로 턴에 남기고, 상대의 답에는 쓰지 않는다.
+     * 판이 기억을 쓰면 상한을 확인한 뒤, 모델을 부르기 전에 같은 주제의 최근 기억을 찾아 상대의 지시문으로 넘기고
+     * 그 id를 턴에 남긴다. 턴마다 다시 찾으므로 판 도중에 지우거나 고친 기억은 다음 턴부터 반영된다.
+     */
     async turn(userId: string, id: string, rawText: string, entry: TurnEntry): Promise<TurnResponse> {
       const text = rawText.replace(CONTROL_CHARS, '').trim();
       if (!text) throw new GameError(400, '보낼 말이 비어 있습니다.');
@@ -317,6 +355,9 @@ export function createGames(deps: GameDeps) {
         const matchup = matchupOf(game);
         return oneTurnPerUser(userId, async () => {
           await checkLimits(userId);
+          const passed = game.memory
+            ? await deps.store.listMemories(userId, { topicId: game.topicId, limit: MEMORIES_PER_TURN })
+            : [];
           const state = { history: game.history, conceded: new Set(game.conceded) };
           const outcome = await runTurn(state, {
             question: matchup.question,
@@ -324,6 +365,7 @@ export function createGames(deps: GameDeps) {
             condition: game.mode,
             models: meteredModels(deps.models, ledger, { userId, gameId: game.id, now: deps.now }),
             text,
+            memories: passed.map((memory) => memory.text),
           });
           const n = game.turns.length + 1;
           game.history = state.history;
@@ -333,6 +375,7 @@ export function createGames(deps: GameDeps) {
             user: text,
             input: entry.input,
             redone: entry.redone,
+            memoryIds: passed.map((memory) => memory.id),
             reply: outcome.reply,
             ...(outcome.decision ? { decision: outcome.decision } : {}),
             ...(outcome.judge ? { judge: outcome.judge } : {}),
@@ -344,7 +387,17 @@ export function createGames(deps: GameDeps) {
             game.endReason = 'max-turns';
           }
           await deps.store.save(game);
-          return { turn: n, reply: outcome.reply, ended: game.endedAt !== undefined, endReason: game.endReason ?? null };
+          // 넘긴 기억은 모델을 부르기 전에 찾았다. 답을 기다리는 사이에 다른 탭에서 지우거나 고쳤을 수 있으므로,
+          // 응답에는 지금의 기억과 다시 이어 보낸다. 그래야 지운 기억의 글이 답과 함께 화면에 다시 나오지 않는다.
+          const passedIds = passed.map((memory) => memory.id);
+          const memories = passedIds.length > 0 ? passedViews(await currentMemories(userId, passedIds), passedIds) : [];
+          return {
+            turn: n,
+            reply: outcome.reply,
+            ended: game.endedAt !== undefined,
+            endReason: game.endReason ?? null,
+            memories,
+          };
         });
       });
     },
@@ -363,7 +416,7 @@ export function createGames(deps: GameDeps) {
 
     /**
      * 끝난 판에 사후 입장과 훈계 문항의 답을 남긴다. 한 번 남기면 바꾸지 않는다.
-     * 기억이 켜져 있으면 이 판의 기억을 규칙으로 만들어 끝 기록과 함께 저장한다. 기억을 넣지 못하면 끝 기록도 남지 않는다.
+     * 판이 기억을 쓰면 이 판의 기억을 규칙으로 만들어 끝 기록과 함께 저장한다. 기억을 넣지 못하면 끝 기록도 남지 않는다.
      */
     async record(userId: string, id: string, lean: Lean, verdict: Verdict): Promise<GameView> {
       return exclusive(userId, id, async () => {
@@ -371,7 +424,7 @@ export function createGames(deps: GameDeps) {
         if (!game.endedAt) throw new GameError(409, '아직 끝나지 않은 판입니다. 판을 끝낸 뒤에 남겨 주세요.');
         if (game.record) throw new GameError(409, '이 판에는 이미 기록을 남겼습니다.');
         const recorded = { ...game, record: { lean, verdict, at: deps.now().toISOString() } };
-        const memories = deps.memory ? memoriesOf(recorded, topicOf(recorded), deps.newId) : [];
+        const memories = recorded.memory ? memoriesOf(recorded, topicOf(recorded), deps.newId) : [];
         await deps.store.save(recorded, memories);
         return viewOf(recorded);
       });
