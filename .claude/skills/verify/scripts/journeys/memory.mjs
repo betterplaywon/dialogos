@@ -1,6 +1,7 @@
 // 사용자별 기억을 사람이 쓰는 차례대로 화면에서 확인한다: 같은 주제로 첫 판(기록 남기기) → 목록의 내 기억 → 시작 화면의 지난 기록
-// → 둘째 판 첫 턴의 답 아래 넘긴 기록 → 그 자리에서 고치기와 지우기 → 다음 턴에 넘긴 기록 → 새로 고쳐 이어 열기 → 목록의 내 기억 → 판 파일.
-// 앱은 빈 포트에 모의 모델로 띄우고(기본 방식은 엔진이라 기억 켬), 화면은 창 없는 Chrome으로 누른다.
+// → 둘째 판 첫 턴의 답 아래 넘긴 기록 → 그 자리에서 고치기와 지우기 → 다음 턴에 넘긴 기록 → 새로 고쳐 이어 열기
+// → 두 번째 탭에서 지운 기억을 첫 탭에서 고치거나 지우기 → 목록의 내 기억 → 판 파일.
+// 앱은 빈 포트에 모의 모델로 띄우고(기본 방식은 엔진이라 기억 켬), 화면은 창 없는 Chrome으로 누른다. 두 번째 탭은 Chrome을 하나 더 띄운다.
 // 단계 id와 기대값은 features/memory.md에 있다.
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -15,14 +16,17 @@ const LONG =
 const FIRST_GAME = [SHORT, LONG, SHORT];
 /** 첫 기록을 고칠 글. */
 const EDITED = '고친 주장: 처음에는 거짓말이 신뢰를 무너뜨린다고 말했다.';
+/** 다른 탭에서 이미 지운 기록을 그런 줄 모르고 고칠 글. */
+const STALE_EDIT = '지운 줄 모르고 고친 글.';
 
 /** 화면이 보이는 기억 종류 이름(app/web/src/memories.tsx). */
 const KIND = { claim: '주장', ground: '근거', shift: '바뀐 생각', weakness: '약점' };
 /** 한 턴에 상대에게 넘기는 기억 수(app/server/memory.ts의 MEMORIES_PER_TURN). */
 const PER_TURN = 3;
-/** 지운 자리에 보이는 글과, 그 자리에서 지웠을 때만 붙는 안내. */
+/** 지운 자리에 보이는 글과, 그 자리에서 지웠을 때와 고치거나 지우려다 다른 곳에서 이미 지운 것을 알았을 때만 붙는 안내. */
 const DELETED = '지운 기록';
 const DELETED_HERE = '지운 기록 기억만 지웠습니다. 판 기록은 남습니다.';
+const DELETED_ELSEWHERE = '지운 기록 다른 곳에서 이미 지운 기록입니다.';
 
 /** 판 화면에서 k번째 턴의 답인 상대의 말. 0번째는 판을 시작할 때 나온 첫 발언이다. */
 const reply = (k) => `[...document.querySelectorAll('.message.opponent:not(.pending)')][${k}]`;
@@ -37,11 +41,17 @@ const shown = (row) => `${KIND[row.kind]} ${row.text}${row.edited_at ? ' 고침'
 export async function run(h) {
   let app;
   let page;
+  /** 두 번째 탭. 첫 탭이 모르는 사이에 기억을 지운다. */
+  let other;
   const games = {};
   /** 첫 판이 끝 기록 때 만든 기억(판 파일의 차례 = 최근 것부터, 한 판 안에서는 만든 차례). 고치고 지운 뒤에도 처음 그대로 둔다. */
   let made = [];
   /** 지금 판 파일에 있어야 할 기억. 고치면 그 줄을 판 파일에서 다시 읽은 것으로 바꾸고, 지우면 뺀다. */
   let current = [];
+  /** 둘째 판 턴 2에 넘긴 기억(그때의 판 파일 줄). */
+  let passed2 = [];
+  /** 두 번째 탭에서 지운 기억 둘. 첫 탭의 턴 2 답 아래에 아직 글로 보이던 것이다. */
+  let elsewhere = [];
 
   /** 판 파일을 읽기 전용으로 열어 읽는다. 앱이 띄워져 있어도 읽을 수 있다. */
   const db = (work) => {
@@ -57,6 +67,11 @@ export async function run(h) {
   const turnRows = (gameId) =>
     db((d) => d.prepare('SELECT n, memory_ids, at FROM turns WHERE game_id = ? ORDER BY n').all(gameId).map((r) => ({ n: r.n, ids: JSON.parse(r.memory_ids), at: r.at })));
   const ids = (rows) => rows.map((m) => m.id);
+  /** 판 화면의 넘긴 기억 자리에 보일 글. 남은 기억은 지금 글, 지운 기억은 '지운 기록'이다(그 자리에서 지운 게 아니면 알림이 없다). */
+  const nowShown = (memory) => {
+    const row = current.find((m) => m.id === memory.id);
+    return row ? shown(row) : DELETED;
+  };
 
   /** scope 안 기록 항목들의 보이는 글. */
   const itemsIn = (scope) =>
@@ -72,14 +87,27 @@ export async function run(h) {
     );
   }
 
-  /** 턴 k의 답 아래 접힌 넘긴 기록을 펼쳐 항목의 글을 읽는다. 단추 글의 개수가 맞아야 누른다. */
+  /**
+   * 턴 k의 답 아래 접힌 넘긴 기록을 펼쳐 항목의 글을 읽는다. 단추 글의 개수가 맞아야 누른다.
+   * 접힘은 단추의 aria-expanded와 함께, 단추가 가리키는 목록(aria-controls)이 화면에 실제로 보이는지(checkVisibility)로 본다.
+   * aria-expanded만 보면 목록이 늘 펼쳐져 있어도 통과한다.
+   */
   async function openPassed(k, count) {
     const toggle = `${reply(k)}?.querySelector('.passed-toggle')`;
+    const list = `document.getElementById(${toggle}?.getAttribute('aria-controls'))`;
     assert.equal(await page.evaluate(`${toggle}?.textContent ?? null`), toggleText(count), `턴 ${k}의 답 아래 넘긴 기록 단추`);
-    assert.equal(await page.evaluate(`${toggle}.getAttribute('aria-expanded')`), 'false', '넘긴 기록은 처음에 접혀 있다');
+    const before = await page.evaluate(`({ expanded: ${toggle}.getAttribute('aria-expanded'), visible: ${list}?.checkVisibility() ?? null })`);
+    assert.deepEqual(before, { expanded: 'false', visible: false }, `턴 ${k}의 넘긴 기록은 처음에 접혀 있어 목록이 보이지 않는다(본 것 ${JSON.stringify(before)})`);
     await page.click(buttonIn(reply(k), toggleText(count)), `턴 ${k}의 [${toggleText(count)}]`);
-    await page.waitFor(`${toggle}.getAttribute('aria-expanded') === 'true'`, `턴 ${k}의 넘긴 기록이 펼쳐지지 않는다`);
+    await page.waitFor(`${toggle}.getAttribute('aria-expanded') === 'true' && ${list}?.checkVisibility()`, `턴 ${k}의 넘긴 기록이 펼쳐져 보이지 않는다`);
     return itemsIn(reply(k));
+  }
+
+  /** 고치거나 지우려고 누른 기록 자리(item)가 지운 기록이나 오류 줄로 바뀔 때까지 기다린 뒤, 오류 줄이 없는지 본다. */
+  async function settled(item, what) {
+    await page.waitFor(`${item}.classList.contains('deleted') || ${item}.querySelector('.memory-error')`, `${what}이(가) 지운 기록으로도 오류로도 바뀌지 않는다`);
+    const error = await page.evaluate(`${item}.querySelector('.memory-error')?.textContent ?? null`);
+    assert.equal(error, null, `${what}에 오류 줄이 보인다: ${error}`);
   }
 
   await h.step('app', '앱을 빈 포트 둘에 모의 모델로 띄운다(app/dev.ts, 기본 방식은 엔진이라 기억 켬, 증거 폴더의 새 판 파일)', async () => {
@@ -203,6 +231,7 @@ export async function run(h) {
     await send(SHORT, 2);
     // 지운 둘째 기억 자리를 그다음 기억이 채운다.
     const passed = current.slice(0, PER_TURN);
+    passed2 = passed;
     assert.deepEqual(await openPassed(2, passed.length), passed.map(shown), '턴 2의 답 아래 넘긴 기록');
     const turns = turnRows(games.second.id);
     assert.deepEqual(turns.map((t) => t.ids), [ids(made.slice(0, PER_TURN)), ids(passed)], '판 파일의 턴 1, 2 memory_ids');
@@ -228,6 +257,55 @@ export async function run(h) {
     return `턴 1: ${turn1.join(' / ')} · 턴 2: ${turn2.length}개, 지운 글과 고치기 전 글 없음 (${await page.shot('reopened')})`;
   });
 
+  await h.step('other-tab', '두 번째 탭에서 목록의 내 기억을 열어, 첫 탭의 턴 2 답 아래에 글로 보이는 고치지 않은 기억 둘을 [지우기] → [정말 지우기]. 판 파일에서 빠지고, 첫 탭은 모른 채 그 둘을 글로 보인다', async () => {
+    elsewhere = passed2.filter((m) => !m.edited_at);
+    assert.equal(elsewhere.length, 2, `턴 2에 넘긴 고치지 않은 기억이 둘이 아니다: ${passed2.map((m) => m.kind).join(', ')}`);
+    other = await h.browser();
+    await other.goto(app.url);
+    await other.waitFor(`document.querySelector('#my-memories-title')`, '두 번째 탭에 내 기억 절이 보이지 않는다');
+    assert.deepEqual(await other.texts('.memory-group .memory .memory-body'), current.map(shown), '두 번째 탭의 내 기억');
+    for (const memory of elsewhere) {
+      const item = `document.querySelectorAll('.memory-group .memory')[${current.findIndex((m) => m.id === memory.id)}]`;
+      await other.click(buttonIn(item, '지우기'), `두 번째 탭의 ${KIND[memory.kind]} 기록 [지우기]`);
+      await other.click(buttonIn(item, '정말 지우기'), `두 번째 탭의 ${KIND[memory.kind]} 기록 [정말 지우기]`);
+      await other.waitFor(`${item}.classList.contains('deleted')`, `두 번째 탭의 ${KIND[memory.kind]} 기록이 지운 기록으로 바뀌지 않는다`);
+    }
+    const shot = await other.shot('other-tab');
+    current = current.filter((m) => !ids(elsewhere).includes(m.id));
+    assert.deepEqual(ids(memoryRows()), ids(current), '판 파일의 기억(두 번째 탭에서 지운 둘이 빠진다)');
+    assert.deepEqual(await itemsIn(reply(2)), passed2.map(shown), '첫 탭의 턴 2 넘긴 기록(아직 지운 줄 모른다)');
+    return `두 번째 탭에서 ${elsewhere.map((m) => m.kind).join(', ')} 기억을 지움(${shot}), 판 파일의 기억 ${current.length}개, 첫 탭의 턴 2는 그대로 ${passed2.length}개`;
+  });
+
+  await h.step('stale-edit', '첫 탭에서 두 번째 탭이 지운 첫째 기억의 [고치기] → 글을 바꿔 [저장]. 그 자리가 "지운 기록"과 "다른 곳에서 이미 지운 기록입니다."로 바뀌고, 같은 기억이 넘어간 턴 1의 자리도 지운 기록이 된다', async () => {
+    const [target] = elsewhere;
+    const item = `${reply(2)}?.querySelectorAll('.memory')[${passed2.findIndex((m) => m.id === target.id)}]`;
+    await page.click(buttonIn(item, '고치기'), `턴 2의 ${KIND[target.kind]} 기록 [고치기]`);
+    await page.waitFor(`${item}.querySelector('.memory-edit textarea')`, '고치기 입력 칸이 열리지 않는다');
+    await page.evaluate(`(() => { const t = ${item}.querySelector('textarea'); t.focus(); t.select(); })()`);
+    await page.send('Input.insertText', { text: STALE_EDIT });
+    await page.click(buttonIn(item, '저장'), `턴 2의 ${KIND[target.kind]} 기록 [저장]`);
+    await settled(item, `턴 2의 ${KIND[target.kind]} 기록`);
+    assert.deepEqual(await itemsIn(reply(2)), passed2.map((m) => (m.id === target.id ? DELETED_ELSEWHERE : shown(m))), '턴 2의 넘긴 기록');
+    // 같은 기억이 턴 1에도 넘어갔다. 한 곳에서 안 것은 판 화면 전체에 미치고, 알림은 누른 자리에만 있다.
+    assert.deepEqual(await itemsIn(reply(1)), made.slice(0, PER_TURN).map(nowShown), '턴 1의 넘긴 기록');
+    assert.ok(!(await page.evaluate('document.body.innerText')).includes(target.text), '다른 탭에서 지운 기억의 글이 화면에 남았다');
+    assert.deepEqual(ids(memoryRows()), ids(current), '판 파일의 기억(고쳐 보려 해도 다시 생기지 않는다)');
+    return `"${DELETED_ELSEWHERE}", 턴 1의 같은 기억도 "${DELETED}", 오류 줄 없음 (${await page.shot('stale-edit')})`;
+  });
+
+  await h.step('stale-delete', '첫 탭에서 두 번째 탭이 지운 둘째 기억의 [지우기] → [정말 지우기]. 그 자리가 "지운 기록"과 "다른 곳에서 이미 지운 기록입니다."로 바뀌고 오류 줄이 없다', async () => {
+    const [, target] = elsewhere;
+    const item = `${reply(2)}?.querySelectorAll('.memory')[${passed2.findIndex((m) => m.id === target.id)}]`;
+    await page.click(buttonIn(item, '지우기'), `턴 2의 ${KIND[target.kind]} 기록 [지우기]`);
+    await page.click(buttonIn(item, '정말 지우기'), `턴 2의 ${KIND[target.kind]} 기록 [정말 지우기]`);
+    await settled(item, `턴 2의 ${KIND[target.kind]} 기록`);
+    assert.deepEqual(await itemsIn(reply(2)), passed2.map((m) => (ids(elsewhere).includes(m.id) ? DELETED_ELSEWHERE : shown(m))), '턴 2의 넘긴 기록');
+    assert.ok(!(await page.evaluate('document.body.innerText')).includes(target.text), '다른 탭에서 지운 기억의 글이 화면에 남았다');
+    assert.deepEqual(ids(memoryRows()), ids(current), '판 파일의 기억');
+    return `"${DELETED_ELSEWHERE}", 오류 줄 없음 (${await page.shot('stale-delete')})`;
+  });
+
   await h.step('list-after', '[목록으로] 나가면 내 기억에 고친 글(고침)이 있고 지운 기억은 없다', async () => {
     await page.press('목록으로');
     await page.waitFor(`document.querySelector('#my-memories-title')`, '내 기억 절이 보이지 않는다');
@@ -235,7 +313,7 @@ export async function run(h) {
     return `내 기억 ${current.length}개(고친 글 1, 지운 기억 없음) (${await page.shot('list-after')})`;
   });
 
-  await h.step('db', '판 파일: 기억 표가 화면에서 본 것과 같고, 둘째 판 턴의 넘긴 기억 id가 화면의 넘긴 기록과 같으며, 첫 판의 턴은 그대로다. 화면에 오류가 없다', () => {
+  await h.step('db', '판 파일: 기억 표가 화면에서 본 것과 같고, 둘째 판 턴의 넘긴 기억 id가 화면의 넘긴 기록과 같으며, 첫 판의 턴은 그대로다. 두 탭 모두 화면에 오류가 없다', () => {
     const rows = memoryRows();
     assert.deepEqual(rows, current, '기억 표(고친 줄은 고칠 때 읽은 그대로, 지운 줄은 없음)');
     const [all, firstTurns] = db((d) => [
@@ -245,8 +323,9 @@ export async function run(h) {
     assert.deepEqual(all, [[games.first.id, 1, 'debate'], [games.second.id, 1, null]], '판 둘, 둘 다 기억을 쓴다');
     assert.deepEqual(firstTurns, FIRST_GAME.map((text, i) => ({ n: i + 1, user_text: text })), '기억을 지워도 첫 판의 턴 원문은 남는다');
     const passedIds = turnRows(games.second.id).map((t) => t.ids);
-    assert.deepEqual(passedIds, [ids(made.slice(0, PER_TURN)), ids(current.slice(0, PER_TURN))], '둘째 판 턴의 memory_ids');
-    assert.deepEqual(page.errors, [], '화면의 예외나 console.error');
-    return `memories ${rows.length}행(고친 것 1, 지운 ${made[1].kind} 없음), 둘째 판 memory_ids ${passedIds.map((x) => x.length).join('개, ')}개, 첫 판 턴 ${firstTurns.length}행 그대로, 화면 오류 0 (${app.db})`;
+    assert.deepEqual(passedIds, [ids(made.slice(0, PER_TURN)), ids(passed2)], '둘째 판 턴의 memory_ids');
+    assert.deepEqual({ first: page.errors, other: other.errors }, { first: [], other: [] }, '두 탭 화면의 예외나 console.error');
+    const gone = made.filter((m) => !ids(current).includes(m.id));
+    return `memories ${rows.length}행(고친 것 1, 지운 ${gone.map((m) => m.kind).join(', ')} 없음), 둘째 판 memory_ids ${passedIds.map((x) => x.length).join('개, ')}개, 첫 판 턴 ${firstTurns.length}행 그대로, 화면 오류 0 (${app.db})`;
   });
 }

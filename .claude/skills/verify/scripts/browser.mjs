@@ -41,8 +41,9 @@ const buttonExpr = (text) =>
  * onSpawn은 Chrome을 띄운 바로 그 차례에(사이에 기다림 없이) 닫는 함수를 받는다. 탭에 붙기 전에 종료 신호가 와도
  * 부르는 쪽이 Chrome을 닫을 수 있게 하려는 것이다. 돌려주는 page의 close()도 같은 함수다.
  * close()는 Chrome을 닫고 프로세스가 끝날 때까지 기다린다. 여러 번 불러도 된다.
+ * nextShot은 화면 사진의 다음 번호를 준다. 한 여정이 Chrome을 둘 띄워도 사진 번호가 찍은 차례대로 이어지게 하네스가 하나를 같이 준다.
  */
-export async function launchChrome({ profileDir, shotsDir, onSpawn = () => {}, width = 900, height = 1200 }) {
+export async function launchChrome({ profileDir, shotsDir, nextShot, onSpawn = () => {}, width = 900, height = 1200 }) {
   const portFile = path.join(profileDir, 'DevToolsActivePort');
   const chrome = spawn(
     chromePath(),
@@ -206,8 +207,6 @@ export async function launchChrome({ profileDir, shotsDir, onSpawn = () => {}, w
     return evaluate(`[...document.querySelectorAll('button')].map((b) => b.textContent.trim() + (b.disabled ? '(비활성)' : ''))`);
   }
 
-  let shots = 0;
-
   return {
     send,
     evaluate,
@@ -263,10 +262,10 @@ export async function launchChrome({ profileDir, shotsDir, onSpawn = () => {}, w
 
     /** 화면 사진을 증거 폴더에 남기고 파일 이름을 돌려준다. */
     async shot(label) {
-      shots += 1;
+      const number = nextShot();
       await sleep(250);
       const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
-      const name = `shot-${String(shots).padStart(2, '0')}-${label}.png`;
+      const name = `shot-${String(number).padStart(2, '0')}-${label}.png`;
       writeFileSync(path.join(shotsDir, name), Buffer.from(data, 'base64'));
       return name;
     },
