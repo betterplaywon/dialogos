@@ -51,7 +51,7 @@ for (const stream of [process.stdout, process.stderr]) stream.on('error', () => 
 
 // Ctrl+C, Ctrl+\, 끄기, 터미널 닫기, 잡히지 않은 오류로 멈춰도 여정이 띄운 앱과 Chrome을 닫은 뒤에 끝낸다.
 // 닫기는 한 번만 돌고(h.close()가 같은 닫기를 돌려준다), 닫는 동안 온 신호와 오류는 기다리라고만 알린다.
-// 그것으로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 앱과 Chrome마다 많아야 5초 기다린다.
+// 그것으로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 eval 명령, 앱, Chrome마다 많아야 5초 기다린다.
 // SIGKILL처럼 잡을 수 없는 신호로 끝나면 닫지 못한다(SKILL.md의 '아직 못 하는 것').
 /** steps.md에 적은 결과의 줄(`VERIFY PASS/FAIL <기능> — <steps.md>`). 결과를 적기 전에는 null. */
 let verdict = null;
