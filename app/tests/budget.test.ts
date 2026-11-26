@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { format } from 'node:util';
 import { JUDGE_ATTEMPTS } from '../../eval/src/dialogue.ts';
 import { createApiModel } from '../../eval/src/providers/api.ts';
 import type { ChatMessage, ChatModel } from '../../eval/src/types.ts';
@@ -161,7 +162,8 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function quietly<T>(work: () => Promise<T>): Promise<{ result: T; logged: string[] }> {
   const original = console.error;
   const logged: string[] = [];
-  console.error = (message: string) => logged.push(message);
+  // 첫 인자만 받으면 둘째 인자로 넘긴 값(원장 항목 등)을 놓친다. console이 찍는 꼴 그대로 한 줄로 모은다.
+  console.error = (...args: unknown[]) => logged.push(format(...args));
   try {
     return { result: await work(), logged };
   } finally {
