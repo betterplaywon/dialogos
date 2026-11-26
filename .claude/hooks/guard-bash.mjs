@@ -422,15 +422,28 @@ function npmSub(words, names) {
   return null;
 }
 
-// npm init의 옵션 가운데 값을 하나 더 받는 것. 그 값은 받아 실행할 패키지 이름이 아니다.
-const NPM_INIT_VALUE_FLAGS = new Set([...NPX_VALUE_FLAGS, '--scope']);
+// npm init의 옵션 가운데 값을 하나 더 받는 것. 그 값은 받아 실행할 패키지 이름이 아니다. init-*는 npm 11.19.1의 설정 정의에서 글이나 경로를 받는 것이다.
+const NPM_INIT_VALUE_FLAGS = new Set([
+  ...NPX_VALUE_FLAGS,
+  '--scope',
+  '--init-author-name',
+  '--init-author-email',
+  '--init-author-url',
+  '--init-license',
+  '--init-module',
+  '--init-type',
+  '--init-version',
+]);
 
-/** npm init(create) 뒤의 단어에서 받아 실행할 패키지 이름을 찾는다. 없으면(npm init -y) undefined다. */
+/** npm init(create) 뒤의 단어에서 받아 실행할 패키지 이름을 찾는다. 없으면(npm init -y) undefined다. 리다이렉트(>/dev/null)는 이름이 아니다. */
 function initializer(args) {
   for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === '--') return args[i + 1];
-    if (!args[i].startsWith('-')) return args[i];
-    if (NPM_INIT_VALUE_FLAGS.has(args[i])) i += 1;
+    const word = args[i];
+    if (word === '--') return args[i + 1];
+    if (REDIRECT.test(word)) {
+      if (BARE_REDIRECT.test(word)) i += 1;
+    } else if (!word.startsWith('-')) return word;
+    else if (NPM_INIT_VALUE_FLAGS.has(word)) i += 1;
   }
   return undefined;
 }

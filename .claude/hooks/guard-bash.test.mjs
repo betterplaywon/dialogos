@@ -519,6 +519,8 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     'npm init -y vite',
     'npm init -w sub vite',
     'npm init -- vite',
+    'npm init vite >/dev/null',
+    'npm create > out.txt vite',
     // 같은 일을 하는 다른 패키지 관리자의 명령.
     'pnpx prettier --check .',
     'pnpm dlx prettier --check .',
@@ -562,9 +564,15 @@ test('npx와 npm exec는 package.json의 의존성으로 깔린 명령만 실행
     'npm -s run check',
     'npm -- run check',
     'npm ci',
-    // 이름 없는 npm init은 package.json만 만든다. exec나 init으로 읽히지 않는 하위 명령과 스크립트 이름은 그대로 둔다.
+    // 이름 없는 npm init은 package.json만 만든다. 리다이렉트와 값을 받는 init 옵션의 값은 이름이 아니다.
+    // exec나 init으로 읽히지 않는 하위 명령과 스크립트 이름은 그대로 둔다.
     'npm init -y',
     'npm init -w sub -y',
+    'npm init -y >/dev/null 2>&1',
+    'npm init -y 2>/dev/null',
+    'npm init -y </dev/null',
+    'npm create >/dev/null',
+    'npm init --init-author-name tester --init-license MIT -y',
     'npm explain tsx',
     'npm it',
     'npm run create',
