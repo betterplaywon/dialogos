@@ -42,8 +42,8 @@ export async function run(h) {
   const runArgs = ['--provider', 'mock', '--run', h.runId, ...(questions ? ['--questions', questions] : []), '--reps', reps, '--turns', turns];
   const expected = {};
 
-  await h.step('run', '대화를 돌린다(eval:run)', () => {
-    const r = h.ok(h.cli('run', runArgs));
+  await h.step('run', '대화를 돌린다(eval:run)', async () => {
+    const r = h.ok(await h.cli('run', runArgs));
     assert.match(r.out, /모델: 모의 모델\(비용 없음\)/);
     const plan = r.out.match(/질문 (\d+)개 × 조건 (\d+)개 × (\d+)번 = 대화 (\d+)회, 대화마다 (\d+)턴/);
     assert.ok(plan, '계획 줄이 없다');
@@ -57,16 +57,16 @@ export async function run(h) {
     return `대화 ${dialogues.length}회 × ${expected.turns}턴, meta.provider=mock (${r.log})`;
   });
 
-  await h.step('resume', '같은 명령을 다시 실행하면 끝난 대화를 건너뛴다', () => {
-    const r = h.ok(h.cli('run', runArgs));
+  await h.step('resume', '같은 명령을 다시 실행하면 끝난 대화를 건너뛴다', async () => {
+    const r = h.ok(await h.cli('run', runArgs));
     assert.match(r.out, new RegExp(`이미 끝난 대화 ${expected.dialogues}회는 건너뜁니다`));
     assert.match(r.out, /돌릴 대화가 없습니다/);
     assert.equal(h.jsonl('transcripts.jsonl').length, expected.dialogues, '기록이 늘지 않는다');
     return `${expected.dialogues}회 모두 건너뜀, 기록 줄 수 그대로 (${r.log})`;
   });
 
-  await h.step('label', '답마다 채점기 라벨을 붙인다(eval:label)', () => {
-    const r = h.ok(h.cli('label', ['--provider', 'mock', '--run', h.runId]));
+  await h.step('label', '답마다 채점기 라벨을 붙인다(eval:label)', async () => {
+    const r = h.ok(await h.cli('label', ['--provider', 'mock', '--run', h.runId]));
     const labels = h.jsonl('labels.jsonl');
     assert.equal(labels.length, expected.dialogues * expected.turns, '라벨 수 = 대화 수 × 턴 수');
     assert.ok(labels.every((l) => typeof l.yield === 'boolean' && Array.isArray(l.concededBefore)), '라벨 모양');
@@ -74,8 +74,8 @@ export async function run(h) {
     return `라벨 ${labels.length}개, 물러섬 ${labels.filter((l) => l.yield).length}개 (${r.log})`;
   });
 
-  await h.step('score', '결과표를 만든다(eval:score)', () => {
-    const r = h.ok(h.cli('score', ['--run', h.runId]));
+  await h.step('score', '결과표를 만든다(eval:score)', async () => {
+    const r = h.ok(await h.cli('score', ['--run', h.runId]));
     assert.match(r.out, new RegExp(`^# 판정 실험 결과 \\(${h.runId}\\)`));
     assert.match(r.out, /모의 모델로 돌린 결과입니다/);
     assert.equal(h.read('results.md').trim(), r.out.trim(), 'results.md = 출력');
@@ -86,7 +86,7 @@ export async function run(h) {
   });
 
   await h.step('sample', '사람 라벨 표본을 뽑는다(eval:sample). 조건과 턴 종류, 채점기 라벨은 숨긴다', async () => {
-    const r = h.ok(h.cli('sample', ['--run', h.runId, '--n', '20']));
+    const r = h.ok(await h.cli('sample', ['--run', h.runId, '--n', '20']));
     const { parseCsv } = await evalModule('util');
     const rows = parseCsv(h.read('sample.csv').replace(/^﻿/, ''));
     const header = rows[0] ?? [];
@@ -112,7 +112,7 @@ export async function run(h) {
       row[human] = (flipped.includes(row[item]) ? !machine : machine) ? '1' : '0';
     }
     h.save('sample.csv', `﻿${toCsv(rows)}`);
-    const r = h.ok(h.cli('agreement', ['--run', h.runId]));
+    const r = h.ok(await h.cli('agreement', ['--run', h.runId]));
     assert.match(r.out, new RegExp(`사람이 라벨을 붙인 표본: ${expected.sample}개 \\(비어 있는 칸 0개\\)`));
     assert.match(r.out, new RegExp(`서로 다른 표본: ${flipped.join(', ')}$`, 'm'));
     return `표본 ${expected.sample}개, 서로 다른 표본 = 뒤집은 ${flipped.join(', ')} (${r.log})`;
