@@ -614,6 +614,22 @@ test('npx가 도는 폴더를 sh -c, eval, 명령 치환 안까지 따라가고,
     // cd가 실패해도 도는 자리(; 뒤, || 뒤)의 npx는 떠나온 폴더에서도 돌 수 있다. 떠나온 폴더(dir)에는 prettier가 없다.
     'cd tool; npx prettier --check .',
     'cd tool && ls || npx prettier --check .',
+    // || 뒤의 cd는 앞이 성공하면 건너뛰어져, 뒤의 npx가 앞의 cd가 옮긴 폴더에서 돈다.
+    `cd ${bare} || cd ${dir} && npx tsx a.ts`,
+    // 줄바꿈과 & 뒤의 명령도 앞의 cd가 실패하면 떠나온 폴더(dir, prettier 없음)에서 돈다.
+    'cd tool\nnpx prettier --check .',
+    'cd tool && ls & npx prettier --check .',
+    // 감싼 cd가 닿은 폴더(bare)는, 뒤의 cd가 실패하면 그 뒤의 명령이 도는 폴더로 남는다.
+    `builtin cd ${bare}; cd ${dir} && ls; npx tsx a.ts`,
+    // 같은 셸의 변수로 읽은 값이라도 __proto__ 같은 이름이 값을 비틀지 않는다.
+    `__proto__=${bare}; cd $__proto__ && npx tsx a.ts`,
+    // 알고 둔 대가: 따옴표와 명령 치환 안의 구분자(;)도 끊는 자리로 보아, 떠나온 폴더(dir, prettier 없음)도 본다.
+    'cd tool && echo "$(ls; true)" && npx prettier --check .',
+    // 앞의 cd가 실패하면 뒤의 상대 경로 cd는 떠나온 폴더에서 풀린다(tool이 아니면 dir의 위 폴더).
+    'cd tool; cd .. && npx tsx a.ts',
+    // env -C의 폴더와 -c 뒤 --의 명령 글도 따라간다.
+    `env -C ${bare} sh -c 'npx tsx a.ts'`,
+    `bash -c -- 'cd ${bare} && npx tsx a.ts'`,
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'block', command);
   }
@@ -639,13 +655,37 @@ test('npx가 도는 폴더를 sh -c, eval, 명령 치환 안까지 따라가고,
     'npx --prefix "$X" tsx a.ts',
     'env -C "$X" npx tsx a.ts',
     '(cd a); (cd b); (cd c); (cd d); (cd e); (cd f); npx tsx a.ts',
+    // 값을 아는 변수도 다시 바뀌었을 수 있는 꼴(for, read, 치환, 묶음 안의 지정) 뒤에는 모르는 것으로 둔다.
+    `W=${dir}; for W in ${bare}; do cd $W && npx tsx a.ts; done`,
+    `W=${dir}; read W; cd $W && npx tsx a.ts`,
+    'W=$(pwd); cd $W && npx tsx a.ts',
+    `W=${dir}; { W=${bare}; }; cd $W && npx tsx a.ts`,
   ]) {
     const { verdict: v, reason } = guard(command, { cwd: dir });
     assert.equal(v, 'block', command);
     assert.match(reason, /어느 폴더에서 돌지 읽을 수 없다/, command);
   }
+  // 같은 명령에서 글자 그대로 넣은 변수는 풀어 읽는다. package.json이 없는 폴더면 그 까닭으로 막는다.
+  assert.match(guard(`W=${bare}; cd $W && npx tsx a.ts`, { cwd: dir }).reason, /package\.json\)에 없는/);
+  // 상대 경로 cd가 많아도 닿는 폴더가 상한을 넘으면 따라가기를 그만두어, 가드가 오래 걸리거나 죽지 않는다.
+  for (const join of ['; ', ' && ']) {
+    const many = spawnSync(process.execPath, [path.join(import.meta.dirname, 'guard-bash.mjs')], {
+      input: JSON.stringify({ tool_input: { command: `${Array.from({ length: 40 }, (_, i) => `(cd d${i})`).join(join)}${join}npx tsx a.ts` }, cwd: dir }),
+      encoding: 'utf8',
+      env: BASE_ENV,
+      timeout: 20_000,
+    });
+    assert.equal(many.status, 2, `${JSON.stringify(join)}: ${many.stderr}`);
+    assert.match(many.stderr, /어느 폴더에서 돌지 읽을 수 없다/);
+  }
   // package.json이 없는 폴더에서 시작해, 뒤의 명령을 확실히 옮기지는 않는 cd로 프로젝트에 들르는 꼴.
   for (const command of [
+    `ls | cd ${dir} && npx tsx a.ts`,
+    `cd ${dir} | cat && npx tsx a.ts`,
+    // env는 바깥 명령을 부르므로 그 cd는 이 셸의 폴더를 바꾸지 않는다.
+    `env cd ${dir} && npx tsx a.ts`,
+    `if true; then cd ${dir}; fi && npx tsx a.ts`,
+    `(ls && cd ${dir}) && npx tsx a.ts`,
     `(cd ${dir}) && npx tsx a.ts`,
     `(cd ${dir} && ls) ; npx tsx a.ts`,
     `(ls && cd ${dir}) ; npx tsx a.ts`,
@@ -683,8 +723,21 @@ test('npx가 도는 폴더를 sh -c, eval, 명령 치환 안까지 따라가고,
   ]) {
     assert.equal(verdict(command, { cwd: dir }), 'allow', command);
   }
-  // 맨 앞의 `cd 폴더 &&`는 뒤의 명령을 확실히 옮긴다. 시작 폴더에 package.json이 없어도 된다.
-  for (const command of [`cd ${dir} && npx tsx a.ts`, `cd ${dir}/sub && cd .. && npx tsc --noEmit 2>&1 | tail -5`]) {
+  // `&&` 목록의 맨 앞이나 `&&` 뒤에 감싸지 않고 쓴 cd는 뒤의 `&&` 명령을 확실히 옮긴다. 시작 폴더에 package.json이 없어도 된다.
+  // 같은 명령에서 글자 그대로 넣은 변수(W=경로, export W=경로, 따옴표로 감싼 값)는 풀어 읽는다.
+  for (const command of [
+    `cd ${dir} && npx tsx a.ts`,
+    `cd ${dir}/sub && cd .. && npx tsc --noEmit 2>&1 | tail -5`,
+    `ls && cd ${dir} && npx tsx a.ts`,
+    `true && cd ${dir} && npx tsx a.ts`,
+    `cd ${bare} && ls && cd ${dir} && npx tsx a.ts`,
+    // 앞의 cd가 실패했든 아니든, 글자 그대로의 경로로 옮기는 cd 뒤의 `&&` 명령은 그 폴더에서만 돈다. & 뒤의 cd도 새 목록의 맨 앞이다.
+    `cd ${bare}; cd ${dir} && npx tsx a.ts`,
+    `sleep 1 & cd ${dir} && npx tsx a.ts`,
+    `W=${dir}; cd $W && npx tsx a.ts`,
+    `S="${bare}"\nW="${dir}"\ncd "$W" && npx tsx "$S/a.ts" 2>&1 | tail -3`,
+    `export W=${dir} && cd "\${W}/sub" && npx tsc --noEmit`,
+  ]) {
     assert.equal(verdict(command, { cwd: bare }), 'allow', command);
   }
 });

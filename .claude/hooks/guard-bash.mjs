@@ -298,11 +298,16 @@ function projectDeps(dir) {
 const HOME = process.env.HOME ?? '';
 
 /**
- * 폴더 이름을 글자 그대로 읽는다. 셸이 바꿔 넣는 맨 앞의 ~와 $HOME은 풀어 준다. 그 밖에 셸이 풀어야 알 수 있는 것(변수와 치환,
- * 풀리는 글자, 남은 따옴표와 역슬래시, ~사용자, 앞 폴더와 폴더 더미를 가리키는 -·+1)은 어디인지 읽을 수 없어 null을 낸다.
+ * 폴더 이름을 글자 그대로 읽는다. 맨 앞의 ~와, 값을 아는 변수(vars: HOME과 같은 명령에서 글자 그대로 넣은 변수)는 풀어 준다.
+ * 그 밖에 셸이 풀어야 알 수 있는 것(모르는 변수와 치환, 풀리는 글자, 남은 따옴표와 역슬래시, ~사용자, 앞 폴더와 폴더 더미를 가리키는 -·+1)은
+ * 어디인지 읽을 수 없어 null을 낸다.
  */
-function literalDir(word) {
-  const text = word.replace(/^(?:~|\$HOME\b|\$\{HOME\})(?=\/|$)/, HOME || '~');
+function literalDir(word, vars = new Map([['HOME', HOME || null]])) {
+  const known = (name) => (typeof vars.get(name) === 'string' ? vars.get(name) : null);
+  // 모르는 변수는 그대로 두어, 아래 검사가 남은 $를 보고 읽지 못한 것으로 낸다.
+  const text = word
+    .replace(/^~(?=\/|$)/, known('HOME') ?? '~')
+    .replace(/\$(?:\{(\w+)\}|(\w+))/g, (whole, braced, bare) => known(braced ?? bare) ?? whole);
   return /[$`*?[\]{}'"\\]|^[~+-]/.test(text) ? null : text;
 }
 
@@ -313,8 +318,9 @@ const REDIRECT = /^(?:\d*|&)[<>]/;
 const BARE_REDIRECT = /^(?:\d*|&)(?:>>?|<)$/;
 
 /**
- * 폴더를 바꾸는 명령이 옮겨 갈 폴더. 폴더를 바꾸는 명령이 아니면 undefined, 어디로 가는지 읽지 못하면 null이다.
- * popd, 인자 없는 pushd, pushd의 옵션(-n은 옮기지 않는다), cd -, 인자 둘(zsh의 바꿔 넣기)은 폴더 더미나 앞 폴더에 달려 있어 읽지 못한다.
+ * 폴더를 바꾸는 명령이 옮겨 갈 폴더를 적은 글(풀기 전). 폴더를 바꾸는 명령이 아니면 undefined, 어디로 가는지 읽지 못하면 null이다.
+ * popd, 인자 없는 pushd, pushd의 옵션(-n은 옮기지 않는다), 인자 둘(zsh의 바꿔 넣기)은 폴더 더미나 앞 폴더에 달려 있어 읽지 못한다.
+ * 인자 없는 cd는 ~다. cd -와 변수는 npxFolders가 풀며 가린다.
  */
 function dirTarget(words) {
   const [name, ...rest] = words;
@@ -334,54 +340,79 @@ function dirTarget(words) {
       operands.push(word);
     }
   }
-  if (operands.length === 0) return name === 'pushd' ? null : literalDir('~');
-  return operands.length === 1 ? literalDir(operands[0]) : null;
+  if (operands.length === 0) return name === 'pushd' ? null : '~';
+  return operands.length === 1 ? operands[0] : null;
 }
 
 // 닿을 수 있는 폴더가 이보다 많아지면 따라가기를 그만두고 읽지 못한 것으로 친다.
 const MAX_REACHED = 32;
 const LOST_REASON =
-  'npx가 어느 폴더에서 돌지 읽을 수 없다. 앞의 폴더 바꾸기(cd -, popd, 변수나 치환으로 적은 폴더)와 --prefix, env -C를 글자 그대로의 경로로 적는다. 저장소의 의존성은 npm 스크립트로도 쓸 수 있다.';
+  'npx가 어느 폴더에서 돌지 읽을 수 없다. 앞의 폴더 바꾸기(cd -, popd, 값을 모르는 변수나 치환으로 적은 폴더)와 --prefix, env -C를 글자 그대로의 경로로 적는다(같은 명령에서 글자 그대로 넣은 변수는 읽는다). 저장소의 의존성은 npm 스크립트로도 쓸 수 있다.';
+
+/** 값을 둘러싼 따옴표를 뗀다(W="경로"). */
+const unquote = (value) => value.replace(/^(["'])(.*)\1$/s, '$2');
 
 /**
  * npx가 돌 수 있는 폴더를 명령을 따라가며 모은다. sh -c, eval, 명령 치환 안의 명령도 같은 것을 함께 쓴다.
- *  - at: 명령의 맨 앞에 잇달아 쓴 cd(`cd 폴더 && …`)를 따라간 폴더. 감싸지 않은 이 cd만 뒤의 명령이 도는 폴더를 옮긴 것으로 본다.
- *  - reached: 그 밖의 cd(감싼 것, 다른 명령 뒤의 것, sh -c·eval·치환·따옴표 안의 것)가 닿는 폴더. 그 cd가 뒤의 명령에 미치는지는
- *    읽지 않는다. 한번 닿은 폴더는 잊지 않고, npx는 at과 reached 모두에서 의존성이어야 둔다(막히는 쪽으로 틀린다).
- *  - left: 맨 앞의 cd로 떠나온 폴더. `&&`가 아닌 구분자를 지나면 그 cd가 실패해도 뒤의 명령이 돌 수 있으므로 reached로 옮긴다.
- *  - lost: 어디로 가는지 읽지 못한 폴더 바꾸기가 있었다. 그 뒤의 npx는 두지 않는다.
+ *  - at: 뒤의 명령을 옮긴다고 보는 cd(check의 sure)를 따라간 폴더.
+ *  - reached: 그 밖의 cd(감싼 것, `||` 뒤나 파이프 안의 것, 묶음·제어 구문 뒤의 것, sh -c·eval·치환·따옴표 안의 것)가 닿는 폴더.
+ *    그 cd가 뒤의 명령에 미치는지는 읽지 않는다. npx는 at과 reached 모두에서 의존성이어야 둔다(막히는 쪽으로 틀린다).
+ *    뒤의 명령을 옮기는 cd를 지나면 reached의 폴더도 그 cd로 옮겨 간 곳으로 바뀐다.
+ *  - left: 뒤의 명령을 옮기는 cd로 떠나온 폴더들. `&&`가 아닌 구분자(`||`, `;`, 줄바꿈, `&`)를 지나면 그 cd가 실패해도 뒤의 명령이 돌 수 있으므로 reached로 옮긴다.
+ *  - vars: 값을 아는 변수. HOME과, 같은 명령의 맨 앞 목록에서 글자 그대로 넣은 변수(`W=경로`, `export W=경로`)다.
+ *  - lost: 어디로 가는지 읽지 못한 폴더 바꾸기가 있었거나 닿는 폴더가 너무 많다. 그 뒤의 npx는 두지 않고, 더 따라가지 않는다.
  */
 function npxFolders(start) {
   let at = start;
   let left = [];
   const reached = new Set();
+  // 이름 → 값(값을 모르면 null). 보통 객체가 아니라 Map에 두어 __proto__ 같은 이름도 값으로만 다룬다.
+  const vars = new Map([['HOME', HOME || null]]);
   let lost = false;
+  const resolve = (word) => literalDir(word, vars);
   return {
-    /** to는 dirTarget이 낸 폴더(읽지 못했으면 null), sure는 명령의 맨 앞에 잇달아 쓴 cd인가다. */
-    move(to, sure) {
-      if (to === null) lost = true;
-      else {
-        // 닿은 폴더에서 한 cd일 수도 있으므로, 거기서 옮겨 간 폴더도 닿을 수 있는 폴더다.
-        for (const dir of sure ? [...reached] : [at, ...reached]) reached.add(path.resolve(dir, to));
-        if (sure) {
-          left.push(at);
-          at = path.resolve(at, to);
-        }
+    /** target은 dirTarget이 낸 글(읽지 못했으면 null), sure는 뒤의 명령을 옮긴다고 보는 cd인가다. */
+    move(target, sure) {
+      if (lost) return;
+      const to = target === null ? null : resolve(target);
+      if (to === null) {
+        lost = true;
+        return;
       }
-      if (reached.size > MAX_REACHED) lost = true;
+      if (sure) {
+        // 뒤의 `&&` 명령은 이 cd가 된 뒤에만 돌고, 지금까지 있을 수 있던 폴더마다 거기서 to로 옮겨 간 곳에서 돈다.
+        // cd가 실패하면 그 폴더들에 남으므로, 끊는 구분자를 지난 뒤에 다시 쓰려고 left에 둔다.
+        left.push(at, ...reached);
+        at = path.resolve(at, to);
+        const moved = [...reached].map((dir) => path.resolve(dir, to));
+        reached.clear();
+        for (const dir of moved) reached.add(dir);
+      } else {
+        // 이 cd가 뒤의 명령에 미쳤는지 모르므로, 옮겨 간 곳을 더하고 지금까지의 폴더도 남긴다.
+        for (const dir of [at, ...reached]) reached.add(path.resolve(dir, to));
+      }
+      if (reached.size + left.length > MAX_REACHED) lost = true;
     },
     /** `&&`가 아닌 구분자를 지났다. */
     afterBreak() {
       for (const dir of left) reached.add(dir);
       left = [];
+      if (reached.size > MAX_REACHED) lost = true;
     },
-    /** 지금 npx가 돌 수 있는 폴더들. chdir은 이 명령에만 붙은 env -C의 폴더다. */
-    list(chdir = null) {
-      const dirs = [...new Set([at, ...reached])];
-      if (chdir === null) return { dirs, lost };
-      const to = literalDir(chdir);
-      if (to === null) return { dirs, lost: true };
-      return { dirs: [...new Set([...dirs, ...dirs.map((dir) => path.resolve(dir, to))])], lost };
+    /** 맨 앞 목록의 변수 지정. 값을 글자로 읽지 못하면 그 변수는 모르는 것으로 둔다. */
+    assign(name, value) {
+      vars.set(name, resolve(unquote(value)));
+    },
+    /** 이 조각의 단어에 이름이 나온 변수(for W in, read W, 묶음 안의 W=…, unset W)는 값이 바뀌었을 수 있어 모르는 것으로 둔다. */
+    forget(words) {
+      const bare = words.map((word) => word.replace(/^[({!]+/, ''));
+      for (const name of vars.keys()) {
+        if (bare.some((word) => word === name || word.startsWith(`${name}=`) || word.startsWith(`${name}+=`))) vars.set(name, null);
+      }
+    },
+    /** 지금 npx가 돌 수 있는 폴더들과, 폴더를 적은 글을 같은 변수로 푸는 함수. */
+    list() {
+      return { dirs: [...new Set([at, ...reached])], lost, resolve };
     },
   };
 }
@@ -452,8 +483,8 @@ function initializer(args) {
  * npx와 npm exec는 로컬에 없는 패키지를 묻지 않고 받아 실행한다(받은 코드 바로 실행, AGENTS.md 4번).
  * 실행할 명령과 -p로 고른 패키지가 모두 package.json의 의존성으로 깔린 것일 때만 둔다. 버전을 붙이면 다른 버전을 받을 수 있어 막는다.
  * -p의 값은 npx가 패키지 이름으로 풀므로 패키지 이름으로만 맞춰 본다(-p tsc는 typescript가 아니라 tsc라는 패키지다).
- * args는 npx(또는 npm exec) 뒤의 단어다. where는 명령이 돌 수 있는 폴더들(dirs)과 읽지 못한 폴더 바꾸기가 있었는지(lost)이고(npxFolders의 list),
- * 모든 폴더에서 깔린 것이어야 둔다. prefix는 npm exec 앞에 준 --prefix 값이다.
+ * args는 npx(또는 npm exec) 뒤의 단어다. where는 명령이 돌 수 있는 폴더들(dirs), 읽지 못한 폴더 바꾸기가 있었는지(lost), 폴더를 적은 글을 푸는
+ * 함수(resolve)이고(npxFolders의 list), 모든 폴더에서 깔린 것이어야 둔다. prefix는 npm exec 앞에 준 --prefix 값이다.
  */
 function checkNpx(args, where, prefix = null) {
   const named = [];
@@ -479,7 +510,7 @@ function checkNpx(args, where, prefix = null) {
     }
   }
   if (named.length === 0) return null;
-  const into = prefixes.map(literalDir);
+  const into = prefixes.map(where.resolve);
   if (where.lost || into.includes(null)) return LOST_REASON;
   const places = into.length === 0 ? where.dirs : where.dirs.flatMap((dir) => into.map((to) => path.resolve(dir, to)));
   for (const place of places) {
@@ -492,7 +523,7 @@ function checkNpx(args, where, prefix = null) {
       // 적혀 있지만 깔리지 않은 의존성이 있으면, 명령 이름(tsc)이 그 의존성(typescript)의 것일 수 있다.
       if (installed.size < declared.size)
         return `${name}: 이 폴더(${place})의 의존성이 다 깔려 있지 않다. 먼저 npm ci로 설치한다. 그 뒤에도 막히면 package.json에 없는 패키지다.`;
-      return `프로젝트의 의존성(package.json)에 없는 패키지를 npx로 받거나 실행하지 않는다(${name}). 저장소의 검사는 npm run check다. 새 도구가 필요하면 사용자에게 묻는다.`;
+      return `프로젝트의 의존성(package.json)에 없는 패키지를 npx로 받거나 실행하지 않는다(${name}, 돌 수 있는 폴더 ${place}). 저장소의 검사는 npm run check다. 새 도구가 필요하면 사용자에게 묻는다.`;
     }
   }
   return null;
@@ -792,7 +823,7 @@ const OTHER_MANAGER_REASON =
  * 한 조각의 명령을 본다. dir은 맨 앞의 cd를 따라간 폴더(글 파일의 상대 경로를 찾는 곳)다.
  * where는 npx가 돌 수 있는 폴더들이다(npxFolders의 list). 그 모두에서 의존성인 것만 둔다.
  */
-function checkSegment(seg, words, assigns, dir = cwd, nested = false, where = { dirs: [dir], lost: false }) {
+function checkSegment(seg, words, assigns, dir = cwd, nested = false, where = { dirs: [dir], lost: false, resolve: (word) => literalDir(word) }) {
   const [first] = words;
   if (first === 'git') {
     const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
@@ -953,6 +984,7 @@ function unwrap(words) {
 /**
  * sh -c와 eval이 실행하는 명령도 같은 규칙으로 본다. folders는 바깥 명령과 함께 쓰는 npx의 폴더다.
  * 따옴표 안의 구분자에서 조각이 나뉘면 명령 글이 여는 따옴표로 시작하므로(sh -c 'cd x 까지만 온다), 앞뒤의 따옴표를 뗀다.
+ * -c 뒤의 --(옵션의 끝)는 명령 글이 아니다.
  */
 function checkShell(words, depth, folders) {
   const [first] = words;
@@ -961,7 +993,7 @@ function checkShell(words, depth, folders) {
   if (!SHELLS.has(first)) return null;
   const at = words.findIndex((w, i) => i > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
   if (at === -1) return null;
-  return check(script(at + 1), depth + 1, folders);
+  return check(script(words[at + 1] === '--' ? at + 2 : at + 1), depth + 1, folders);
 }
 
 /** git 조각의 하위 명령(add, commit, push …). git이 아니면 null. */
@@ -1003,6 +1035,16 @@ function sequenceProblem(cmd) {
   return null;
 }
 
+// 묶음, 서브셸, 제어 구문(if, for, while, case, 함수 정의)을 여는 첫 단어. 그 뒤의 cd와 변수는 어디까지 미치는지 읽지 않는다.
+const COMPOUND = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'for', 'do', 'case', 'select', 'function']);
+const opensCompound = (word) => /^[({]/.test(word) || COMPOUND.has(word) || /^[\w.-]+\(\)$/.test(word);
+// cd 앞의 구분자가 이것이거나 cd가 맨 앞이면, cd가 실패하거나 건너뛰어질 때 뒤의 `&&` 명령도 돌지 않는다.
+const STARTS_LIST = new Set(['&&', ';', '\n', '&']);
+// cd 뒤의 구분자가 이것이면 cd는 따로 도는 셸(파이프, 백그라운드)에서 돌아 뒤의 명령을 옮기지 않는다.
+const SEPARATE_SHELL = new Set(['|', '|&', '&']);
+// 이 구분자 뒤의 명령은 앞의 cd가 실패해도 돈다.
+const BREAKS = new Set(['||', ';', '\n', '&']);
+
 /**
  * 명령을 조각으로 나눠 본다. depth는 sh -c, eval, 명령 치환으로 들어간 깊이다. folders는 npx가 돌 수 있는 폴더를 따라가는 것으로,
  * 안쪽 명령을 볼 때 바깥의 것을 그대로 넘겨 바깥의 cd를 안쪽이 알고 안쪽의 cd를 바깥이 알게 한다.
@@ -1019,40 +1061,49 @@ function check(input, depth = 0, folders = npxFolders(cwd)) {
   // 앞의 cd를 따라간 폴더. 글 파일의 상대 경로를 이 폴더에서 찾는다.
   let dir = cwd;
   const target = (to) => (to ?? HOME).replace(/^~(?=\/|$)/, HOME || '~');
-  // 명령의 맨 앞에 잇달아 쓴 cd만 뒤의 명령이 도는 폴더를 옮긴 것으로 본다(npxFolders의 at). 안쪽 명령의 cd는 그렇게 보지 않는다.
-  let leading = depth === 0;
-  const checkPiece = (seg) => {
+  // 묶음·서브셸·제어 구문이 나오기 전인가. 안쪽 명령(depth > 0)은 처음부터 아니다.
+  let plain = depth === 0;
+  // 앞 조각 뒤의 구분자. 맨 앞 조각이면 null이다.
+  let prev = null;
+  const checkPiece = (seg, then) => {
     const raw = tokens(seg);
-    const run = raw.length > 0 ? unwrap(raw) : null;
-    if (!run) {
-      leading = false;
-      return null;
-    }
+    if (raw.length === 0) return null;
+    if (opensCompound(raw[0])) plain = false;
+    folders.forget(raw);
+    const run = unwrap(raw);
+    if (!run) return null;
     const { words, assigns, dumpsEnv, chdir } = run;
     // 서브셸의 cd(`(cd x) && …`)는 뒤 명령의 폴더를 바꾸지 않으므로, 괄호 없이 맨 앞에 온 cd만 따라간다.
     if (raw[0] === 'cd') dir = path.resolve(dir, target(raw[1]));
+    // 같은 셸에 남는 변수 지정(W=경로, export W=경로). 한 명령에만 붙인 지정(W=1 명령)은 남지 않는다.
+    if (plain && words.length === 0) for (const [name, value] of Object.entries(assigns)) folders.assign(name, value);
+    if (plain && words[0] === 'export') for (const word of words.slice(1).filter((w) => ASSIGNMENT.test(w))) folders.assign(word.slice(0, word.indexOf('=')), word.slice(word.indexOf('=') + 1));
+    // 감싸지 않은 cd가 `&&` 목록의 맨 앞이나 `&&` 뒤에 있으면, 뒤의 `&&` 명령은 그 cd가 된 뒤에만 돈다(npxFolders의 at).
     const to = dirTarget(words);
-    leading &&= typeof to === 'string' && raw[0] === words[0];
-    if (to !== undefined) folders.move(to, leading);
+    if (to !== undefined)
+      folders.move(to, plain && raw[0] === words[0] && (prev === null || STARTS_LIST.has(prev)) && !SEPARATE_SHELL.has(then));
+    // env -C는 그 명령이 도는 폴더를 바꾼다. 안쪽 셸(env -C 폴더 sh -c …)도 그 폴더에서 본다.
+    if (chdir !== null) folders.move(chdir, false);
     const assigned = Object.entries(assigns).map(([name, value]) => `${name}=${value}`);
     return (
       (dumpsEnv ? ENV_DUMP_REASON : null) ??
       checkSecretFiles(raw) ??
       checkSecretFiles([...words, ...assigned]) ??
       (words.length > 0
-        ? (checkEnvDump(words) ?? checkShell(words, depth, folders) ?? checkSegment(seg, words, assigns, dir, depth > 0, folders.list(chdir)))
+        ? (checkEnvDump(words) ?? checkShell(words, depth, folders) ?? checkSegment(seg, words, assigns, dir, depth > 0, folders.list()))
         : null)
     );
   };
   for (const piece of pieces(cmd)) {
-    const reason = checkPiece(piece.text);
+    const reason = checkPiece(piece.text, piece.then);
     if (reason) return reason;
     for (const { text } of inner.filter(({ at }) => at >= piece.from && at < piece.to)) {
       const nested = check(text, depth + 1, folders);
       if (nested) return nested;
     }
-    // `&&`가 아닌 구분자 뒤의 명령은 앞의 cd가 실패해도 돈다. 구분자는 바깥 명령에 모두 보이므로 바깥에서만 알린다.
-    if (depth === 0 && piece.then !== '&&') folders.afterBreak();
+    // `||`, `;`, 줄바꿈, `&` 뒤의 명령은 앞의 cd가 실패해도 돈다. 따옴표와 치환 안의 구분자도 끊는 자리로 본다(막히는 쪽으로 틀린다).
+    if (BREAKS.has(piece.then)) folders.afterBreak();
+    prev = piece.then;
   }
   return null;
 }
