@@ -411,6 +411,26 @@ test('APP_MODEL을 적지 않은 모의 모델에서도 APP_MODE를 적지 않�
   assert.match(setup.label, /엔진 방식, 기억 켬, 모의 모델/);
 });
 
+test('APP_MODE=random이면 지시문 방식 판도 턴마다 판정기를 부른 뒤 상대를 불러, 두 방식이 같은 모델을 같은 순서로 부른다', async (t) => {
+  // 기다리는 시간으로 눈가림 비교의 방식이 드러나지 않게 하려는 것이다(이슈 #25). 지시문 방식 판의 판정은 버린다.
+  const ollama = await fakeOllama(t, [OPPONENT, JUDGE]);
+  const setup = await devSetup({ APP_MODE: 'random', APP_MODEL: 'local', APP_LOCAL_URL: ollama.url, APP_LOCAL_MODEL: OPPONENT, APP_LOCAL_JUDGE_MODEL: JUDGE });
+  const { store, call } = serverWith(setup.models, LIMITS, setup.pickMode);
+  const modes: (Mode | undefined)[] = [];
+  for (let i = 0; i < 2 * GAMES; i += 1) {
+    const game = await call<GameView>('POST', '/api/games', START_Q01);
+    assert.equal((await call('POST', `/api/games/${game.data.id}/turns`, { text: '첫 반론입니다.' })).status, 200);
+    modes.push((await store.get(game.data.id))?.mode);
+  }
+  // 반씩 고르면 마흔 판이 모두 한 방식일 확률은 2의 -39제곱(1조분의 2쯤)이다.
+  assert.deepEqual(new Set(modes), new Set(['prompt', 'engine']));
+  const chats = ollama.received.filter((request) => request.path === '/v1/chat/completions');
+  assert.deepEqual(
+    chats.map((request) => request.model),
+    Array.from({ length: 2 * GAMES }, () => [JUDGE, OPPONENT]).flat(),
+  );
+});
+
 test('APP_MODE=random이면 받아들여 판마다 지시문 방식과 엔진 방식을 무작위로 고르고, 첫 줄이 눈가림 비교라고 알린다', async () => {
   const setup = await devSetup({ APP_MODE: 'random' });
   // 반씩 고르면 마흔 판이 모두 한 방식일 확률은 2의 -39제곱(1조분의 2쯤)이다.

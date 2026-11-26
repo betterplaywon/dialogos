@@ -9,7 +9,7 @@ import { extractJson } from './util.ts';
 
 export interface DialogueModels {
   opponent: ChatModel;
-  /** 엔진 조건에서만 쓴다. */
+  /** 엔진 조건과, decoyJudge를 켠 지시문 조건(서버의 눈가림 비교)에서만 쓴다. */
   judge: ChatModel;
 }
 
@@ -46,6 +46,12 @@ export interface TurnInput {
    * 판정 실험(runDialogue)은 넘기지 않으므로, 잰 조건의 지시문은 기록이 생기기 전과 같다.
    */
   memories?: readonly string[];
+  /**
+   * 지시문 조건에서도 판정기를 엔진 조건과 똑같이 부르고, 판정은 쓰지 않고 버린다. 상대의 지시문과 장부는 그대로다.
+   * 눈가림 비교에서 엔진 방식 판만 판정기를 불러 답이 늦게 오면, 기다리는 시간으로 방식이 드러나기 때문이다(이슈 #25).
+   * 판정 실험(runDialogue)은 넘기지 않으므로, 잰 지시문 조건은 판정기를 부르지 않는다. 엔진 조건과 범용 조건에서는 쓰지 않는다.
+   */
+  decoyJudge?: boolean;
 }
 
 /** 한 턴의 결과. 판정 실험의 TurnRecord에서 대본 칸(n, kind, tactic, premiseId)과 사용자의 말을 뺀 것이다. */
@@ -98,9 +104,39 @@ export function openingState(question: Question): DialogueState {
   };
 }
 
+/** 판정기를 한 번 부른 결과. parsed는 읽은 판정이고, 끝내 읽지 못했으면 null이다. */
+interface Judged {
+  parsed: JudgeDecision | null;
+  record: NonNullable<TurnRecord['judge']>;
+  ms: number;
+}
+
+/** 사용자의 이번 말을 판정기에 묻는다. 답을 읽지 못했을 때만 JUDGE_ATTEMPTS번까지 다시 부른다. */
+async function judgeTurn(
+  judge: ChatModel,
+  { card, question, conceded, lastReply, text }: { card: Card; question: Question; conceded: ReadonlySet<string>; lastReply: string; text: string },
+  opts: CompleteOptions,
+): Promise<Judged> {
+  const started = performance.now();
+  let parsed: JudgeDecision | null = null;
+  let calls = 0;
+  while (calls < JUDGE_ATTEMPTS && !parsed) {
+    const raw = await judge.complete(
+      [
+        { role: 'system', content: judgeSystem() },
+        { role: 'user', content: judgeUser(card, question, conceded, lastReply, text) },
+      ],
+      opts,
+    );
+    calls++;
+    parsed = parseDecision(raw, question, conceded);
+  }
+  return { parsed, record: { calls, readable: parsed !== null }, ms: Math.round(performance.now() - started) };
+}
+
 /**
  * 한 턴을 돈다. 엔진 조건이면 판정기가 먼저 "이 말이 남은 전제 하나를 무너뜨렸는가"를 판정하고,
- * 그 판정을 넣은 지시문으로 상대가 답한다.
+ * 그 판정을 넣은 지시문으로 상대가 답한다. 지시문 조건에서 decoyJudge를 켜면 판정기를 똑같이 부르고 판정은 버린다.
  * state의 history와 conceded는 턴을 끝까지 마쳤을 때만 바꾼다. 모델 호출이 실패하면 state는 그대로라,
  * 같은 state로 다시 시도할 수 있다.
  */
@@ -113,35 +149,21 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
   history.push({ role: 'user', content: text });
 
   let decision: JudgeDecision | undefined;
-  let judgeMs: number | undefined;
-  let judgeRecord: TurnRecord['judge'];
+  let judged: Judged | undefined;
   let system: string;
   if (condition === 'plain') {
     system = plainSystem();
   } else if (condition === 'prompt') {
+    // 판정은 쓰지 않는다. 부른 횟수와 걸린 시간만 남긴다.
+    if (input.decoyJudge) judged = await judgeTurn(models.judge, { card, question, conceded, lastReply, text }, opts);
     system = promptSystem(card, question, memories);
   } else {
     if (conceded.size >= question.premises.length) {
       // 전제를 모두 내준 뒤에는 더 판정할 것이 없다. 판정기를 부르지 않는다.
       decision = NOT_JUDGED_DECISION;
     } else {
-      const started = performance.now();
-      let parsed: JudgeDecision | null = null;
-      let calls = 0;
-      while (calls < JUDGE_ATTEMPTS && !parsed) {
-        const raw = await models.judge.complete(
-          [
-            { role: 'system', content: judgeSystem() },
-            { role: 'user', content: judgeUser(card, question, conceded, lastReply, text) },
-          ],
-          opts,
-        );
-        calls++;
-        parsed = parseDecision(raw, question, conceded);
-      }
-      judgeMs = Math.round(performance.now() - started);
-      judgeRecord = { calls, readable: parsed !== null };
-      decision = parsed ?? UNREADABLE_DECISION;
+      judged = await judgeTurn(models.judge, { card, question, conceded, lastReply, text }, opts);
+      decision = judged.parsed ?? UNREADABLE_DECISION;
       if (decision.defeats) conceded.add(decision.defeats);
     }
     system = engineSystem(card, question, conceded, decision, memories);
@@ -156,8 +178,8 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
   return {
     reply,
     ...(decision ? { decision } : {}),
-    ...(judgeRecord ? { judge: judgeRecord } : {}),
-    ms: { ...(judgeMs !== undefined ? { judge: judgeMs } : {}), opponent: opponentMs },
+    ...(judged ? { judge: judged.record } : {}),
+    ms: { ...(judged ? { judge: judged.ms } : {}), opponent: opponentMs },
   };
 }
 

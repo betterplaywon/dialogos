@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadCards, loadQuestions } from '../src/data.ts';
-import { NOT_JUDGED_DECISION, openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
+import { JUDGE_ATTEMPTS, NOT_JUDGED_DECISION, openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
 import { engineSystem, plainSystem, promptSystem } from '../src/prompts.ts';
 import { createMockModel } from '../src/providers/mock.ts';
 import { buildScript, openingStatement } from '../src/script.ts';
@@ -132,6 +132,79 @@ test('한 턴은 상태를 이어받아 판정과 답을 내고, seed가 없어�
   assert.equal(promptOutcome.judge, undefined);
   assert.equal(promptOutcome.ms.judge, undefined);
   assert.equal(promptState.conceded.size, 0);
+});
+
+test('지시문 조건에서 decoyJudge를 켜면 판정기를 엔진 조건과 똑같이 먼저 부르고, 판정은 상대에게도 장부에도 쓰지 않는다', async () => {
+  // 판정기가 전제를 무너뜨렸다고 답해도 지시문 방식의 상대와 장부는 그 판정을 모른다.
+  const verdict = '{"tactic":"argument","defeats":"P2","reason":"시험"}';
+  const memories = ['지킨 입장: 시험 입장. 첫 말: "시험 첫 말"'];
+  const engineJudge = recorder(() => verdict);
+  await runTurn(openingState(question), { question, card, condition: 'engine', models: { opponent: recorder(() => '답입니다.'), judge: engineJudge }, text: '반론입니다.' });
+
+  const order: string[] = [];
+  const state = openingState(question);
+  const judge = recorder(() => (order.push('judge'), verdict));
+  const opponent = recorder(() => (order.push('opponent'), '답입니다.'));
+  const outcome = await runTurn(state, { question, card, condition: 'prompt', models: { opponent, judge }, text: '반론입니다.', memories, decoyJudge: true });
+  assert.deepEqual(order, ['judge', 'opponent']);
+  // 판정기는 엔진 조건의 첫 턴과 같은 글을 받는다. 지난 판의 기록은 판정기에 가지 않는다.
+  assert.deepEqual(judge.calls, engineJudge.calls);
+  assert.equal(outcome.decision, undefined);
+  assert.deepEqual(outcome.judge, { calls: 1, readable: true });
+  assert.ok((outcome.ms.judge ?? -1) >= 0);
+  assert.equal(state.conceded.size, 0);
+
+  // 상대는 decoyJudge가 없을 때와 같은 지시문과 대화를 받는다.
+  const unpaced = recorder(() => '답입니다.');
+  await runTurn(openingState(question), { question, card, condition: 'prompt', models: { opponent: unpaced, judge: recorder(() => verdict) }, text: '반론입니다.', memories });
+  assert.deepEqual(opponent.calls, unpaced.calls);
+  assert.equal(systemOf(opponent.calls[0]), promptSystem(card, question, memories));
+  assert.deepEqual(state.history.slice(2), [
+    { role: 'user', content: '반론입니다.' },
+    { role: 'assistant', content: '답입니다.' },
+  ]);
+});
+
+test('decoyJudge의 판정기도 답을 읽지 못하면 엔진처럼 다시 부르고, 실패하면 턴이 실패해 상태를 바꾸지 않는다', async () => {
+  const unreadable = recorder(() => '판정할 수 없습니다');
+  const outcome = await runTurn(openingState(question), {
+    question,
+    card,
+    condition: 'prompt',
+    models: { opponent: recorder(() => '답입니다.'), judge: unreadable },
+    text: '반론입니다.',
+    decoyJudge: true,
+  });
+  assert.equal(unreadable.calls.length, JUDGE_ATTEMPTS);
+  assert.deepEqual(outcome.judge, { calls: JUDGE_ATTEMPTS, readable: false });
+  assert.deepEqual([outcome.reply, outcome.decision], ['답입니다.', undefined]);
+
+  const state = openingState(question);
+  const before = structuredClone(state.history);
+  const opponent = recorder(() => '답입니다.');
+  const failing: ChatModel = {
+    name: 'failing-judge',
+    async complete() {
+      throw new Error('판정기 실패');
+    },
+  };
+  await assert.rejects(runTurn(state, { question, card, condition: 'prompt', models: { opponent, judge: failing }, text: '반론입니다.', decoyJudge: true }), /판정기 실패/);
+  assert.deepEqual(state.history, before);
+  assert.equal(opponent.calls.length, 0);
+});
+
+test('decoyJudge는 엔진 조건과 범용 조건을 바꾸지 않는다', async () => {
+  for (const condition of ['engine', 'plain'] as const) {
+    const seen = [];
+    for (const decoyJudge of [false, true]) {
+      const judge = recorder(() => '{"tactic":"argument","defeats":"P1","reason":"시험"}');
+      const opponent = recorder(() => '답입니다.');
+      const state = openingState(question);
+      const { ms: _ms, ...outcome } = await runTurn(state, { question, card, condition, models: { opponent, judge }, text: '반론입니다.', decoyJudge });
+      seen.push({ outcome, judge: judge.calls, opponent: opponent.calls, conceded: [...state.conceded] });
+    }
+    assert.deepEqual(seen[0], seen[1], condition);
+  }
 });
 
 test('지난 판의 기록은 상대의 지시문에만 들어가고, 지시문 방식과 엔진 방식에 같은 칸으로 들어간다', async () => {

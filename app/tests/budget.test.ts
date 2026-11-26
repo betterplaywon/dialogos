@@ -196,17 +196,15 @@ test('주제 목록은 실제 모델의 출처면 그렇다고 알린다', async
   assert.equal((await call<TopicsResponse>(app, 'GET', '/api/topics')).data.provider, 'api');
 });
 
-test('실제 모델의 턴은 응답이 알려 준 사용량의 비용을 원장에 더한다. 엔진은 판정기와 상대, 지시문은 상대만이다', async () => {
-  for (const [mode, perTurn] of [
-    ['engine', JUDGE_CALL + OPPONENT_CALL],
-    ['prompt', OPPONENT_CALL],
-  ] as const) {
+test('실제 모델의 턴은 응답이 알려 준 사용량의 비용을 원장에 더한다. 두 방식 모두 판정기와 상대다', async () => {
+  // 지시문 방식은 눈가림 비교의 기다리는 시간을 맞추려고 판정기를 부르고 판정은 버린다. 그 호출의 비용도 원장에 남는다.
+  for (const mode of ['engine', 'prompt'] as const) {
     const { app, store } = setup({ models: steady().source, limits: NO_LIMITS, pickMode: () => mode });
     const game = await start(app);
     for (const n of [1, 2]) {
       assert.equal((await turn(app, game.id, `${n}번째 반론입니다.`)).status, 200);
       // 호출마다 새 모델이라, 앞 턴의 양을 다시 세지 않는다.
-      assert.equal(await store.totalSpendMicroUsd(), n * perTurn, `${mode} ${n}턴`);
+      assert.equal(await store.totalSpendMicroUsd(), n * (JUDGE_CALL + OPPONENT_CALL), `${mode} ${n}턴`);
     }
   }
 });
@@ -329,8 +327,8 @@ test('같은 사용자의 다른 판 턴은 앞 턴이 저장될 때까지 409�
   assert.equal((await turn(app, b1.id, 'b의 반론입니다.', 'b')).status, 200);
   saving.open();
   assert.equal((await pending).status, 200);
-  // 막힌 턴은 모델을 부르지 않았다(a 한 번, b 한 번).
-  assert.equal(sent.requests, 2);
+  // 막힌 턴은 모델을 부르지 않았다(a의 턴 하나, b의 턴 하나. 한 턴은 판정기와 상대 두 번이다).
+  assert.equal(sent.requests, 2 * 2);
 
   // 자리는 비었고, 하루 1턴을 쓴 a의 다음 턴은 429다. 함께 보낸 두 턴 가운데 하나만 저장됐다.
   assert.equal((await turn(app, a2.id, 'a의 다른 판 반론입니다.', 'a')).status, 429);

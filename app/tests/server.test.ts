@@ -192,17 +192,30 @@ test('엔진 방식이면 판정기가 먼저 판정하고, 판정과 장부는 
   for (const hidden of ['"mode"', '"decision"', '"conceded"', '"judge"', '"engine"']) assert.ok(!shown.includes(hidden), hidden);
 });
 
-test('지시문 방식이면 판정기를 부르지 않는다', async () => {
-  const judge = recorder(() => '{}');
-  const opponent = recorder(() => '답입니다.');
+test('지시문 방식(눈가림 비교)이면 판정기를 엔진 방식처럼 먼저 부르고, 판정은 상대에게도 장부에도 쓰지 않는다', async () => {
+  // 판정기가 P1이 무너졌다고 답해도 지시문 방식의 상대는 판정을 모르고, 장부는 비어 있다.
+  const order: string[] = [];
+  const judge = recorder(() => (order.push('judge'), '{"tactic":"argument","defeats":"P1","reason":"시험"}'));
+  const opponent = recorder(() => (order.push('opponent'), '답입니다.'));
   const { app, store } = setup({ models: fixedSource({ opponent, judge }), pickMode: () => 'prompt' });
   const game = await startQ01(app);
-  await call(app, 'POST', `/api/games/${game.id}/turns`, { body: { text: '반론입니다.' } });
-  assert.equal(judge.calls.length, 0);
-  assert.equal(opponent.calls.length, 1);
+  for (const text of ['반론입니다.', '다시 반론입니다.']) {
+    assert.equal((await call(app, 'POST', `/api/games/${game.id}/turns`, { body: { text } })).status, 200);
+  }
+  assert.deepEqual(order, ['judge', 'opponent', 'judge', 'opponent']);
+  assert.ok(opponent.calls.every((messages) => !(messages[0]?.content ?? '').includes('[이번 턴의 판정]')));
   const saved = await store.get(game.id);
   assert.deepEqual(saved?.conceded, []);
-  assert.equal(saved?.turns[0]?.decision, undefined);
+  // 판정은 남기지 않고, 판정기를 부른 횟수와 걸린 시간만 남긴다. 두 방식의 기다리는 시간을 견줄 때 쓴다.
+  assert.deepEqual(
+    saved?.turns.map((turn) => [turn.decision, turn.judge, typeof turn.ms.judge]),
+    [
+      [undefined, { calls: 1, readable: true }, 'number'],
+      [undefined, { calls: 1, readable: true }, 'number'],
+    ],
+  );
+  const view = await call<GameView>(app, 'GET', `/api/games/${game.id}`);
+  for (const hidden of ['"mode"', '"decision"', '"judge"', '"prompt"']) assert.ok(!JSON.stringify(view.data).includes(hidden), hidden);
 });
 
 test('턴마다 말을 넣은 방식과 다시 말한 횟수를 남기고, 판과 목록에서 말로 넣은 턴, 고쳐 보낸 턴, 다시 말한 턴을 센다', async () => {
