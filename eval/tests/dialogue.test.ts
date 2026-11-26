@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadCards, loadQuestions } from '../src/data.ts';
 import { openingState, parseDecision, runDialogue, runTurn } from '../src/dialogue.ts';
+import { engineSystem, plainSystem, promptSystem } from '../src/prompts.ts';
 import { createMockModel } from '../src/providers/mock.ts';
 import { buildScript, openingStatement } from '../src/script.ts';
-import type { Card, ChatMessage, ChatModel, Condition, Dialogue, Question } from '../src/types.ts';
+import type { Card, ChatMessage, ChatModel, Condition, Dialogue, JudgeDecision, Question } from '../src/types.ts';
 
 const cards = loadCards();
 const question = loadQuestions(cards)[0] as Question;
@@ -131,6 +132,45 @@ test('한 턴은 상태를 이어받아 판정과 답을 내고, seed가 없어�
   assert.equal(promptOutcome.judge, undefined);
   assert.equal(promptOutcome.ms.judge, undefined);
   assert.equal(promptState.conceded.size, 0);
+});
+
+test('지난 판의 기록은 상대의 지시문에만 들어가고, 지시문 방식과 엔진 방식에 같은 칸으로 들어간다', async () => {
+  const memories = ['지킨 입장: 시험 입장. 첫 말: "시험 첫 말"', '생각이 바뀜: 반반 → 대체로 "시험 입장"'];
+  const leaks = (messages: ChatMessage[]) => messages.some((m) => m.content.includes('[지난 판의 기록]') || memories.some((memory) => m.content.includes(memory)));
+  const blocks: string[] = [];
+  for (const condition of ['prompt', 'engine'] as const) {
+    const state = openingState(question);
+    const judge = recorder(() => '{"tactic":"repeat","defeats":null,"reason":"시험"}');
+    const opponent = recorder(() => '답입니다.');
+    const outcome = await runTurn(state, { question, card, condition, models: { opponent, judge }, text: '반론입니다.', memories });
+    const [system, ...dialogue] = opponent.calls[0] ?? [];
+    assert.equal(system?.role, 'system');
+    const expected =
+      condition === 'prompt' ? promptSystem(card, question, memories) : engineSystem(card, question, new Set(), outcome.decision as JudgeDecision, memories);
+    assert.equal(system?.content, expected);
+    blocks.push(system?.content.split('\n\n').find((b) => b.startsWith('[지난 판의 기록]\n')) ?? '');
+    // 판정기, 상대에게 넘기는 대화, 다음 턴으로 넘어가는 상태에는 기록이 없다.
+    assert.equal(judge.calls.length, condition === 'engine' ? 1 : 0);
+    assert.ok(!leaks(judge.calls.flat()));
+    assert.ok(!leaks(dialogue));
+    assert.ok(!leaks(state.history));
+  }
+  assert.ok(memories.every((memory) => blocks[0]?.includes(`\n- ${memory}\n`)));
+  assert.equal(blocks[0], blocks[1]);
+
+  // 범용 조건은 입장 카드가 없어 기록을 넣지 않는다.
+  const plainOpponent = recorder(() => '답입니다.');
+  await runTurn(openingState(question), { question, card, condition: 'plain', models: { opponent: plainOpponent, judge: recorder(() => '{}') }, text: '반론입니다.', memories });
+  assert.equal(systemOf(plainOpponent.calls[0]), plainSystem());
+});
+
+test('판정 실험(runDialogue)은 기억을 넘기지 않는다', async () => {
+  for (const condition of ['prompt', 'engine'] as const) {
+    const opponent = recorder(() => '답입니다.');
+    await run(condition, { opponent, judge: recorder(() => '{"tactic":"repeat","defeats":null,"reason":"시험"}') }, { totalTurns: 6 });
+    assert.equal(opponent.calls.length, 6);
+    assert.ok(opponent.calls.every((messages) => !systemOf(messages).includes('[지난 판의 기록]')));
+  }
 });
 
 test('모델 호출이 실패한 턴은 상태를 바꾸지 않아, 같은 상태로 다시 할 수 있다', async () => {

@@ -40,6 +40,12 @@ export interface TurnInput {
   text: string;
   /** 모의 모델이 반복마다 다른 답을 내게 하는 값. 실제 모델에는 보내지 않는다. */
   seed?: string;
+  /**
+   * 같은 주제의 지난 판에서 서버가 넘기는 기록. 지시문 방식과 엔진 방식의 상대 지시문에만 넣고,
+   * 판정기와 대화에는 넣지 않는다. 범용 조건은 입장 카드가 없어 넣지 않는다.
+   * 판정 실험(runDialogue)은 넘기지 않으므로, 잰 조건의 지시문은 기록이 생기기 전과 같다.
+   */
+  memories?: readonly string[];
 }
 
 /** 한 턴의 결과. 판정 실험의 TurnRecord에서 대본 칸(n, kind, tactic, premiseId)과 사용자의 말을 뺀 것이다. */
@@ -99,7 +105,7 @@ export function openingState(question: Question): DialogueState {
  * 같은 state로 다시 시도할 수 있다.
  */
 export async function runTurn(state: DialogueState, input: TurnInput): Promise<TurnOutcome> {
-  const { question, card, condition, models, text } = input;
+  const { question, card, condition, models, text, memories } = input;
   const history: ChatMessage[] = [...state.history];
   const conceded = new Set(state.conceded);
   const opts: CompleteOptions = input.seed === undefined ? {} : { seed: input.seed };
@@ -113,7 +119,7 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
   if (condition === 'plain') {
     system = plainSystem();
   } else if (condition === 'prompt') {
-    system = promptSystem(card, question);
+    system = promptSystem(card, question, memories);
   } else {
     if (conceded.size >= question.premises.length) {
       // 전제를 모두 내준 뒤에는 더 판정할 것이 없다. 판정기를 부르지 않는다.
@@ -138,7 +144,7 @@ export async function runTurn(state: DialogueState, input: TurnInput): Promise<T
       decision = parsed ?? UNREADABLE_DECISION;
       if (decision.defeats) conceded.add(decision.defeats);
     }
-    system = engineSystem(card, question, conceded, decision);
+    system = engineSystem(card, question, conceded, decision, memories);
   }
 
   const started = performance.now();
