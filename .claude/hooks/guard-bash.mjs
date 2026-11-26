@@ -2,6 +2,8 @@
 // PreToolUse(Bash) 가드. 되돌리기 어렵거나 사람 몫인 명령은 막고(종료 코드 2, 이유와 대안은 stderr로 Claude에게 간다),
 // 돈이 드는 실행은 사용자의 확인 창으로 넘긴다(permissionDecision "ask"). 입력(stdin JSON): { tool_input: { command }, cwd }.
 // 위험한 명령의 패턴은 이 파일과 guard-bash.test.mjs에만 적는다(AGENTS.md 4번의 예외). 규칙과 장치의 대응은 CLAUDE.md의 표.
+// 가드는 협조하는 에이전트의 실수를 막는다. 셸 문법을 일부러 비튼 명령까지 모두 막는 보안 경계는 아니어서, 가드 자체는 사람이 머지하고
+// 그 밖의 변경은 독립 검증이 본다(CLAUDE.md '자율 범위'). 그래서 해석하기 어려운 모양은 하나하나 읽기보다 보이면 막는다.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,30 +30,10 @@ function globToRegExp(glob) {
   return new RegExp(`${re}$`);
 }
 
-// 사람이 머지하는 경로: 실험 설계와 측정 도구, 서비스 주제 카드의 글, 돈이 드는 연결, 의존성과 명령, 비밀값 경계, 공개 문서, 규칙과 에이전트 장치.
-const SENSITIVE = [
-  'eval/README.md',
-  'eval/rubric.md',
-  'eval/cards/**',
-  'eval/questions/**',
-  'app/topics/*.json',
-  'eval/src/prompts.ts',
-  'eval/src/script.ts',
-  'eval/src/metrics.ts',
-  'eval/src/labeler.ts',
-  'eval/src/human.ts',
-  'eval/src/providers/api.ts',
-  'package.json',
-  'package-lock.json',
-  '.env.example',
-  '.gitignore',
-  'README.md',
-  'AGENTS.md',
-  'CLAUDE.md',
-  '.claude/**',
-  '.agents/**',
-  '.github/**',
-].map(globToRegExp);
+// 사람이 머지하는 경로: 에이전트가 할 수 있는 일을 정하고 지키는 파일(가드와 훅, 권한과 로컬 설정, CI와 npm 설정, 규칙 문서).
+// 에이전트가 이 파일을 고쳐 스스로 머지하면 자기 제약을 풀 수 있다. 로컬 설정은 훅을 끌 수 있고, npm 설정은 게이트(npm run check)를 돌리는 셸을 바꿀 수 있다.
+// 그 밖의 경로는 독립 검증이 사람 몫의 검토를 더해 본다(CLAUDE.md '자율 범위').
+const SENSITIVE = ['.claude/hooks/**', '.claude/settings*.json', '.github/workflows/**', '.npmrc', 'CLAUDE.md', 'AGENTS.md'].map(globToRegExp);
 
 const COMMIT_SUBJECT = /^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([a-z0-9,./-]+\))?!?: \S/;
 
@@ -113,13 +95,6 @@ function toplevel() {
   return git(['rev-parse', '--show-toplevel'], cwd);
 }
 
-function packageName(dir) {
-  try {
-    return JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).name;
-  } catch {
-    return null;
-  }
-}
 
 function ghJson(args) {
   const out = run('gh', args, { cwd, timeout: 30_000 });
@@ -163,7 +138,7 @@ function optionValue(seg, names) {
 
 function segments(cmd) {
   return cmd
-    .split(/\s*(?:&&|\|\||;|\||\n)\s*/)
+    .split(/\s*(?:&&|\|\||\|&|;|\||\n|(?<![<>&|])&(?![&>]))\s*/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -273,21 +248,60 @@ function checkRm(words) {
   return null;
 }
 
-function checkPrText(words) {
+function checkPrText(words, seg, dir) {
   const title = optionValue(command, ['--title', '-t']);
-  if (words[2] === 'create' && title !== null && !/^\S.* - \S/.test(title))
+  if (['create', 'new'].includes(words[2]) && title !== null && !/^\S.* - \S/.test(title))
     return `PR 제목 형식 위반: "${title}". 형식은 <대단위> - <소규모>(한국어). 어휘는 .github/pull_request_template.md 머리말.`;
-  // 본문은 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체를 본다.
-  let text = command;
-  const bodyFile = optionValue(command, ['--body-file', '-F']);
-  if (bodyFile) {
-    try {
-      text += `\n${readFileSync(path.resolve(cwd, bodyFile), 'utf8')}`;
-    } catch {
-      return `PR 본문 파일을 읽지 못했다: ${bodyFile}`;
+  return ghTextProblem(words, seg, dir);
+}
+
+// gh pr·gh issue에서 글을 올리지 않는 하위 명령. 그 밖(별칭 new, revert, reopen, merge 등)은 모두 글을 올리는 명령으로 보고,
+// 앞에 다른 명령을 묶지 않으며(sequenceProblem) 글 파일까지 읽어 검사한다. 별칭이 늘어도 놓치지 않게 읽기 쪽을 목록으로 둔다.
+const GH_READS = { pr: new Set(['view', 'list', 'ls', 'checks', 'diff', 'status', 'checkout']), issue: new Set(['view', 'list', 'ls', 'status']) };
+const postsText = (gh) => Boolean(GH_READS[gh[1]] && gh[2] && !gh[2].startsWith('-') && !GH_READS[gh[1]].has(gh[2]));
+
+// gh pr·gh issue가 글을 파일에서 읽는 자리: --body-file, -F, 붙여 쓴 -F파일, 묶은 짧은 옵션의 F(-wF 파일), 본문의 시작이 되는
+// 템플릿(-T, --template). 같은 옵션을 두 번 주면 모두 읽는다. gh issue의 -T는 템플릿 이름이라 읽지 못해 막히지만, 이 저장소는 쓰지 않는다.
+function ghBodyFiles(words) {
+  const files = [];
+  for (let i = 3; i < words.length; i += 1) {
+    const w = words[i];
+    if (['--body-file', '-F', '--template', '-T'].includes(w)) files.push(words[(i += 1)] ?? '-');
+    else if (w.startsWith('--body-file=') || w.startsWith('--template=')) files.push(w.slice(w.indexOf('=') + 1));
+    else if (/^-[A-Za-z]*F/.test(w)) {
+      const rest = w.slice(w.indexOf('F') + 1).replace(/^=/, '');
+      files.push(rest || (words[(i += 1)] ?? '-'));
     }
   }
-  return publicTextProblem(text);
+  return files;
+}
+
+// 글을 파일로 넘기면 명령 글자에는 본문이 없다. 그 파일까지 읽어 함께 검사한다. 상대 경로는 앞의 cd까지 따른 폴더(dir)에서 찾는다.
+// 읽지 못하는 파일과 표준 입력(`-`, /dev/의 파일)은 검사할 수 없으므로 막는다.
+function readTextFiles(files, dir) {
+  let text = '';
+  for (const file of files) {
+    if (file === '-' || file.startsWith('/dev/')) return { problem: '글을 표준 입력으로 넘기지 않는다. 가드가 읽을 수 있는 파일로 넘긴다.' };
+    try {
+      text += `\n${readFileSync(path.resolve(dir, file), 'utf8')}`;
+    } catch {
+      return { problem: `글 파일을 읽지 못했다: ${file}` };
+    }
+  }
+  return { text };
+}
+
+// 따옴표 구분자 heredoc으로 넣은 글 전체: $(cat <<'EOF' … EOF\n). 본문은 셸이 글자 그대로 넘긴다.
+const QUOTED_HEREDOC = /\$\(\s*cat\s*<<-?\s*(['"])(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*\n\s*\)/g;
+
+/** gh pr·gh issue의 글. 본문은 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체를 보고, 이 gh 조각이 넘긴 글 파일을 모두 읽어 함께 본다. */
+function ghTextProblem(words, seg, dir) {
+  // 명령 치환($(cat 파일), 백틱)으로 넣은 글은 실행 전에 볼 수 없다. 구분자에 따옴표가 있는 heredoc($(cat <<'EOF' …))만
+  // 글이 명령에 그대로 있어 받는다. 따옴표가 없으면(<<EOF) 본문의 $( )와 백틱이 실행된다. heredoc 뒤나 다음 줄에 이어 붙인
+  // 치환도 있으므로 gh가 있는 줄만이 아니라 명령 전체에서, 따옴표 heredoc을 뺀 나머지를 본다.
+  if (/`|\$\(/.test(command.replace(QUOTED_HEREDOC, ''))) return '글을 명령 치환으로 넣지 않는다. --body-file 파일이나 heredoc으로 넘긴다.';
+  const files = readTextFiles(ghBodyFiles(words), dir);
+  return files.problem ?? publicTextProblem(command + files.text);
 }
 
 const GH_API_VALUE_FLAGS = new Set(['-H', '--header', '-X', '--method', '-f', '-F', '--field', '--raw-field', '--input', '-q', '--jq', '-t', '--template', '--hostname', '--cache', '-p', '--preview']);
@@ -300,29 +314,31 @@ function ghApiEndpoint(words) {
   return '';
 }
 
-function checkGhApi(seg, words) {
+// gh api는 읽기(GET)만 한다. 글은 gh pr·gh issue 명령으로 올리고(가드가 그 글을 검사한다), 그 밖의 쓰기와 설정은 사용자 몫이다.
+// 메서드와 본문 옵션은 붙여 쓰기(-XPOST, -Fk=@파일)와 묶음(-iF)까지 있어 하나하나 읽지 않고, 보이면 막는다.
+const GH_API_WRITE = /^(-[A-Za-z]*[XFf]|--(method|field|raw-field|input)(=|$))/;
+
+function checkGhApi(words) {
   const endpoint = ghApiEndpoint(words);
   if (/^\/?users?(\/|$)/i.test(endpoint)) return '계정 정보를 출력하지 않는다(AGENTS.md 2번).';
-  const explicit = seg.match(/(?:^|\s)(?:-X|--method)[=\s]+([A-Za-z]+)/)?.[1]?.toUpperCase();
-  const hasBody = /(^|\s)(-f|-F|--field|--raw-field|--input)(\s|=)/.test(seg);
-  const method = explicit ?? (hasBody ? 'POST' : 'GET');
-  if (method === 'GET') return null;
-  if (method !== 'POST') return `gh api ${method} 금지. 저장소와 설정 변경은 사용자 몫이다.`;
-  if (/graphql/i.test(endpoint)) {
-    return /\bmutation\b/i.test(seg) ? 'gh api graphql mutation 금지. 머지는 gh pr merge --merge, 설정은 사용자 몫.' : null;
-  }
-  if (/(merge|protection|rulesets|hooks|secrets|keys|collaborators|dispatches|releases|transfer)/i.test(endpoint))
-    return 'gh api로 머지·보호 규칙·비밀·설정을 바꾸지 않는다. 머지는 gh pr merge --merge, 설정은 사용자 몫.';
-  return publicTextProblem(command);
+  if (words.slice(2).some((w) => GH_API_WRITE.test(w)))
+    return 'gh api는 읽기(GET)만 한다. 메서드와 본문 옵션(-X, -F, -f, --input)을 쓰지 않는다. PR·이슈의 글은 gh pr comment·gh issue comment --body-file로 올리고, 그 밖의 쓰기와 설정은 사용자 몫이다.';
+  return null;
 }
 
+// gh pr merge에서 값을 하나 더 받는 옵션. 그 값은 PR을 가리키는 자리 인자가 아니다.
+const MERGE_VALUE_FLAGS = new Set(['--match-head-commit', '-t', '--subject', '-b', '--body', '-F', '--body-file', '-A', '--author-email', '-R', '--repo']);
+
+// 머지할 PR은 글자 그대로의 번호나 PR 주소로만 받는다. 브랜치 이름이나 변수($N), 생략(지금 브랜치)은
+// 가드가 보는 PR과 gh가 머지하는 PR이 달라질 수 있어서 받지 않는다.
 function prNumber(words) {
-  for (const w of words.slice(3)) {
-    const fromUrl = w.match(/\/pull\/(\d+)/);
-    if (fromUrl) return Number(fromUrl[1]);
-    if (/^\d+$/.test(w)) return Number(w);
+  for (let i = 3; i < words.length; i += 1) {
+    const w = words[i];
+    if (MERGE_VALUE_FLAGS.has(w)) i += 1;
+    else if (w.startsWith('-')) continue;
+    else return Number(w.match(/^\d+$/)?.[0] ?? w.match(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)\/?$/)?.[1] ?? NaN) || null;
   }
-  return ghJson(['pr', 'view', '--json', 'number'])?.number ?? null;
+  return null;
 }
 
 function checkPassed(c) {
@@ -331,18 +347,28 @@ function checkPassed(c) {
   return false;
 }
 
+// --flag와 --flag=값(--admin=true)을 같이 본다.
+const hasFlag = (words, ...flags) => words.some((w) => flags.some((f) => w === f || w.startsWith(`${f}=`)));
+
 function checkMerge(words) {
-  if (words.includes('--admin')) return '--admin 머지 금지(보호 규칙 우회).';
-  if (['--squash', '--rebase', '-s', '-r'].some((f) => words.includes(f))) return '이 저장소는 merge commit만 쓴다: gh pr merge <번호> --merge';
+  if (hasFlag(words, '--admin')) return '--admin 머지 금지(보호 규칙 우회).';
+  // 짧은 옵션은 묶어 쓸 수 있다(-sd는 --squash --delete-branch).
+  if (hasFlag(words, '--squash', '--rebase') || words.some((w) => /^-[a-zA-Z]*[sr]/.test(w)))
+    return '이 저장소는 merge commit만 쓴다: gh pr merge <번호> --merge';
   if (!words.includes('--merge') && !words.includes('-m')) return '머지 방식을 밝힌다: gh pr merge <번호> --merge';
+  // 독립 검증의 판정은 한 head에 대한 것이다. 검증 뒤에 커밋이 더해지면 GitHub이 머지를 거절하게 head를 못박는다.
+  if (!words.some((w) => w === '--match-head-commit' || w.startsWith('--match-head-commit=')))
+    return '검증한 head로 머지한다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>';
+  if (words.some((w) => /^-[a-zA-Z]*R/.test(w)) || hasFlag(words, '--repo')) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
   const number = prNumber(words);
-  if (!number) return 'PR 번호를 알 수 없다. gh pr merge <번호> --merge';
+  if (!number) return 'PR 번호를 글자 그대로 적는다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>. 브랜치 이름, 변수, 생략은 받지 않는다.';
   const info = ghJson(['pr', 'view', String(number), '--json', 'files,isDraft,state,statusCheckRollup']);
   if (!info) return `PR #${number} 정보를 읽지 못했다.`;
   if (info.isDraft) return `PR #${number}는 draft다. gh pr ready 뒤에 머지한다.`;
   const hits = (info.files ?? []).map((f) => f.path).filter((p) => SENSITIVE.some((re) => re.test(p)));
   if (hits.length)
     return `PR #${number}는 사람이 머지하는 경로를 건드린다:\n${hits.map((h) => `  ${h}`).join('\n')}\nmerge-ready로 보고하고 멈춘다.`;
+  if ((info.statusCheckRollup ?? []).length === 0) return `PR #${number}에 체크가 하나도 없다. CI가 돈 뒤 머지한다.`;
   const notGreen = (info.statusCheckRollup ?? []).filter((c) => !checkPassed(c));
   if (notGreen.length)
     return `PR #${number}의 체크가 녹색이 아니다: ${notGreen.map((c) => `${c.name ?? c.context}=${c.conclusion || c.state || c.status}`).join(', ')}. 녹색이 된 뒤 머지한다.`;
@@ -407,8 +433,10 @@ function stagedProblem(words) {
 }
 
 // 커밋 전 게이트: npm run check(형식 검사와 검사, 4초 안팎). CI도 같은 명령을 돌린다.
+// 이 저장소인지는 가드 파일이 있는지로 본다. package.json은 에이전트가 머지하는 경로라 그 name으로 보면 에이전트가 게이트를 끌 수 있다.
+// 가드 검사의 임시 저장소에는 가드 파일이 없어 게이트가 돌지 않는다.
 function runCommitGate(top) {
-  if (packageName(top) !== 'dialogos') return null;
+  if (!existsSync(path.join(top, '.claude', 'hooks', 'guard-bash.mjs'))) return null;
   try {
     execFileSync('npm', ['run', 'check'], { cwd: top, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 180_000 });
   } catch (e) {
@@ -484,8 +512,31 @@ function checkPush(words) {
   return patch ? addedLinesProblem(patch, '보낼 커밋의 변경') : null;
 }
 
-function checkSegment(seg, words, assigns) {
-  const [first, second, third] = words;
+// gh의 옵션(-R/--repo, --hostname)이 하위 명령 앞이나 사이에 와도(gh -R x pr merge, gh pr -R x merge) 하위 명령이
+// words[1], words[2]에 오게 옮긴다. 옮긴 옵션은 뒤에 남겨 머지의 --repo 막기가 본다. gh api는 끝점 앞 옵션의 값을 끝점으로
+// 읽지 않게 하위 명령 하나만 찾는다. 하위 명령이 없으면(gh --version) 그대로 둔다.
+// 하위 명령 앞의 다른 옵션(gh -F x api …, gh -X PUT api …)은 그 값을 하위 명령으로 잘못 읽게 하므로 stray로 알린다.
+const GH_VALUE_OPTIONS = new Set(['-R', '--repo', '--hostname']);
+const GH_LEAD_FLAG = /^(-R.+|--repo=.+|--hostname=.+|--help|-h|--version)$/;
+function ghWords(words) {
+  const subs = [];
+  const moved = [];
+  let stray = false;
+  let i = 1;
+  for (; i < words.length && subs.length < (subs[0] === 'api' ? 1 : 2); i += 1) {
+    const w = words[i];
+    if (!w.startsWith('-')) subs.push(w);
+    else if (GH_VALUE_OPTIONS.has(w)) moved.push(w, words[(i += 1)] ?? '');
+    else {
+      moved.push(w);
+      stray ||= !GH_LEAD_FLAG.test(w);
+    }
+  }
+  return { gh: ['gh', ...subs, ...words.slice(i), ...moved], stray: stray && subs.length > 0 };
+}
+
+function checkSegment(seg, words, assigns, dir = cwd, nested = false) {
+  const [first] = words;
   if (first === 'git') {
     const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
     const sub = at === -1 ? undefined : words[at];
@@ -496,10 +547,18 @@ function checkSegment(seg, words, assigns) {
     return checkGitRead(sub, args, seg);
   }
   if (first === 'gh') {
-    if (second === 'pr' && third === 'merge') return checkMerge(words);
-    if (second === 'api') return checkGhApi(seg, words);
-    if (second === 'pr' && ['create', 'edit', 'comment', 'review'].includes(third)) return checkPrText(words);
-    if (second === 'issue') return publicTextProblem(command);
+    const { gh, stray } = ghWords(words);
+    const [, sub, action] = gh;
+    if (stray) return 'gh의 하위 명령 앞에는 -R/--repo/--hostname 말고 옵션을 두지 않는다. 옵션은 하위 명령 뒤에 쓴다.';
+    // 치환, sh -c, eval 안의 명령은 앞 명령과 cd를 모른 채 따로 검사되므로, 글을 올리는 gh(머지 포함)는 거기서 쓰지 않는다.
+    if (nested && postsText(gh)) return '글을 올리는 gh 명령(머지 포함)은 명령 치환, sh -c, eval 안에서 쓰지 않는다. 따로 실행한다.';
+    if (sub === 'pr' && action === 'merge') {
+      // GH_REPO·GH_HOST는 gh가 겨냥하는 저장소를 바꾼다. 가드가 보는 이 저장소의 PR과 머지하는 PR이 달라진다.
+      if (['GH_REPO', 'GH_HOST'].some((name) => Object.hasOwn(assigns, name))) return '다른 저장소를 겨냥하는 GH_REPO·GH_HOST를 붙여 머지하지 않는다.';
+      return checkMerge(gh) ?? ghTextProblem(gh, seg, dir);
+    }
+    if (sub === 'api') return checkGhApi(gh);
+    if (postsText(gh)) return sub === 'pr' ? checkPrText(gh, seg, dir) : ghTextProblem(gh, seg, dir);
     return null;
   }
   if (first === 'rm' || first === 'unlink') return checkRm(words);
@@ -520,11 +579,36 @@ const WRAPPERS = new Map([
   ['stdbuf', { withValue: ['-i', '-o', '-e'] }],
   ['caffeinate', { withValue: ['-t', '-w'] }],
   ['xargs', { withValue: ['-I', '-n', '-P', '-L', '-s', '-E', '-d', '-a'] }],
+  // 셸 예약어 뒤에 오는 명령(`for … do 명령`, `if 명령; then 명령`, `else 명령`)도 같은 규칙으로 본다.
+  ['do', { withValue: [] }],
+  ['then', { withValue: [] }],
+  ['else', { withValue: [] }],
+  ['elif', { withValue: [] }],
+  ['if', { withValue: [] }],
+  ['while', { withValue: [] }],
+  ['until', { withValue: [] }],
+  ['function', { withValue: [], positional: 1 }],
 ]);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-// 한 겹짜리 명령 치환. 안쪽에 괄호가 있는 것(커밋 메시지의 heredoc 등)은 줄마다 조각으로 이미 검사된다.
-const SUBSTITUTION = /\$\(([^()]*)\)/g;
+// 명령 치환 $( … )의 안쪽. 괄호 짝을 세어 겹친 치환($(gh … $(echo)))의 바깥도 찾는다. 안쪽 치환은 따로도 찾고, 바깥을 다시
+// 검사할 때도 찾는다. 짝이 맞지 않는 괄호(글 속의 ":)")가 있으면 덜 찾을 수 있지만, heredoc 본문은 줄마다 조각으로도 검사된다.
+function substitutions(cmd) {
+  const found = [];
+  for (let at = cmd.indexOf('$('); at !== -1; at = cmd.indexOf('$(', at + 2)) {
+    let depth = 0;
+    for (let j = at + 1; j < cmd.length; j += 1) {
+      if (cmd[j] === '(') depth += 1;
+      else if (cmd[j] === ')' && (depth -= 1) === 0) {
+        found.push(cmd.slice(at + 2, j));
+        break;
+      }
+    }
+  }
+  return found;
+}
+// 백틱 명령 치환. 따옴표 안의 백틱(인용한 코드)까지 명령으로 보므로 막힐 수 있다. 그때는 글을 파일로 넘긴다.
+const BACKTICK = /`([^`]*)`/g;
 
 /**
  * 앞에 붙은 환경 변수 지정, 감싸는 실행기, 묶음 기호를 걷어 내고 실제로 실행되는 명령의 단어를 낸다.
@@ -539,6 +623,11 @@ function unwrap(words) {
     const head = rest[0].replace(/^[({!\\]+/, '');
     if (head !== rest[0]) {
       rest = head ? [head, ...rest.slice(1)] : rest.slice(1);
+      continue;
+    }
+    // 함수 정의 `f() { 명령; }`의 이름은 걷어 내고 본문의 명령을 본다.
+    if (/^[\w.-]+\(\)$/.test(head)) {
+      rest = rest.slice(1);
       continue;
     }
     if (ASSIGNMENT.test(head)) {
@@ -597,9 +686,17 @@ const MAKES_COMMITS = new Set(['commit', 'merge', 'cherry-pick', 'revert', 'pull
  */
 function sequenceProblem(cmd) {
   const subs = [];
+  const firsts = [];
   for (const seg of segments(cmd)) {
-    const run = unwrap(tokens(seg));
-    const sub = run ? gitSubcommand(run.words) : null;
+    const raw = tokens(seg);
+    const run = unwrap(raw);
+    const words = run?.words ?? [];
+    // 가드는 실행 전에 한 번만 보므로 앞 명령이 바꾼 글 파일을 볼 수 없다. 폴더만 바꾸는 cd는 글 파일을 그 폴더에서 찾아 따른다.
+    // cd는 조각 맨 앞에 그대로 쓴 것만 받는다. 감싼 cd((cd x && …), { cd x; …; }, if cd x; then …)는 가드가 폴더를 따라가지 못한다.
+    if (words[0] === 'gh' && postsText(ghWords(words).gh) && firsts.some((f) => f !== 'cd'))
+      return 'PR·이슈 글을 올리는 gh 명령 앞에 다른 명령을 묶지 않는다(cd만 된다). 가드는 실행 전에 한 번만 보므로 앞 명령이 바꾼 글 파일을 볼 수 없다.';
+    if (raw[0]) firsts.push(raw[0]);
+    const sub = run ? gitSubcommand(words) : null;
     if (sub) subs.push(sub);
   }
   for (const [i, sub] of subs.entries()) {
@@ -612,27 +709,33 @@ function sequenceProblem(cmd) {
   return null;
 }
 
-function check(cmd, depth = 0) {
+function check(input, depth = 0) {
   if (depth > 4) return null;
+  // 줄 이음(\ 뒤 줄바꿈)은 셸에서 한 명령이다. 잇지 않으면 다음 줄의 옵션(--body-file, --admin)이 다른 조각이 된다.
+  const cmd = input.replace(/\\\n/g, ' ');
   for (const [re, reason] of WHOLE_COMMAND_RULES) if (re.test(cmd)) return reason;
   const sequence = sequenceProblem(cmd);
   if (sequence) return sequence;
-  for (const match of cmd.matchAll(SUBSTITUTION)) {
-    const reason = check(match[1], depth + 1);
+  for (const inner of [...substitutions(cmd), ...[...cmd.matchAll(BACKTICK)].map((m) => m[1])]) {
+    const reason = check(inner, depth + 1);
     if (reason) return reason;
   }
+  // 앞의 cd를 따라간 폴더. 글 파일의 상대 경로를 이 폴더에서 찾는다.
+  let dir = cwd;
   for (const seg of segments(cmd)) {
     const raw = tokens(seg);
     if (raw.length === 0) continue;
     const run = unwrap(raw);
     if (!run) continue;
     const { words, assigns, dumpsEnv } = run;
+    // 서브셸의 cd(`(cd x) && …`)는 뒤 명령의 폴더를 바꾸지 않으므로, 괄호 없이 맨 앞에 온 cd만 따라간다.
+    if (raw[0] === 'cd') dir = path.resolve(dir, (raw[1] ?? process.env.HOME ?? '').replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
     const assigned = Object.entries(assigns).map(([name, value]) => `${name}=${value}`);
     const reason =
       (dumpsEnv ? ENV_DUMP_REASON : null) ??
       checkSecretFiles(raw) ??
       checkSecretFiles([...words, ...assigned]) ??
-      (words.length > 0 ? (checkEnvDump(words) ?? checkShell(words, depth) ?? checkSegment(seg, words, assigns)) : null);
+      (words.length > 0 ? (checkEnvDump(words) ?? checkShell(words, depth) ?? checkSegment(seg, words, assigns, dir, depth > 0)) : null);
     if (reason) return reason;
   }
   return null;
