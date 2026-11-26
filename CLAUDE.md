@@ -62,8 +62,8 @@ PR 리뷰는 독립 검증이 맡습니다(2026-11-26 사용자 결정). 사람�
 | `eval/README.md`, `eval/rubric.md`, `eval/cards/`, `eval/questions/` | 실험 설계, 통과 기준, 채점 기준, 질문, 대본이 바뀌었다면 그 사용자 결정이 PR 1번에 있는지 |
 | `app/topics/*.json` | 주제 카드의 글(상대의 전제와 타당한 반론)이 바뀌었다면 그 사용자 결정이 있는지 |
 | `eval/src/`의 `prompts.ts`, `script.ts`, `metrics.ts`, `labeler.ts`, `human.ts` | 조건과 대본, 측정, 통과 판정 계산이 결정 없이 바뀌지 않았는지, 고정해 둔 검사(지시문 해시 등)를 결정 없이 고치지 않았는지 |
-| `eval/src/providers/api.ts`, `eval/src/run.ts`, `eval/src/label.ts`, `app/server/models.ts` | 키를 출력하거나 남기지 않는지, 확인(`--confirm`) 없이 돈이 드는 호출로 가는 길이나 이 컴퓨터 밖의 모델로 가는 길이 새로 생기지 않았는지 |
-| `package.json`, `package-lock.json` | 새 의존성과 설치 스크립트, `check`와 `test`가 검사를 빼거나 약하게 하지 않았는지, 스크립트에 `--provider api`나 `--confirm`을 새로 넣지 않았는지(가드의 확인 창은 명령 글자만 본다) |
+| `eval/src/providers/api.ts`, `eval/src/runio.ts`, `eval/src/run.ts`, `eval/src/label.ts`, `app/server/models.ts` | 키를 출력하거나 남기지 않는지, 확인(`--confirm`) 없이 돈이 드는 호출로 가는 길이나 이 컴퓨터 밖의 모델로 가는 길이 새로 생기지 않았는지 |
+| `package.json`, `package-lock.json` | 새 의존성과 설치 스크립트, `check`와 `test`가 검사를 빼거나 약하게 하지 않았는지, 스크립트에 `--provider api`나 `--confirm`을 새로 넣지 않았는지(가드의 확인 창은 명령 글자만 본다), `.env`를 읽는 위치(`--env-file-if-exists`)를 바꾸지 않았는지 |
 | `.env.example`, `.gitignore` | `.env`, `runs/`, `notes/`가 계속 커밋되지 않는지 |
 | `README.md` | 공개 문서: 수치가 실측인지, 사용자가 쓸 과정 글의 본문을 대신 쓰지 않았는지 |
 | `.claude/`(아래 표 밖), `.agents/`, `.github/`(아래 표 밖) | 검증과 규칙을 약하게 하지 않았는지 |
