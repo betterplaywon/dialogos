@@ -74,6 +74,18 @@ function git(args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+/** 자식 프로세스를 SIGTERM으로 끄고, 5초 안에 끝나지 않으면 SIGKILL로 끝낸다. 이미 끝났으면 끄지 않는다. ended(끝남을 알리는 약속)를 돌려준다. */
+async function endChild(child, ended) {
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGTERM');
+    let timer;
+    const done = await Promise.race([ended, new Promise((resolve) => (timer = setTimeout(resolve, 5_000, null)))]);
+    clearTimeout(timer);
+    if (!done) child.kill('SIGKILL');
+  }
+  return ended;
+}
+
 /** 단계가 실패했다는 표시. 이유는 이미 단계 기록에 들어 있다. */
 export class StepFailed extends Error {}
 
@@ -89,7 +101,7 @@ export function createHarness(feature, title, options) {
   const startedAt = new Date();
   let commands = 0;
   const file = (name) => path.join(dir, name);
-  /** 여정이 띄우거나 만든 것(앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
+  /** 여정이 띄우거나 만든 것(eval 명령, 앱, Chrome, Chrome의 임시 사용자 폴더)을 닫고 지우는 함수. 여정이 어떻게 끝나든 close()가 거꾸로 차례대로 부른다. */
   const closers = [];
   /** 진행 중이거나 끝난 닫기. 한 번 시작하면 다시 부른 쪽도 같은 닫기가 끝나기를 기다린다. */
   let closing = null;
@@ -106,24 +118,39 @@ export function createHarness(feature, title, options) {
     runsDir: VERIFY_RUNS,
     rel: path.relative(ROOT, dir),
 
-    /** eval 명령을 npm 스크립트와 같은 진입점으로 띄운다. 다른 점은 .env를 읽지 않는다는 것 하나다. 출력은 cmd-NN-<명령>.txt에 남긴다. */
-    cli(script, args) {
+    /**
+     * eval 명령을 npm 스크립트와 같은 진입점으로 띄운다. 다른 점은 .env를 읽지 않는다는 것 하나다. 출력은 cmd-NN-<명령>.txt에 남긴다.
+     * 명령이 도는 동안에도 입구 스크립트가 종료 신호를 받도록 기다림은 비동기다. 닫기(close())가 오면 돌던 명령도 끈다.
+     */
+    async cli(script, args) {
+      refuseIfClosing('명령');
       commands += 1;
-      const started = Date.now();
-      const r = spawnSync(process.execPath, ['--import', 'tsx', path.join('eval', 'src', `${script}.ts`), ...args], { cwd: ROOT, env, encoding: 'utf8' });
       const log = `cmd-${pad(commands)}-${script}.txt`;
+      const started = Date.now();
+      const child = spawn(process.execPath, ['--import', 'tsx', path.join('eval', 'src', `${script}.ts`), ...args], {
+        cwd: ROOT,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '';
+      let err = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk) => (out += chunk));
+      child.stderr.setEncoding('utf8').on('data', (chunk) => (err += chunk));
+      const ended = new Promise((resolve) => child.once('close', (code, signal) => resolve({ code, signal })));
+      closers.push(() => endChild(child, ended));
+      const { code, signal } = await ended;
       const lines = [
         `$ npm run eval:${script} -- ${args.join(' ')}`,
         '(.env를 읽지 않고, 모델 연결 정보를 지운 환경에서 실행)',
-        `종료 코드 ${r.status} · ${Date.now() - started}ms`,
+        `종료 코드 ${code}, 신호 ${signal ?? '없음'} · ${Date.now() - started}ms`,
         '',
         '--- stdout ---',
-        r.stdout ?? '',
+        out,
         '--- stderr ---',
-        r.stderr ?? '',
+        err,
       ];
       writeFileSync(file(log), lines.join('\n'));
-      return { code: r.status, out: r.stdout ?? '', err: r.stderr ?? '', log };
+      return { code, out, err, log };
     },
 
     /**
@@ -162,18 +189,11 @@ export function createHarness(feature, title, options) {
         writeFileSync(file(log), lines.join('\n'));
       };
 
-      /** SIGTERM으로 끄고, 5초 안에 끝나지 않으면 SIGKILL로 끝낸다. 여러 번 불러도 한 번만 끈다. */
+      /** 앱을 끄고(endChild) 출력을 남긴다. 여러 번 불러도 한 번만 끈다. */
       const stop = () =>
         (ending ??= (async () => {
           const running = child.exitCode === null && child.signalCode === null;
-          if (running) {
-            child.kill('SIGTERM');
-            let timer;
-            const done = await Promise.race([exited, new Promise((resolve) => (timer = setTimeout(resolve, 5_000, null)))]);
-            clearTimeout(timer);
-            if (!done) child.kill('SIGKILL');
-          }
-          const { code, signal } = await exited;
+          const { code, signal } = await endChild(child, exited);
           writeLog(`${running ? '여정이 끔' : '스스로 끝남'}(종료 코드 ${code}, 신호 ${signal ?? '없음'})`);
         })());
       closers.push(stop);

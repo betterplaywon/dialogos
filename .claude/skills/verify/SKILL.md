@@ -63,17 +63,17 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `voice-screen`: 페이지보다 먼저 도는 스크립트로 브라우저의 음성 인식과 음성 합성을 가짜로 바꾸고 한 판을 한다. 음성 켜기 → 말하기 → 다시 말하기(바꿈) → 손댄 뒤 말하기(붙임) → 보내기(판 파일의 input, redone과 상대의 답 읽기) → 듣는 중에 끄기(붙임) → 보내기 → VS Code 꼴 User-Agent의 안내. 이 Mac에서 단계 합계 약 9초. [features/voice-screen.md](features/voice-screen.md)
 - `memory`: 같은 주제로 두 판을 한다. 첫 판(세 턴) → 기록 남기기(판 파일에 기억) → 목록의 내 기억 → 시작 화면의 지난 기록 → 둘째 판 첫 턴의 답 아래 넘긴 기록 3개(판 파일의 턴 `memory_ids`) → 그 자리에서 고치기 → 지우기 → 다음 턴에 넘긴 기록(지운 기억 없음, 고친 글) → 새로 고쳐 이어 열기 → 목록의 내 기억 → 판 파일의 기억 표와 턴. 이 Mac에서 단계 합계 약 10초. [features/memory.md](features/memory.md)
 
-화면 여정은 실패하거나 Ctrl+C(두 번 눌러도), Ctrl+\, 종료 신호, 터미널 닫기, 잡히지 않은 오류로 멈춰도 띄운 앱과 Chrome을 닫고 임시 사용자 폴더를 지운 뒤에 끝난다. 출력을 받는 쪽이 먼저 끝나도(`| head`) 여정은 끝까지 돌고 결과는 `steps.md`에 남는다. 닫는 데 앱과 Chrome마다 많아야 5초 걸린다. 결과를 적기 전에 신호로 멈추면 결과는 FAIL, 종료 코드는 130이고, 적은 뒤에 온 신호는 결과를 바꾸지 않는다. 잡히지 않은 오류는 결과를 적은 뒤에 와도 `steps.md`를 FAIL로 고쳐 적고 종료 코드 1로 끝난다.
+여정은 실패하거나 Ctrl+C(두 번 눌러도), Ctrl+\, 종료 신호, 터미널 닫기, 잡히지 않은 오류로 멈춰도 띄운 것을 끈 뒤에 끝난다. 화면 여정은 앱과 Chrome을 닫고 임시 사용자 폴더를 지우고, 판정 실험 여정(`flow`, `plan-gate`)은 돌던 eval 명령을 끈다. 출력을 받는 쪽이 먼저 끝나도(`| head`) 여정은 끝까지 돌고 결과는 `steps.md`에 남는다. 닫는 데 명령, 앱, Chrome마다 많아야 5초 걸린다. 결과를 적기 전에 신호로 멈추면 eval 명령이 도는 중이었어도 결과는 FAIL, 종료 코드는 130이고, 적은 뒤에 온 신호는 결과를 바꾸지 않는다. 잡히지 않은 오류는 결과를 적은 뒤에 와도 `steps.md`를 FAIL로 고쳐 적고 종료 코드 1로 끝난다.
 
 맵에 없는 것을 확인하려면 여정을 하나 더 쓴다. `scripts/journeys/<id>.mjs`가 `export const title`과 `export async function run(h)`를 내보내면 입구 스크립트가 그 id를 바로 받는다. `h`는 `scripts/lib.mjs`의 하네스다.
 
-- `h.cli(명령, 인자)`: eval 명령을 안전한 환경으로 띄우고 출력을 `cmd-NN-<명령>.txt`에 남긴다. `h.ok(결과)`는 종료 코드 0을 확인한다.
+- `await h.cli(명령, 인자)`: eval 명령을 안전한 환경으로 띄우고, 끝나면 출력을 `cmd-NN-<명령>.txt`에 남긴다. 기다리는 동안에도 입구 스크립트가 종료 신호를 받는다. `h.ok(결과)`는 종료 코드 0을 확인한다.
 - `h.step(id, 설명, async () => '관찰')`: 사용자 행동 하나가 단계 하나다.
 - `h.jsonl`, `h.json`, `h.read`, `h.exists`, `h.save`: 증거 폴더(= 이 검증의 실행 폴더)의 파일을 읽고 쓴다.
 - `h.runId`, `h.dir`, `h.runsDir`, `h.options`. 프로젝트 코드는 `evalModule('util')`처럼 불러 쓴다.
 - `h.app()`: 앱을 빈 포트 둘에 모의 모델로 띄우고, 화면을 거친 `/api/topics`가 답할 때까지 기다린다. `{ url, api, web, dbPath, db, log }`를 돌려준다. 판 파일은 증거 폴더의 `app-NN.sqlite`, 출력은 닫을 때 `cmd-NN-app.txt`에 남는다.
 - `h.browser()`: 창 없는 Chrome을 띄워 페이지 하나를 돌려준다(`scripts/browser.mjs`). `goto`, `reload`, `press(단추 글)`, `click(요소 식, 설명)`(같은 글의 단추가 여럿일 때 자리를 좁혀 누른다), `choose(라디오 name, 몇째)`, `type(selector, 글)`(끝에 이어 친다), `text`, `texts`, `value`, `hasButton`, `waitFor(식, 설명)`, `shot(이름)`, `beforeLoad(스크립트)`, `send(CDP 메서드)`, `errors`(페이지의 예외와 console.error). 누르기는 요소가 나타나기를 5초까지 기다린 뒤 그 자리를 마우스로 누르고, 쓰기는 글자 입력으로 보낸다.
-- 여정이 띄운 앱과 Chrome은 입구 스크립트가 여정 뒤에 닫는다(`h.close()`). 여정이 따로 닫을 필요는 없다.
+- 여정이 띄운 eval 명령과 앱, Chrome은 입구 스크립트가 여정 뒤에 닫는다(`h.close()`). 여정이 따로 닫을 필요는 없다.
 
 여정을 추가하면 `features/`에 기능 파일을 같이 추가한다.
 
