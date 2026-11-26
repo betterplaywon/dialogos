@@ -248,6 +248,114 @@ function checkRm(words) {
   return null;
 }
 
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * dir에서 위로 올라가며 찾은 가장 가까운 package.json의 의존성.
+ * npx는 조상 폴더의 node_modules/.bin까지 찾지만, 가드는 그보다 좁게 가장 가까운 package.json에 적혀 깔린 것만 둔다.
+ * declared는 package.json에 적힌 패키지, installed는 그 가운데 node_modules에 깔린 패키지, bins는 깔린 패키지가 내는 명령 이름이다.
+ */
+function projectDeps(dir) {
+  for (let at = dir; ; at = path.dirname(at)) {
+    const manifest = readJson(path.join(at, 'package.json'));
+    if (manifest) {
+      const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies });
+      const installed = new Set();
+      const bins = new Set();
+      for (const name of declared) {
+        const dep = readJson(path.join(at, 'node_modules', name, 'package.json'));
+        if (!dep) continue;
+        installed.add(name);
+        if (typeof dep.bin === 'string') bins.add(name.split('/').pop());
+        else if (dep.bin && typeof dep.bin === 'object') for (const bin of Object.keys(dep.bin)) bins.add(bin);
+      }
+      return { declared: new Set(declared), installed, bins };
+    }
+    if (path.dirname(at) === at) return { declared: new Set(), installed: new Set(), bins: new Set() };
+  }
+}
+
+// npx(npm exec)의 옵션 가운데 값을 하나 더 받는 것. --prefix(-C)는 npx가 로컬 명령을 찾는 폴더를 바꾼다.
+const NPX_VALUE_FLAGS = new Set(['-p', '--package', '-c', '--call', '-w', '--workspace', '-C', '--prefix', '--registry', '--cache', '--userconfig']);
+// 패키지 이름(@범위/이름 또는 이름)과, 붙어 있으면 그 뒤의 @버전.
+const PACKAGE_SPEC = /^((?:@[^/@\s]+\/)?[^/@\s]+)(@.*)?$/;
+
+/**
+ * npm 명령이 npm exec(npm x)면 exec 뒤의 단어와, exec 앞에 준 --prefix(-C) 값을 낸다. 아니면 null이다.
+ * 하위 명령 앞의 옵션이 값을 받는지는 옵션마다 달라(--loglevel silent, --global) 알 수 없다. 옵션 바로 뒤의 단어는 값일 수도
+ * 하위 명령일 수도 있으므로, 옵션 뒤가 아닌 단어(확실한 하위 명령)가 나오기 전에 exec나 x가 보이면 npm exec로 본다.
+ */
+function npmExec(words) {
+  let prefix = null;
+  for (let i = 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === '--') return null;
+    if (word.startsWith('-')) {
+      const [flag, inline] = word.split(/=(.*)/s);
+      if (flag === '--prefix' || flag === '-C') prefix = inline ?? words[i + 1] ?? null;
+      continue;
+    }
+    if (word === 'exec' || word === 'x') return { args: words.slice(i + 1), prefix };
+    const before = words[i - 1];
+    if (!before.startsWith('-') || before.includes('=')) return null;
+  }
+  return null;
+}
+
+/**
+ * npx와 npm exec는 로컬에 없는 패키지를 묻지 않고 받아 실행한다(받은 코드 바로 실행, AGENTS.md 4번).
+ * 실행할 명령과 -p로 고른 패키지가 모두 package.json의 의존성으로 깔린 것일 때만 둔다. 버전을 붙이면 다른 버전을 받을 수 있어 막는다.
+ * -p의 값은 npx가 패키지 이름으로 풀므로 패키지 이름으로만 맞춰 본다(-p tsc는 typescript가 아니라 tsc라는 패키지다).
+ * args는 npx(또는 npm exec) 뒤의 단어다. dirs는 명령이 돌 수 있는 폴더들이고(npxDirs), 모든 폴더에서 깔린 것이어야 둔다.
+ * prefix는 npm exec 앞에 준 --prefix 값이다.
+ */
+function checkNpx(args, dirs, prefix = null) {
+  const named = [];
+  const prefixes = prefix === null ? [] : [prefix];
+  for (let i = 0; i < args.length; i += 1) {
+    const word = args[i];
+    if (word === '--') {
+      if (args[i + 1] !== undefined) named.push({ name: args[i + 1], asPackage: false });
+      break;
+    }
+    if (!word.startsWith('-')) {
+      named.push({ name: word, asPackage: false });
+      break;
+    }
+    const [flag, inline] = word.split(/=(.*)/s);
+    if (flag === '-y' || flag === '--yes') return '설치 확인 없이 패키지를 받아 실행하지 않는다. 저장소의 의존성은 npm 스크립트로 쓴다.';
+    if (flag === '-c' || flag === '--call') return 'npx -c(--call)로 명령을 돌리지 않는다. 저장소의 의존성은 npm 스크립트나 npx <명령>으로 쓴다.';
+    if (NPX_VALUE_FLAGS.has(flag)) {
+      const value = inline ?? args[(i += 1)];
+      if (value === undefined) continue;
+      if (flag === '-p' || flag === '--package') named.push({ name: value, asPackage: true });
+      if (flag === '--prefix' || flag === '-C') prefixes.push(value);
+    }
+  }
+  if (named.length === 0) return null;
+  const places = prefixes.length === 0 ? dirs : dirs.flatMap((dir) => prefixes.map((p) => path.resolve(dir, p)));
+  for (const place of places) {
+    const { declared, installed, bins } = projectDeps(place);
+    for (const { name, asPackage } of named) {
+      const spec = PACKAGE_SPEC.exec(name);
+      if (!spec || spec[2] !== undefined)
+        return `npx에 경로나 버전을 붙여 부르지 않는다(${name}). 받은 코드가 실행될 수 있다. 저장소의 의존성은 npm 스크립트나 npx <명령>으로 쓴다.`;
+      if (installed.has(spec[1]) || (!asPackage && bins.has(spec[1]))) continue;
+      // 적혀 있지만 깔리지 않은 의존성이 있으면, 명령 이름(tsc)이 그 의존성(typescript)의 것일 수 있다.
+      if (installed.size < declared.size)
+        return `${name}: 이 폴더(${place})의 의존성이 다 깔려 있지 않다. 먼저 npm ci로 설치한다. 그 뒤에도 막히면 package.json에 없는 패키지다.`;
+      return `프로젝트의 의존성(package.json)에 없는 패키지를 npx로 받거나 실행하지 않는다(${name}). 저장소의 검사는 npm run check다. 새 도구가 필요하면 사용자에게 묻는다.`;
+    }
+  }
+  return null;
+}
+
 function checkPrText(words, seg, dir) {
   const title = optionValue(command, ['--title', '-t']);
   if (['create', 'new'].includes(words[2]) && title !== null && !/^\S.* - \S/.test(title))
@@ -535,7 +643,11 @@ function ghWords(words) {
   return { gh: ['gh', ...subs, ...words.slice(i), ...moved], stray: stray && subs.length > 0 };
 }
 
-function checkSegment(seg, words, assigns, dir = cwd, nested = false) {
+/**
+ * 한 조각의 명령을 본다. dir은 맨 앞의 cd를 따라간 폴더(글 파일의 상대 경로를 찾는 곳)다.
+ * npxDirs는 npx가 돌 수 있는 폴더들이다. 서브셸과 묶음 안의 cd, env -C까지 따라간 폴더를 더해, 그 모두에서 의존성인 것만 둔다.
+ */
+function checkSegment(seg, words, assigns, dir = cwd, nested = false, npxDirs = [dir]) {
   const [first] = words;
   if (first === 'git') {
     const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
@@ -562,6 +674,14 @@ function checkSegment(seg, words, assigns, dir = cwd, nested = false) {
     return null;
   }
   if (first === 'rm' || first === 'unlink') return checkRm(words);
+  if (first === 'npx') return checkNpx(words.slice(1), npxDirs);
+  if (first === 'npm') {
+    const exec = npmExec(words);
+    if (exec) return checkNpx(exec.args, npxDirs, exec.prefix);
+  }
+  // npx와 같은 일을 하는 다른 패키지 관리자의 명령. 이 저장소는 npm만 쓴다.
+  if (first === 'pnpx' || first === 'bunx' || (['pnpm', 'yarn', 'bun'].includes(first) && words.slice(1).some((w) => w === 'dlx' || w === 'x')))
+    return '다른 패키지 관리자로 패키지를 받아 실행하지 않는다(pnpx, pnpm dlx, yarn dlx, bunx). 이 저장소는 npm만 쓴다. 의존성의 명령은 npm 스크립트나 npx <명령>으로 쓴다.';
   return null;
 }
 
@@ -614,11 +734,13 @@ const BACKTICK = /`([^`]*)`/g;
  * 앞에 붙은 환경 변수 지정, 감싸는 실행기, 묶음 기호를 걷어 내고 실제로 실행되는 명령의 단어를 낸다.
  * 경로를 붙여 부른 명령(/usr/bin/git)은 이름만 남기고, 묶음을 닫는 기호와 짝이 안 맞는 따옴표는 마지막 단어에서 뗀다.
  * 실행하지 않는 형태(command -v)는 null. env 뒤에 명령이 없으면 환경 변수를 모두 출력하므로 dumpsEnv가 켜진다.
+ * chdir은 env -C(--chdir)로 바꾼 폴더다.
  */
 function unwrap(words) {
   let rest = words;
   const assigns = Object.create(null);
   let wrapper = null;
+  let chdir = null;
   for (let round = 0; round < 32 && rest.length > 0; round += 1) {
     const head = rest[0].replace(/^[({!\\]+/, '');
     if (head !== rest[0]) {
@@ -646,6 +768,9 @@ function unwrap(words) {
     let i = 1;
     while (i < rest.length && rest[i].startsWith('-') && rest[i] !== '--') {
       if (name === 'command' && /^-[a-zA-Z]*[vV]/.test(rest[i])) return null;
+      // env -C(--chdir)는 뒤의 명령이 도는 폴더를 바꾼다.
+      if (name === 'env' && (rest[i] === '-C' || rest[i] === '--chdir')) chdir = rest[i + 1] ?? null;
+      if (name === 'env' && rest[i].startsWith('--chdir=')) chdir = rest[i].slice('--chdir='.length);
       if (spec.withValue.includes(rest[i])) i += 1;
       i += 1;
     }
@@ -657,7 +782,7 @@ function unwrap(words) {
     const last = rest[rest.length - 1].replace(/["')}]+$/, '');
     rest = last ? [...rest.slice(0, -1), last] : rest.slice(0, -1);
   }
-  return { words: rest, assigns, dumpsEnv: rest.length === 0 && wrapper === 'env' };
+  return { words: rest, assigns, dumpsEnv: rest.length === 0 && wrapper === 'env', chdir };
 }
 
 /** sh -c와 eval이 실행하는 명령도 같은 규칙으로 본다. */
@@ -722,20 +847,26 @@ function check(input, depth = 0) {
   }
   // 앞의 cd를 따라간 폴더. 글 파일의 상대 경로를 이 폴더에서 찾는다.
   let dir = cwd;
+  // 서브셸과 묶음 안의 cd까지 따라간 폴더. npx는 이 폴더와 dir 모두에서 의존성이어야 둔다.
+  let anyDir = cwd;
+  const home = process.env.HOME ?? '';
+  const target = (to) => (to ?? home).replace(/^~(?=\/|$)/, home || '~');
   for (const seg of segments(cmd)) {
     const raw = tokens(seg);
     if (raw.length === 0) continue;
     const run = unwrap(raw);
     if (!run) continue;
-    const { words, assigns, dumpsEnv } = run;
+    const { words, assigns, dumpsEnv, chdir } = run;
     // 서브셸의 cd(`(cd x) && …`)는 뒤 명령의 폴더를 바꾸지 않으므로, 괄호 없이 맨 앞에 온 cd만 따라간다.
-    if (raw[0] === 'cd') dir = path.resolve(dir, (raw[1] ?? process.env.HOME ?? '').replace(/^~(?=\/|$)/, process.env.HOME ?? '~'));
+    if (raw[0] === 'cd') dir = path.resolve(dir, target(raw[1]));
+    if (words[0] === 'cd') anyDir = path.resolve(anyDir, target(words[1]));
+    const npxDirs = [...new Set([dir, anyDir, ...(chdir ? [path.resolve(dir, chdir), path.resolve(anyDir, chdir)] : [])])];
     const assigned = Object.entries(assigns).map(([name, value]) => `${name}=${value}`);
     const reason =
       (dumpsEnv ? ENV_DUMP_REASON : null) ??
       checkSecretFiles(raw) ??
       checkSecretFiles([...words, ...assigned]) ??
-      (words.length > 0 ? (checkEnvDump(words) ?? checkShell(words, depth) ?? checkSegment(seg, words, assigns, dir, depth > 0)) : null);
+      (words.length > 0 ? (checkEnvDump(words) ?? checkShell(words, depth) ?? checkSegment(seg, words, assigns, dir, depth > 0, npxDirs)) : null);
     if (reason) return reason;
   }
   return null;
