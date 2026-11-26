@@ -51,12 +51,15 @@ for (const stream of [process.stdout, process.stderr]) stream.on('error', () => 
 
 // Ctrl+C, Ctrl+\, 끄기, 터미널 닫기, 잡히지 않은 오류로 멈춰도 여정이 띄운 앱과 Chrome을 닫은 뒤에 끝낸다.
 // 닫기는 한 번만 돌고(h.close()가 같은 닫기를 돌려준다), 닫는 동안 온 신호와 오류는 기다리라고만 알린다.
-// 그것으로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 앱과 Chrome마다 많아야 5초 기다린다.
+// 그것으로 바로 끝내면 닫기가 끊겨 앱과 Chrome, 임시 폴더가 남는다. 닫기는 eval 명령, 앱, Chrome마다 많아야 5초 기다린다.
 // SIGKILL처럼 잡을 수 없는 신호로 끝나면 닫지 못한다(SKILL.md의 '아직 못 하는 것').
-/** 여정의 결과를 steps.md에 적었으면 true. */
-let finished = false;
+/** steps.md에 적은 결과의 줄(`VERIFY PASS/FAIL <기능> — <steps.md>`). 결과를 적기 전에는 null. */
+let verdict = null;
 let stopping = null;
-/** failure가 있으면 결과를 FAIL로 적고(이미 적었으면 덮어쓴다) 그 종료 코드로, 없으면 적어 둔 결과의 종료 코드로 끝낸다. */
+/**
+ * failure가 있으면 결과를 FAIL로 적고(이미 적었으면 덮어쓴다) 그 종료 코드로, 없으면 적어 둔 결과의 종료 코드로 끝낸다.
+ * 어느 쪽이든 닫은 뒤에 결과 줄을 찍는다. 결과를 적은 뒤에 온 신호면 같은 줄을 다시 찍어, 처리기의 줄 대신 결과 줄이 마지막에 온다.
+ */
 function stop(reason, failure) {
   if (stopping) {
     console.log(`\n${reason}: 띄운 앱과 Chrome을 닫는 중이다. 끝날 때까지 기다린다.`);
@@ -67,15 +70,17 @@ function stop(reason, failure) {
   void h
     .close()
     .then(() => {
-      if (!failure) return;
-      h.finish(false, failure.error ?? `${reason}로 도중에 멈췄다.`);
-      console.log(`VERIFY FAIL ${feature} — ${h.rel}/steps.md`);
+      if (failure) {
+        h.finish(false, failure.error ?? `${reason}로 도중에 멈췄다.`);
+        verdict = `VERIFY FAIL ${feature} — ${h.rel}/steps.md`;
+      }
+      console.log(verdict);
     })
     .finally(() => process.exit(failure ? failure.exitCode : (process.exitCode ?? 0)));
 }
 // 결과를 적은 뒤에 온 신호는 결과를 바꾸지 않는다.
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']) {
-  process.on(signal, () => stop(signal, finished ? null : { exitCode: 130 }));
+  process.on(signal, () => stop(signal, verdict ? null : { exitCode: 130 }));
 }
 // 이벤트에서 던진 오류는 아래 여정의 try에 잡히지 않는다. 언제 오든 이 실행은 실패다.
 process.on('uncaughtException', (error) => {
@@ -95,8 +100,8 @@ await h.close();
 if (!stopping) {
   const passed = error === undefined;
   h.finish(passed, error instanceof StepFailed ? undefined : error);
-  finished = true;
+  verdict = `${passed ? 'VERIFY PASS' : 'VERIFY FAIL'} ${feature} — ${h.rel}/steps.md`;
   if (error && !(error instanceof StepFailed)) console.error(error);
-  console.log(`${passed ? 'VERIFY PASS' : 'VERIFY FAIL'} ${feature} — ${h.rel}/steps.md`);
+  console.log(verdict);
   process.exitCode = passed ? 0 : 1;
 }
