@@ -170,7 +170,8 @@ function fakeGh(t) {
   let n = 0;
   return (command, pr = {}) => {
     const json = path.join(dir, `pr-${(n += 1)}.json`);
-    const info = { files: [{ path: 'app/README.md' }], isDraft: false, state: 'OPEN', statusCheckRollup: [{ name: 'verify', conclusion: 'SUCCESS' }], ...pr };
+    // number가 있어야 번호를 뺀 머지가 지금 브랜치의 PR로 넘어가는 고장을 검사가 잡는다.
+    const info = { number: 7, files: [{ path: 'app/README.md' }], isDraft: false, state: 'OPEN', statusCheckRollup: [{ name: 'verify', conclusion: 'SUCCESS' }], ...pr };
     writeFileSync(json, JSON.stringify(info));
     return guard(command, { env: { PATH: `${dir}:${process.env.PATH}`, FAKE_GH_JSON: json } });
   };
@@ -246,6 +247,15 @@ test('머지할 PR은 글자 그대로의 번호로 받고, draft·체크 없음
     `gh -R o/other pr merge 7 ${head}`,
     `gh --repo=o/other pr merge 7 ${head}`,
     'gh -R o/r pr merge 7 --squash',
+    // 옵션이 pr과 merge 사이에 와도 머지로 본다.
+    'gh pr --repo o/r merge 7 --squash --admin',
+    `gh pr -R o/other merge 7 ${head}`,
+    'gh --hostname github.com pr merge 7 --squash',
+    `gh pr merge 7 ${head} -Ro/other`,
+    `GH_REPO=o/other gh pr merge 7 ${head}`,
+    `gh pr merge 7 ${head} --admin=true`,
+    `gh pr merge 7 ${head} --squash=true`,
+    'gh pr merge 7 -sd --match-head-commit abc1234',
   ]) {
     assert.equal(ask(command).verdict, 'block', command);
   }
@@ -268,6 +278,10 @@ test('셸 예약어와 함수 정의 안의 명령도 같은 규칙을 적용한
     'f() { git push origin main; }',
     'echo `gh pr merge 43 --merge`',
     'echo `git push origin main`',
+    // 예약어 바로 뒤의 명령(조건 자리).
+    'if false; then true; elif git push origin main; then true; fi',
+    'while git push origin main; do true; done',
+    'until git push origin main; do true; done',
     'function f { git push origin main; }',
   ]) {
     assert.equal(verdict(command), 'block', command);
@@ -275,6 +289,19 @@ test('셸 예약어와 함수 정의 안의 명령도 같은 규칙을 적용한
   for (const command of ['for f in a b; do echo $f; done', 'if true; then git status; fi', 'while false; do ls; done']) {
     assert.equal(verdict(command), 'allow', command);
   }
+});
+
+test('하위 명령이 없는 gh에서 가드가 죽지 않는다', () => {
+  // 가드가 죽으면(종료 코드 1) 명령을 막지 못한다. 같은 명령에 묶인 다른 조각과 커밋 메시지의 검사도 빠진다.
+  for (const command of ['gh --version', 'gh --help', 'gh -R o/r', 'gh']) {
+    assert.equal(verdict(command), 'allow', command);
+  }
+  assert.equal(verdict('gh --version && git push origin main'), 'block');
+  assert.equal(verdict('gh --version; gh pr merge 43 --squash --admin'), 'block');
+  assert.equal(kind(heredoc('형식 없는 제목\n\n본문 `gh --help`')), 'subject');
+  // 하위 명령 앞의 옵션 값을 gh api의 끝점으로 읽지 않는다.
+  assert.equal(verdict('gh api -H "Accept: application/vnd.github+json" user'), 'block');
+  assert.equal(verdict('gh pr view -R o/r 7'), 'allow');
 });
 
 test('커밋 전 게이트는 package.json의 이름이 아니라 가드 파일로 이 저장소를 알아본다', (t) => {

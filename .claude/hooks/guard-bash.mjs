@@ -310,14 +310,19 @@ function checkPassed(c) {
   return false;
 }
 
+// --flag와 --flag=값(--admin=true)을 같이 본다.
+const hasFlag = (words, ...flags) => words.some((w) => flags.some((f) => w === f || w.startsWith(`${f}=`)));
+
 function checkMerge(words) {
-  if (words.includes('--admin')) return '--admin 머지 금지(보호 규칙 우회).';
-  if (['--squash', '--rebase', '-s', '-r'].some((f) => words.includes(f))) return '이 저장소는 merge commit만 쓴다: gh pr merge <번호> --merge';
+  if (hasFlag(words, '--admin')) return '--admin 머지 금지(보호 규칙 우회).';
+  // 짧은 옵션은 묶어 쓸 수 있다(-sd는 --squash --delete-branch).
+  if (hasFlag(words, '--squash', '--rebase') || words.some((w) => /^-[a-zA-Z]*[sr]/.test(w)))
+    return '이 저장소는 merge commit만 쓴다: gh pr merge <번호> --merge';
   if (!words.includes('--merge') && !words.includes('-m')) return '머지 방식을 밝힌다: gh pr merge <번호> --merge';
   // 독립 검증의 판정은 한 head에 대한 것이다. 검증 뒤에 커밋이 더해지면 GitHub이 머지를 거절하게 head를 못박는다.
   if (!words.some((w) => w === '--match-head-commit' || w.startsWith('--match-head-commit=')))
     return '검증한 head로 머지한다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>';
-  if (words.some((w) => w === '-R' || w === '--repo' || w.startsWith('--repo='))) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
+  if (words.some((w) => w.startsWith('-R')) || hasFlag(words, '--repo')) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
   const number = prNumber(words);
   if (!number) return 'PR 번호를 글자 그대로 적는다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>. 브랜치 이름, 변수, 생략은 받지 않는다.';
   const info = ghJson(['pr', 'view', String(number), '--json', 'files,isDraft,state,statusCheckRollup']);
@@ -470,8 +475,25 @@ function checkPush(words) {
   return patch ? addedLinesProblem(patch, '보낼 커밋의 변경') : null;
 }
 
+// gh의 옵션(-R/--repo, --hostname 등)이 하위 명령 앞이나 사이에 와도(gh -R x pr merge, gh pr -R x merge) 하위 명령이
+// words[1], words[2]에 오게 옮긴다. 옮긴 옵션은 뒤에 남겨 머지의 --repo 막기가 본다. gh api는 끝점 앞 옵션의 값을 끝점으로
+// 읽지 않게 하위 명령 하나만 찾는다. 하위 명령이 없으면(gh --version) 그대로 둔다.
+const GH_VALUE_OPTIONS = new Set(['-R', '--repo', '--hostname']);
+function ghWords(words) {
+  const subs = [];
+  const moved = [];
+  let i = 1;
+  for (; i < words.length && subs.length < (subs[0] === 'api' ? 1 : 2); i += 1) {
+    const w = words[i];
+    if (!w.startsWith('-')) subs.push(w);
+    else if (GH_VALUE_OPTIONS.has(w)) moved.push(w, words[(i += 1)] ?? '');
+    else moved.push(w);
+  }
+  return ['gh', ...subs, ...words.slice(i), ...moved];
+}
+
 function checkSegment(seg, words, assigns) {
-  const [first, second, third] = words;
+  const [first] = words;
   if (first === 'git') {
     const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-') && words[i - 1] !== '-C' && words[i - 1] !== '-c');
     const sub = at === -1 ? undefined : words[at];
@@ -482,14 +504,16 @@ function checkSegment(seg, words, assigns) {
     return checkGitRead(sub, args, seg);
   }
   if (first === 'gh') {
-    // 전역 옵션(-R/--repo, --hostname 등)이 하위 명령 앞에 와도 하위 명령으로 판단한다. 옮긴 옵션은 뒤에 남겨 머지의 --repo 막기가 본다.
-    let at = 1;
-    while (at < words.length && words[at].startsWith('-')) at += ['-R', '--repo', '--hostname'].includes(words[at]) ? 2 : 1;
-    if (at > 1) return checkSegment(seg, ['gh', ...words.slice(at), ...words.slice(1, at)], assigns);
-    if (second === 'pr' && third === 'merge') return checkMerge(words);
-    if (second === 'api') return checkGhApi(seg, words);
-    if (second === 'pr' && ['create', 'edit', 'comment', 'review'].includes(third)) return checkPrText(words);
-    if (second === 'issue') return publicTextProblem(command);
+    const gh = ghWords(words);
+    const [, sub, action] = gh;
+    if (sub === 'pr' && action === 'merge') {
+      // GH_REPO·GH_HOST는 gh가 겨냥하는 저장소를 바꾼다. 가드가 보는 이 저장소의 PR과 머지하는 PR이 달라진다.
+      if (['GH_REPO', 'GH_HOST'].some((name) => Object.hasOwn(assigns, name))) return '다른 저장소를 겨냥하는 GH_REPO·GH_HOST를 붙여 머지하지 않는다.';
+      return checkMerge(gh);
+    }
+    if (sub === 'api') return checkGhApi(seg, gh);
+    if (sub === 'pr' && ['create', 'edit', 'comment', 'review'].includes(action)) return checkPrText(gh);
+    if (sub === 'issue') return publicTextProblem(command);
     return null;
   }
   if (first === 'rm' || first === 'unlink') return checkRm(words);
