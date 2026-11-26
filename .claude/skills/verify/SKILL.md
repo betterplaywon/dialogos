@@ -103,7 +103,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - 화면 여정은 이 Mac의 창 없는 Chrome 한 가지로만 본다. Safari, Firefox, 좁은 화면은 사람이 본다.
 - 실제 인식기(정확도, 쉼에서 끊기는 때), 실제 목소리(고르기, 속도, 기기 밖 목소리), 실제 마이크와 권한 창, 인식 팩 내려받기는 증명하지 않는다. 여전히 사람이 Chrome에서 직접 본다. `voice-screen`은 그 위의 화면 규칙만 본다.
 - 앱 안 브라우저는 User-Agent만 바꾼 Chrome으로 흉내 낸다. 실제 VS Code 안에서 페이지가 닫히는지는 보지 않는다.
-- SIGKILL처럼 잡을 수 없는 신호로 입구 스크립트가 끝나면 여정의 앱과 Chrome, 임시 사용자 폴더(`dialogos-verify-chrome-*`)가 남는다. 앱은 `--import tsx app/dev.ts`, Chrome은 `--user-data-dir`에 그 폴더가 있는 프로세스다.
+- SIGKILL처럼 잡을 수 없는 신호로 입구 스크립트가 끝나면 여정의 앱과 Chrome, 임시 사용자 폴더(`dialogos-verify-chrome-*`)가 남는다. 앱은 `--import tsx app/dev.ts`, Chrome은 `--user-data-dir`에 그 폴더가 있는 프로세스다. 판정 실험 여정에서 돌던 eval 명령(`--import tsx eval/src/<명령>.ts`)은 끄지 못하고 혼자 끝까지 돈다. 모의 모델이라 곧 끝나지만, 그 명령의 출력 파일(`cmd-NN-<명령>.txt`)과 결과(`steps.md`)는 남지 않는다.
 - 기억이 상대의 지시문에 실제로 들어가는지는 화면에서 보이지 않는다. `memory`는 판 파일의 턴 `memory_ids`와 기억 표로 무엇을 넘겼는지 보고, 지시문의 기억 칸은 `app/tests/memory.test.ts`가 호출을 기록하는 가짜 모델로 검사한다. 기억이 꺼진 눈가림 비교(`APP_MODE=random`)는 여정이 띄우지 않는다.
 
 ## 유지보수
