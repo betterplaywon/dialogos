@@ -170,7 +170,7 @@ function remoteModelNames(body: unknown): Set<string> | null {
 /**
  * 띄울 때의 확인. 문제가 없으면 null이고, 있으면 사람이 할 일을 알리는 말이다. 목록만 읽고 모델은 부르지 않는다.
  * 1. OpenAI 호환 모델 목록(GET {주소}/models)으로 로컬 모델 서버에 닿는지와 두 역할의 모델이 있는지 본다.
- * 2. Ollama의 모델 목록(GET /api/tags)이 두 역할의 모델을 원격 모델로 적으면 띄우지 않는다.
+ * 2. Ollama의 모델 목록(GET /api/tags)이 두 역할의 모델을 원격 모델로 적거나, 그 목록을 읽지 못하면(404 밖의 오류, 다른 꼴) 띄우지 않는다.
  * 주소는 localSource가 검사한 것을 받는다. 개발 서버(dev.ts)는 출처를 만든 뒤에 이 확인을 부른다.
  */
 export async function localProblem(config: LocalConfig, fetchImpl: FetchLike = fetch): Promise<string | null> {
@@ -199,11 +199,19 @@ export async function localProblem(config: LocalConfig, fetchImpl: FetchLike = f
 
   // Ollama의 클라우드 모델은 로컬 API로 불러도 Ollama의 클라우드에서 돈다(Ollama 문서 'Cloud'). 클라우드 모델이 이 목록에
   // 원격 모델로 나오는지는 문서에 적혀 있지 않고 확인하지 못했다(추정). 확실히 막는 길은 Ollama의 클라우드 기능을 끄는 것이다(Ollama FAQ).
-  // 이 목록이 없는 서버(404 등)는 Ollama가 아니어서 Ollama의 클라우드 모델도 없으므로, 이 확인을 건너뛴다.
+  // 이 목록이 없다고 답하는(404) 서버는 Ollama가 아니어서 Ollama의 클라우드 모델도 없으므로, 이 확인을 건너뛴다.
+  // 그 밖에 목록을 읽지 못하면(다른 오류 상태, JSON이 아닌 답, 다른 꼴) 원격 모델인지 모르므로 띄우지 않는다.
   const tags = await get(new URL('/api/tags', config.url).href);
   if (!tags) return UNREACHABLE;
+  if (tags.status === 404) return null;
   const remote = tags.ok ? remoteModelNames(await tags.json().catch(() => null)) : null;
-  const elsewhere = wanted.filter((name) => remote?.has(name));
+  if (!remote) {
+    return [
+      `로컬 모델 서버가 Ollama의 모델 목록(/api/tags)을 읽을 수 있게 알려 주지 않았습니다(상태 ${tags.status}).`,
+      '이 목록으로 모델이 이 컴퓨터에서 도는지 확인하므로, 읽지 못하면 띄우지 않습니다. Ollama 앱을 다시 켠 뒤 다시 띄워 주세요.',
+    ].join('\n');
+  }
+  const elsewhere = wanted.filter((name) => remote.has(name));
   if (elsewhere.length === 0) return null;
   return [
     `로컬 모델 서버의 목록에 이 모델이 원격 모델로 나옵니다: ${elsewhere.join(', ')}`,

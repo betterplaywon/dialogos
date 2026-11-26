@@ -95,7 +95,7 @@ Ollama는 생각을 켜고 끄기만 하는 모델에서 `reasoning_effort: "non
 - 로컬 모델 서버가 다른 주소로 넘기는 응답(redirect)을 주어도 따라가지 않고 그 요청을 실패로 둡니다. 그래서 요청은 검사한 주소 밖으로 나가지 않습니다. 턴에서 넘기면 그 턴이 실패하고 판은 그대로입니다. 띄울 때 확인에서 넘기면 서버에 닿지 못했다고 알리고 띄우지 않습니다.
 - 로컬 모델의 단가는 0입니다. 원장에는 호출마다 응답이 알려 준 토큰이 남지만 비용은 0이라, 서비스 비용 상한에 닿지 않습니다.
 - Ollama의 클라우드 모델은 쓰지 않습니다. Ollama 문서('Cloud')는 클라우드 모델을 로컬 API로 불러도 추론이 Ollama의 클라우드에서 돈다고 적습니다. 그런 모델을 적으면 서버는 이 컴퓨터의 주소만 부르지만 대화는 이 컴퓨터 밖으로 나갑니다. 클라우드는 ollama.com 계정이 있어야 쓰고, 사용량과 요금제가 따로 있습니다(같은 문서, 'Usage').
-  - 띄울 때 Ollama의 목록(`GET /api/tags`)이 두 역할의 모델에 원격 모델의 칸(`remote_host`, `remote_model`)을 적었으면 띄우지 않습니다. Ollama 문서('List models')는 두 칸을 원격 모델일 때 있는 칸으로 적습니다. 클라우드 모델이 이 목록에 그렇게 나오는지는 문서에 없고 확인하지 못했습니다. 이 확인은 띄울 때 한 번만 하고, 이 목록이 없는 서버(Ollama가 아닌 서버)에서는 건너뜁니다.
+  - 띄울 때 Ollama의 목록(`GET /api/tags`)이 두 역할의 모델에 원격 모델의 칸(`remote_host`, `remote_model`)을 적었으면 띄우지 않습니다. Ollama 문서('List models')는 두 칸을 원격 모델일 때 있는 칸으로 적습니다. 클라우드 모델이 이 목록에 그렇게 나오는지는 문서에 없고 확인하지 못했습니다. 이 확인은 띄울 때 한 번만 합니다. 이 목록이 없다고 답하는(404) 서버(Ollama가 아닌 서버)에서만 건너뛰고, 그 밖에 목록을 읽지 못하면(다른 오류 상태, JSON이 아닌 답, 다른 꼴) 원격 모델인지 모르므로 띄우지 않습니다.
   - 확실히 막으려면 Ollama의 클라우드 기능을 끕니다. `~/.ollama/server.json`에 `"disable_ollama_cloud": true`를 넣고 Ollama를 다시 켭니다. 환경 변수 `OLLAMA_NO_CLOUD=1`로도 끌 수 있고, macOS 앱에는 환경 변수를 `launchctl setenv`로 줍니다. 꺼지면 Ollama의 서버 기록에 `Ollama cloud disabled: true`가 나옵니다(Ollama FAQ 'How do I disable Ollama's cloud features?', 'How do I configure Ollama server?'). macOS에서 서버 기록은 `~/.ollama/logs/server.log`입니다(Ollama 문서 'Troubleshooting').
 
 ### 그대로 걸리는 것
