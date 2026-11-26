@@ -260,13 +260,14 @@ function checkPrText(words, seg, dir) {
 const GH_READS = { pr: new Set(['view', 'list', 'checks', 'diff', 'status', 'checkout']), issue: new Set(['view', 'list', 'status']) };
 const postsText = (gh) => Boolean(GH_READS[gh[1]] && gh[2] && !gh[2].startsWith('-') && !GH_READS[gh[1]].has(gh[2]));
 
-// gh pr·gh issue가 글을 파일에서 읽는 자리: --body-file, -F, 붙여 쓴 -F파일, 묶은 짧은 옵션의 F(-wF 파일). 같은 옵션을 두 번 주면 모두 읽는다.
+// gh pr·gh issue가 글을 파일에서 읽는 자리: --body-file, -F, 붙여 쓴 -F파일, 묶은 짧은 옵션의 F(-wF 파일), 본문의 시작이 되는
+// 템플릿(-T, --template). 같은 옵션을 두 번 주면 모두 읽는다. gh issue의 -T는 템플릿 이름이라 읽지 못해 막히지만, 이 저장소는 쓰지 않는다.
 function ghBodyFiles(words) {
   const files = [];
   for (let i = 3; i < words.length; i += 1) {
     const w = words[i];
-    if (w === '--body-file' || w === '-F') files.push(words[(i += 1)] ?? '-');
-    else if (w.startsWith('--body-file=')) files.push(w.slice('--body-file='.length));
+    if (['--body-file', '-F', '--template', '-T'].includes(w)) files.push(words[(i += 1)] ?? '-');
+    else if (w.startsWith('--body-file=') || w.startsWith('--template=')) files.push(w.slice(w.indexOf('=') + 1));
     else if (/^-[A-Za-z]*F/.test(w)) {
       const rest = w.slice(w.indexOf('F') + 1).replace(/^=/, '');
       files.push(rest || (words[(i += 1)] ?? '-'));

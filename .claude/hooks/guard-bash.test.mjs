@@ -605,6 +605,9 @@ test('gh pr·gh issue는 읽기 하위 명령 밖을 모두 글을 올리는 명
   for (const command of [
     'gh pr new --title "작업 방식 - x" --body-file bad.md',
     'gh pr revert 5 --body-file bad.md',
+    // 템플릿 파일은 본문의 시작이 된다.
+    'gh pr create --title "작업 방식 - x" -T bad.md',
+    'gh pr create --title "작업 방식 - x" --template=bad.md',
     `gh issue reopen 5 -c "${WORD}"`,
     'gh issue new --title x --body-file bad.md',
     // cd 뒤의 상대 경로는 gh pr에서도 그 폴더에서 찾는다.
