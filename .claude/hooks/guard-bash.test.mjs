@@ -810,6 +810,12 @@ test('명령 앞에 환경 변수를 붙이거나 다른 실행기로 감싸도 
     'GH_PAGER=cat gh api user',
     'env FOO=1',
     'env -i',
+    // 값을 받는 짧은 옵션은 묶어 쓰거나(-0n 1) 값을 붙여 쓸 수 있다(-sKILL). env -P는 값을 받는다.
+    'env -P /usr/bin git push origin main',
+    'env -iu FOO git push origin main',
+    'echo main | xargs -0n 1 git push origin main',
+    'timeout -sKILL 30 git push origin main',
+    'nice -n5 git push --force origin feat/x',
   ]) {
     assert.equal(verdict(command), 'block', command);
   }
@@ -824,8 +830,12 @@ test('묶음, sh -c, eval, 명령 치환 안의 명령도 같은 규칙을 적�
     "sh -c 'cd eval && git push origin main'",
     'bash -lc "git push origin main"',
     'eval git config --list',
+    "eval 'git config --list; ls'",
     'echo "$(git var GIT_AUTHOR_IDENT)"',
     'echo "작성자: $(git log -1 --format=%ae)"',
+    // 프로세스 치환 <( … ), >( … ) 안의 명령.
+    'diff <(git config --list) /dev/null',
+    'ls > >(git push origin main)',
   ]) {
     assert.equal(verdict(command), 'block', command);
   }
@@ -841,6 +851,9 @@ test('감싸기를 걷어 내도 허용하던 명령은 그대로 허용한다',
     'bash -c "npm run check"',
     'test "$(git rev-parse --short HEAD)" = "abc1234"',
     'timeout 30 git push -u origin feat/x',
+    'timeout -k 5 30 npm test',
+    'env -u FOO npm test',
+    'diff <(git rev-parse HEAD) <(git rev-parse origin/main)',
   ]) {
     assert.equal(verdict(command), 'allow', command);
   }

@@ -688,7 +688,7 @@ function checkSegment(seg, words, assigns, dir = cwd, nested = false, npxDirs = 
 // 명령 앞에 붙어 뒤의 명령을 그대로 실행하는 것들. 걷어 낸 뒤 실제 명령의 첫 단어로 검사한다.
 // withValue는 값을 하나 더 받는 옵션, positional은 옵션 뒤에 오는 자리 인자의 수(timeout의 시간)다.
 const WRAPPERS = new Map([
-  ['env', { withValue: ['-u', '--unset', '-C', '--chdir', '-S', '--split-string'] }],
+  ['env', { withValue: ['-u', '--unset', '-C', '--chdir', '-P', '-S', '--split-string'] }],
   ['command', { withValue: [] }],
   ['builtin', { withValue: [] }],
   ['exec', { withValue: ['-a'] }],
@@ -711,11 +711,12 @@ const WRAPPERS = new Map([
 ]);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-// 명령 치환 $( … )의 안쪽. 괄호 짝을 세어 겹친 치환($(gh … $(echo)))의 바깥도 찾는다. 안쪽 치환은 따로도 찾고, 바깥을 다시
-// 검사할 때도 찾는다. 짝이 맞지 않는 괄호(글 속의 ":)")가 있으면 덜 찾을 수 있지만, heredoc 본문은 줄마다 조각으로도 검사된다.
+// 명령 치환 $( … )과 프로세스 치환 <( … ), >( … )의 안쪽. 괄호 짝을 세어 겹친 치환($(gh … $(echo)))의 바깥도 찾는다. 안쪽 치환은
+// 따로도 찾고, 바깥을 다시 검사할 때도 찾는다. 짝이 맞지 않는 괄호(글 속의 ":)")가 있으면 덜 찾을 수 있지만, heredoc 본문은
+// 줄마다 조각으로도 검사된다.
 function substitutions(cmd) {
   const found = [];
-  for (let at = cmd.indexOf('$('); at !== -1; at = cmd.indexOf('$(', at + 2)) {
+  for (const { index: at } of cmd.matchAll(/[$<>]\(/g)) {
     let depth = 0;
     for (let j = at + 1; j < cmd.length; j += 1) {
       if (cmd[j] === '(') depth += 1;
@@ -729,6 +730,15 @@ function substitutions(cmd) {
 }
 // 백틱 명령 치환. 따옴표 안의 백틱(인용한 코드)까지 명령으로 보므로 막힐 수 있다. 그때는 글을 파일로 넘긴다.
 const BACKTICK = /`([^`]*)`/g;
+
+/** 짧은 옵션 묶음(-iC)에서 값을 받는 옵션을 찾는다. 값이 붙어 있으면(-C폴더) attached가 그 값이고, 다음 단어가 값이면 null이다. */
+function shortValue(word, withValue) {
+  if (word.startsWith('--')) return null;
+  for (let j = 1; j < word.length; j += 1) {
+    if (withValue.includes(`-${word[j]}`)) return { flag: `-${word[j]}`, attached: word.slice(j + 1) || null };
+  }
+  return null;
+}
 
 /**
  * 앞에 붙은 환경 변수 지정, 감싸는 실행기, 묶음 기호를 걷어 내고 실제로 실행되는 명령의 단어를 낸다.
@@ -767,12 +777,18 @@ function unwrap(words) {
     }
     let i = 1;
     while (i < rest.length && rest[i].startsWith('-') && rest[i] !== '--') {
-      if (name === 'command' && /^-[a-zA-Z]*[vV]/.test(rest[i])) return null;
+      const word = rest[i];
+      if (name === 'command' && /^-[a-zA-Z]*[vV]/.test(word)) return null;
+      // 짧은 옵션은 묶어 쓰거나(-iC 폴더) 값을 붙여 쓸 수 있다(-C폴더). 값이 다음 단어일 때만 한 단어를 더 넘긴다.
+      const short = shortValue(word, spec.withValue);
+      const valueIsNext = short ? short.attached === null : spec.withValue.includes(word);
       // env -C(--chdir)는 뒤의 명령이 도는 폴더를 바꾼다.
-      if (name === 'env' && (rest[i] === '-C' || rest[i] === '--chdir')) chdir = rest[i + 1] ?? null;
-      if (name === 'env' && rest[i].startsWith('--chdir=')) chdir = rest[i].slice('--chdir='.length);
-      if (spec.withValue.includes(rest[i])) i += 1;
-      i += 1;
+      if (name === 'env') {
+        if (short?.flag === '-C') chdir = short.attached ?? rest[i + 1] ?? null;
+        else if (word === '--chdir') chdir = rest[i + 1] ?? null;
+        else if (word.startsWith('--chdir=')) chdir = word.slice('--chdir='.length);
+      }
+      i += valueIsNext ? 2 : 1;
     }
     if (rest[i] === '--') i += 1;
     rest = rest.slice(i + (spec.positional ?? 0));
@@ -785,14 +801,18 @@ function unwrap(words) {
   return { words: rest, assigns, dumpsEnv: rest.length === 0 && wrapper === 'env', chdir };
 }
 
-/** sh -c와 eval이 실행하는 명령도 같은 규칙으로 본다. */
+/**
+ * sh -c와 eval이 실행하는 명령도 같은 규칙으로 본다.
+ * 따옴표 안의 구분자에서 조각이 나뉘면 명령 글이 여는 따옴표로 시작하므로(sh -c 'cd x 까지만 온다), 앞뒤의 따옴표를 뗀다.
+ */
 function checkShell(words, depth) {
   const [first] = words;
-  if (first === 'eval') return check(words.slice(1).join(' '), depth + 1);
+  const script = (from) => words.slice(from).join(' ').replace(/^["']|["']$/g, '');
+  if (first === 'eval') return check(script(1), depth + 1);
   if (!SHELLS.has(first)) return null;
   const at = words.findIndex((w, i) => i > 0 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
   if (at === -1) return null;
-  return check(words.slice(at + 1).join(' ').replace(/^["']|["']$/g, ''), depth + 1);
+  return check(script(at + 1), depth + 1);
 }
 
 /** git 조각의 하위 명령(add, commit, push …). git이 아니면 null. */
