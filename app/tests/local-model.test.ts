@@ -366,6 +366,9 @@ test('띄울 때 확인: Ollama의 모델 목록(/api/tags)이 404 밖의 오류
   const broken = [
     { status: 500, body: JSON.stringify({ error: 'internal' }) },
     { status: 503, body: '' },
+    // 404 밖의 4xx도 그 목록이 없다는 뜻이 아니다.
+    { status: 401, body: '' },
+    { status: 405, body: '' },
     { status: 200, body: '<html>Ollama is running</html>' },
     { status: 200, body: JSON.stringify({}) },
     { status: 200, body: JSON.stringify({ models: 'qwen3:14b' }) },
