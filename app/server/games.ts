@@ -370,6 +370,9 @@ export function createGames(deps: GameDeps) {
             models: meteredModels(deps.models, ledger, { userId, gameId: game.id, now: deps.now }),
             text,
             memories: passed.map((memory) => memory.text),
+            // 지시문 방식 판은 눈가림 비교(APP_MODE=random)에서만 생긴다. 엔진 방식 판처럼 판정기를 먼저 불러 기다리는 시간을 맞추고,
+            // 판정은 버린다(이슈 #25, 2026-11-26 사용자 결정). 판에 남긴 방식을 따르므로 서버를 다시 띄워도 판마다 같다.
+            decoyJudge: true,
           });
           const n = game.turns.length + 1;
           game.history = state.history;
