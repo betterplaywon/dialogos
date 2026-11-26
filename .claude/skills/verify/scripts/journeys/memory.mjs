@@ -72,13 +72,19 @@ export async function run(h) {
     );
   }
 
-  /** 턴 k의 답 아래 접힌 넘긴 기록을 펼쳐 항목의 글을 읽는다. 단추 글의 개수가 맞아야 누른다. */
+  /**
+   * 턴 k의 답 아래 접힌 넘긴 기록을 펼쳐 항목의 글을 읽는다. 단추 글의 개수가 맞아야 누른다.
+   * 접힘은 단추의 aria-expanded와 함께, 단추가 가리키는 목록(aria-controls)이 화면에 실제로 보이는지(checkVisibility)로 본다.
+   * aria-expanded만 보면 목록이 늘 펼쳐져 있어도 통과한다.
+   */
   async function openPassed(k, count) {
     const toggle = `${reply(k)}?.querySelector('.passed-toggle')`;
+    const list = `document.getElementById(${toggle}?.getAttribute('aria-controls'))`;
     assert.equal(await page.evaluate(`${toggle}?.textContent ?? null`), toggleText(count), `턴 ${k}의 답 아래 넘긴 기록 단추`);
-    assert.equal(await page.evaluate(`${toggle}.getAttribute('aria-expanded')`), 'false', '넘긴 기록은 처음에 접혀 있다');
+    const before = await page.evaluate(`({ expanded: ${toggle}.getAttribute('aria-expanded'), visible: ${list}?.checkVisibility() ?? null })`);
+    assert.deepEqual(before, { expanded: 'false', visible: false }, `턴 ${k}의 넘긴 기록은 처음에 접혀 있어 목록이 보이지 않는다(본 것 ${JSON.stringify(before)})`);
     await page.click(buttonIn(reply(k), toggleText(count)), `턴 ${k}의 [${toggleText(count)}]`);
-    await page.waitFor(`${toggle}.getAttribute('aria-expanded') === 'true'`, `턴 ${k}의 넘긴 기록이 펼쳐지지 않는다`);
+    await page.waitFor(`${toggle}.getAttribute('aria-expanded') === 'true' && ${list}?.checkVisibility()`, `턴 ${k}의 넘긴 기록이 펼쳐져 보이지 않는다`);
     return itemsIn(reply(k));
   }
 
