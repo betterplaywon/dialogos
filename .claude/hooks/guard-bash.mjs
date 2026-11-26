@@ -257,7 +257,7 @@ function checkPrText(words, seg, dir) {
 
 // gh pr·gh issue에서 글을 올리지 않는 하위 명령. 그 밖(별칭 new, revert, reopen, merge 등)은 모두 글을 올리는 명령으로 보고,
 // 앞에 다른 명령을 묶지 않으며(sequenceProblem) 글 파일까지 읽어 검사한다. 별칭이 늘어도 놓치지 않게 읽기 쪽을 목록으로 둔다.
-const GH_READS = { pr: new Set(['view', 'list', 'checks', 'diff', 'status', 'checkout']), issue: new Set(['view', 'list', 'status']) };
+const GH_READS = { pr: new Set(['view', 'list', 'ls', 'checks', 'diff', 'status', 'checkout']), issue: new Set(['view', 'list', 'ls', 'status']) };
 const postsText = (gh) => Boolean(GH_READS[gh[1]] && gh[2] && !gh[2].startsWith('-') && !GH_READS[gh[1]].has(gh[2]));
 
 // gh pr·gh issue가 글을 파일에서 읽는 자리: --body-file, -F, 붙여 쓴 -F파일, 묶은 짧은 옵션의 F(-wF 파일), 본문의 시작이 되는
@@ -291,11 +291,15 @@ function readTextFiles(files, dir) {
   return { text };
 }
 
+// 따옴표 구분자 heredoc으로 넣은 글 전체: $(cat <<'EOF' … EOF\n). 본문은 셸이 글자 그대로 넘긴다.
+const QUOTED_HEREDOC = /\$\(\s*cat\s*<<-?\s*(['"])(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*\n\s*\)/g;
+
 /** gh pr·gh issue의 글. 본문은 heredoc으로 여러 줄일 수 있어 조각이 아니라 명령 전체를 보고, 이 gh 조각이 넘긴 글 파일을 모두 읽어 함께 본다. */
 function ghTextProblem(words, seg, dir) {
   // 명령 치환($(cat 파일), 백틱)으로 넣은 글은 실행 전에 볼 수 없다. 구분자에 따옴표가 있는 heredoc($(cat <<'EOF' …))만
-  // 글이 명령에 그대로 있어 받는다. 따옴표가 없으면(<<EOF) 본문의 $( )와 백틱이 실행된다.
-  if (/`|\$\((?!\s*cat\s*<<-?\s*(['"])\w+\1)/.test(seg)) return '글을 명령 치환으로 넣지 않는다. --body-file 파일이나 heredoc으로 넘긴다.';
+  // 글이 명령에 그대로 있어 받는다. 따옴표가 없으면(<<EOF) 본문의 $( )와 백틱이 실행된다. heredoc 뒤나 다음 줄에 이어 붙인
+  // 치환도 있으므로 gh가 있는 줄만이 아니라 명령 전체에서, 따옴표 heredoc을 뺀 나머지를 본다.
+  if (/`|\$\(/.test(command.replace(QUOTED_HEREDOC, ''))) return '글을 명령 치환으로 넣지 않는다. --body-file 파일이나 heredoc으로 넘긴다.';
   const files = readTextFiles(ghBodyFiles(words), dir);
   return files.problem ?? publicTextProblem(command + files.text);
 }
@@ -355,7 +359,7 @@ function checkMerge(words) {
   // 독립 검증의 판정은 한 head에 대한 것이다. 검증 뒤에 커밋이 더해지면 GitHub이 머지를 거절하게 head를 못박는다.
   if (!words.some((w) => w === '--match-head-commit' || w.startsWith('--match-head-commit=')))
     return '검증한 head로 머지한다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>';
-  if (words.some((w) => w.startsWith('-R')) || hasFlag(words, '--repo')) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
+  if (words.some((w) => /^-[a-zA-Z]*R/.test(w)) || hasFlag(words, '--repo')) return '다른 저장소의 PR은 머지하지 않는다(--repo).';
   const number = prNumber(words);
   if (!number) return 'PR 번호를 글자 그대로 적는다: gh pr merge <번호> --merge --match-head-commit <검증한 head SHA>. 브랜치 이름, 변수, 생략은 받지 않는다.';
   const info = ghJson(['pr', 'view', String(number), '--json', 'files,isDraft,state,statusCheckRollup']);
@@ -587,8 +591,22 @@ const WRAPPERS = new Map([
 ]);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-// 한 겹짜리 명령 치환. 안쪽에 괄호가 있는 것(커밋 메시지의 heredoc 등)은 줄마다 조각으로 이미 검사된다.
-const SUBSTITUTION = /\$\(([^()]*)\)/g;
+// 명령 치환 $( … )의 안쪽. 괄호 짝을 세어 겹친 치환($(gh … $(echo)))의 바깥도 찾는다. 안쪽 치환은 따로도 찾고, 바깥을 다시
+// 검사할 때도 찾는다. 짝이 맞지 않는 괄호(글 속의 ":)")가 있으면 덜 찾을 수 있지만, heredoc 본문은 줄마다 조각으로도 검사된다.
+function substitutions(cmd) {
+  const found = [];
+  for (let at = cmd.indexOf('$('); at !== -1; at = cmd.indexOf('$(', at + 2)) {
+    let depth = 0;
+    for (let j = at + 1; j < cmd.length; j += 1) {
+      if (cmd[j] === '(') depth += 1;
+      else if (cmd[j] === ')' && (depth -= 1) === 0) {
+        found.push(cmd.slice(at + 2, j));
+        break;
+      }
+    }
+  }
+  return found;
+}
 // 백틱 명령 치환. 따옴표 안의 백틱(인용한 코드)까지 명령으로 보므로 막힐 수 있다. 그때는 글을 파일로 넘긴다.
 const BACKTICK = /`([^`]*)`/g;
 
@@ -670,12 +688,14 @@ function sequenceProblem(cmd) {
   const subs = [];
   const firsts = [];
   for (const seg of segments(cmd)) {
-    const run = unwrap(tokens(seg));
+    const raw = tokens(seg);
+    const run = unwrap(raw);
     const words = run?.words ?? [];
     // 가드는 실행 전에 한 번만 보므로 앞 명령이 바꾼 글 파일을 볼 수 없다. 폴더만 바꾸는 cd는 글 파일을 그 폴더에서 찾아 따른다.
+    // cd는 조각 맨 앞에 그대로 쓴 것만 받는다. 감싼 cd((cd x && …), { cd x; …; }, if cd x; then …)는 가드가 폴더를 따라가지 못한다.
     if (words[0] === 'gh' && postsText(ghWords(words).gh) && firsts.some((f) => f !== 'cd'))
       return 'PR·이슈 글을 올리는 gh 명령 앞에 다른 명령을 묶지 않는다(cd만 된다). 가드는 실행 전에 한 번만 보므로 앞 명령이 바꾼 글 파일을 볼 수 없다.';
-    if (words[0]) firsts.push(words[0]);
+    if (raw[0]) firsts.push(raw[0]);
     const sub = run ? gitSubcommand(words) : null;
     if (sub) subs.push(sub);
   }
@@ -689,13 +709,15 @@ function sequenceProblem(cmd) {
   return null;
 }
 
-function check(cmd, depth = 0) {
+function check(input, depth = 0) {
   if (depth > 4) return null;
+  // 줄 이음(\ 뒤 줄바꿈)은 셸에서 한 명령이다. 잇지 않으면 다음 줄의 옵션(--body-file, --admin)이 다른 조각이 된다.
+  const cmd = input.replace(/\\\n/g, ' ');
   for (const [re, reason] of WHOLE_COMMAND_RULES) if (re.test(cmd)) return reason;
   const sequence = sequenceProblem(cmd);
   if (sequence) return sequence;
-  for (const match of [...cmd.matchAll(SUBSTITUTION), ...cmd.matchAll(BACKTICK)]) {
-    const reason = check(match[1], depth + 1);
+  for (const inner of [...substitutions(cmd), ...[...cmd.matchAll(BACKTICK)].map((m) => m[1])]) {
+    const reason = check(inner, depth + 1);
     if (reason) return reason;
   }
   // 앞의 cd를 따라간 폴더. 글 파일의 상대 경로를 이 폴더에서 찾는다.

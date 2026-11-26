@@ -256,6 +256,9 @@ test('머지할 PR은 글자 그대로의 번호로 받고, draft·체크 없음
     `gh pr merge 7 ${head} --admin=true`,
     `gh pr merge 7 ${head} --squash=true`,
     'gh pr merge 7 -sd --match-head-commit abc1234',
+    // 묶은 짧은 옵션의 R도 저장소다.
+    `gh pr merge 7 ${head} -dR o/other`,
+    `gh pr merge 7 ${head} -dRo/other`,
   ]) {
     assert.equal(ask(command).verdict, 'block', command);
   }
@@ -590,12 +593,22 @@ test('글을 올리는 gh는 치환·sh -c·eval 안에서 쓰지 않는다', (t
     'echo "$(gh issue comment 5 --body-file ok.md)"',
     'sh -c "gh pr comment 5 --body-file ok.md"',
     'eval gh issue comment 5 --body-file ok.md',
+    // 안에 치환이 또 있는 치환의 바깥도 찾는다.
+    'echo "$(gh pr comment 5 --body-file ok.md $(echo))"',
+    'URL=$(gh pr create --title "작업 방식 - x" --body-file "$(pwd)/ok.md")',
   ]) {
     assert.match(guard(command, at).reason, /치환, sh -c, eval/, command);
   }
   assert.equal(verdict('echo $(gh pr view 5 --json number)', at), 'allow');
   // 구분자에 따옴표가 없는 heredoc은 본문의 $( )가 실행되므로 받지 않는다.
   assert.match(guard('gh pr comment 5 --body "$(cat <<EOF\n평범한 본문\nEOF\n)"', at).reason, /명령 치환/);
+  // 따옴표 heredoc 뒤나 다음 줄에 이어 붙인 치환도 본다.
+  for (const command of [
+    "gh pr comment 5 --body \"$(cat <<'EOF'\n머리\nEOF\n)$(cat bad.md)\"",
+    "gh pr comment 5 --body \"$(cat <<'EOF'\n머리\nEOF\n)\n$(cat bad.md)\"",
+  ]) {
+    assert.match(guard(command, at).reason, /명령 치환/, command);
+  }
 });
 
 test('gh pr·gh issue는 읽기 하위 명령 밖을 모두 글을 올리는 명령으로 본다', (t) => {
@@ -626,7 +639,7 @@ test('gh pr·gh issue는 읽기 하위 명령 밖을 모두 글을 올리는 명
   ]) {
     assert.match(guard(command, at).reason, /묶지 않는다/, command);
   }
-  for (const command of ['gh pr view 5 --json body', 'gh pr checks 5', 'gh issue list --state open', 'git status && gh pr diff 5']) {
+  for (const command of ['gh pr view 5 --json body', 'gh pr checks 5', 'gh issue list --state open', 'git status && gh pr diff 5', 'true && gh issue ls', 'true && gh pr ls']) {
     assert.equal(verdict(command, at), 'allow', command);
   }
 });
@@ -648,8 +661,35 @@ test('표준 입력과 서브셸의 cd를 구분한다', (t) => {
     assert.match(guard(command, at).reason, /표준 입력/, command);
   }
   assert.match(guard('gh issue comment 5 --body-file none.md', at).reason, /읽지 못했다/);
-  // 서브셸 안의 cd는 뒤 명령의 폴더를 바꾸지 않는다. gh는 지금 폴더의 x.md(깨끗한 글)를 읽는다.
-  assert.equal(verdict('(cd sub) && gh issue comment 5 --body-file x.md', at), 'allow');
+  // 감싼 cd는 가드가 뒤 명령의 폴더를 따라가지 못하므로, 글을 올리는 gh 앞에서는 다른 명령처럼 막는다.
+  for (const command of [
+    '(cd sub) && gh issue comment 5 --body-file x.md',
+    '(cd sub && gh pr comment 5 --body-file x.md)',
+    '{ cd sub; gh pr comment 5 --body-file x.md; }',
+    'if cd sub; then gh pr comment 5 --body-file x.md; fi',
+    'builtin cd sub && gh pr comment 5 --body-file x.md',
+  ]) {
+    assert.match(guard(command, at).reason, /묶지 않는다/, command);
+  }
+  // 맨 앞의 cd 뒤 리다이렉트(2>&1, &>)는 명령 경계가 아니다.
+  for (const command of ['cd . 2>&1 && gh pr comment 5 --body-file ok.md', 'cd . &> /dev/null && gh pr comment 5 --body-file ok.md']) {
+    assert.equal(verdict(command, at), 'allow', command);
+  }
+});
+
+test('줄 이음으로 나눈 명령도 한 명령으로 본다', (t) => {
+  // 에이전트는 긴 gh pr create를 \ 로 여러 줄에 쓴다. 다음 줄의 옵션을 놓치면 안 된다.
+  const at = bodyFiles(t);
+  for (const command of [
+    'gh pr create --base main --head fix/x \\\n  --title "작업 방식 - 시험" \\\n  --body-file bad.md',
+    'gh issue comment 5 \\\n  -F bad.md',
+  ]) {
+    assert.equal(kind(command, at), 'forbidden', command);
+  }
+  for (const command of ['git push origin \\\n  main', 'gh api repos/o/r/pulls/5/merge \\\n  -X PUT']) {
+    assert.equal(verdict(command, at), 'block', command);
+  }
+  assert.equal(verdict('gh pr create --title "작업 방식 - 시험" \\\n  --body-file ok.md', at), 'allow');
 });
 
 test('gh pr merge의 글도 검사한다', (t) => {
