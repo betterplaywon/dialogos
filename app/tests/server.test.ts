@@ -206,7 +206,7 @@ test('지시문 방식(눈가림 비교)이면 판정기를 엔진 방식처럼 
   assert.ok(opponent.calls.every((messages) => !(messages[0]?.content ?? '').includes('[이번 턴의 판정]')));
   const saved = await store.get(game.id);
   assert.deepEqual(saved?.conceded, []);
-  // 판정은 남기지 않고, 판정기를 부른 횟수와 걸린 시간만 남긴다. 두 방식의 기다리는 시간을 견줄 때 쓴다.
+  // 판정은 남기지 않고, 판정기를 부른 횟수, 답을 읽었는지, 걸린 시간만 남긴다. 두 방식의 기다리는 시간을 견줄 때 쓴다.
   assert.deepEqual(
     saved?.turns.map((turn) => [turn.decision, turn.judge, typeof turn.ms.judge]),
     [
