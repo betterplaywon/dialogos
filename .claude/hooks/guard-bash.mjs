@@ -248,6 +248,81 @@ function checkRm(words) {
   return null;
 }
 
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * dir에서 위로 올라가며 찾은 가장 가까운 package.json(npx가 로컬 명령을 찾는 곳)의 의존성.
+ * declared는 package.json에 적힌 패키지, installed는 그 가운데 node_modules에 깔린 패키지, bins는 깔린 패키지가 내는 명령 이름이다.
+ */
+function projectDeps(dir) {
+  for (let at = dir; ; at = path.dirname(at)) {
+    const manifest = readJson(path.join(at, 'package.json'));
+    if (manifest) {
+      const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies });
+      const installed = new Set();
+      const bins = new Set();
+      for (const name of declared) {
+        const dep = readJson(path.join(at, 'node_modules', name, 'package.json'));
+        if (!dep) continue;
+        installed.add(name);
+        if (typeof dep.bin === 'string') bins.add(name.split('/').pop());
+        else if (dep.bin && typeof dep.bin === 'object') for (const bin of Object.keys(dep.bin)) bins.add(bin);
+      }
+      return { declared: new Set(declared), installed, bins };
+    }
+    if (path.dirname(at) === at) return { declared: new Set(), installed: new Set(), bins: new Set() };
+  }
+}
+
+// npx(npm exec)의 옵션 가운데 값을 하나 더 받는 것.
+const NPX_VALUE_FLAGS = new Set(['-p', '--package', '-c', '--call', '-w', '--workspace', '--prefix', '--registry', '--cache', '--userconfig']);
+// 패키지 이름(@범위/이름 또는 이름)과, 붙어 있으면 그 뒤의 @버전.
+const PACKAGE_SPEC = /^((?:@[^/@\s]+\/)?[^/@\s]+)(@.*)?$/;
+
+/**
+ * npx와 npm exec는 로컬에 없는 패키지를 묻지 않고 받아 실행한다(받은 코드 바로 실행, AGENTS.md 4번).
+ * 실행할 명령과 -p로 고른 패키지가 모두 package.json의 의존성으로 깔린 것일 때만 둔다. 버전을 붙이면 다른 버전을 받을 수 있어 막는다.
+ * args는 npx(또는 npm exec) 뒤의 단어다.
+ */
+function checkNpx(args, dir) {
+  const named = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const word = args[i];
+    if (word === '--') {
+      if (args[i + 1] !== undefined) named.push(args[i + 1]);
+      break;
+    }
+    if (!word.startsWith('-')) {
+      named.push(word);
+      break;
+    }
+    const [flag, inline] = word.split(/=(.*)/s);
+    if (flag === '-y' || flag === '--yes') return '설치 확인 없이 패키지를 받아 실행하지 않는다. 저장소의 의존성은 npm 스크립트로 쓴다.';
+    if (flag === '-c' || flag === '--call') return 'npx -c(--call)로 명령을 돌리지 않는다. 저장소의 의존성은 npm 스크립트나 npx <명령>으로 쓴다.';
+    if (NPX_VALUE_FLAGS.has(flag)) {
+      const value = inline ?? args[(i += 1)];
+      if ((flag === '-p' || flag === '--package') && value !== undefined) named.push(value);
+    }
+  }
+  if (named.length === 0) return null;
+  const { declared, installed, bins } = projectDeps(dir);
+  for (const name of named) {
+    const spec = PACKAGE_SPEC.exec(name);
+    if (!spec || spec[2] !== undefined)
+      return `npx에 경로나 버전을 붙여 부르지 않는다(${name}). 받은 코드가 실행될 수 있다. 저장소의 의존성은 npm 스크립트나 npx <명령>으로 쓴다.`;
+    if (bins.has(spec[1]) || installed.has(spec[1])) continue;
+    if (declared.has(spec[1])) return `${name}: package.json의 의존성이지만 깔려 있지 않다. 먼저 npm ci로 설치한다.`;
+    return `프로젝트의 의존성(package.json)에 없는 패키지를 npx로 받거나 실행하지 않는다(${name}). 저장소의 검사는 npm run check다. 새 도구가 필요하면 사용자에게 묻는다.`;
+  }
+  return null;
+}
+
 function checkPrText(words, seg, dir) {
   const title = optionValue(command, ['--title', '-t']);
   if (['create', 'new'].includes(words[2]) && title !== null && !/^\S.* - \S/.test(title))
@@ -562,6 +637,11 @@ function checkSegment(seg, words, assigns, dir = cwd, nested = false) {
     return null;
   }
   if (first === 'rm' || first === 'unlink') return checkRm(words);
+  if (first === 'npx') return checkNpx(words.slice(1), dir);
+  if (first === 'npm') {
+    const at = words.findIndex((w, i) => i > 0 && !w.startsWith('-'));
+    if (['exec', 'x'].includes(words[at])) return checkNpx(words.slice(at + 1), dir);
+  }
   return null;
 }
 
