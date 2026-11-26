@@ -34,7 +34,7 @@ npm run eval:label -- --provider mock --run try1
 npm run eval:score -- --run try1
 ```
 
-화면과 서버(개발용 뼈대)는 `npm run app:dev`로 띄웁니다. 이것도 모의 모델만 씁니다. 자세한 것은 [app/README.md](app/README.md)에 있습니다.
+화면과 서버(개발용 뼈대)는 `npm run app:dev`로 띄웁니다. 기본은 모의 모델이라 비용이 들지 않습니다. `APP_MODEL=local`을 붙이면 이 컴퓨터에서 도는 로컬 모델(Ollama)을 쓰고, 이것도 요금이 들지 않습니다. 자세한 것은 [app/README.md](app/README.md)에 있습니다.
 
 ## 앞으로
 
