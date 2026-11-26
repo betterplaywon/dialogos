@@ -238,6 +238,9 @@ export async function launchChrome({ profileDir, shotsDir, onSpawn = () => {}, w
     /** 보이는 글로 단추를 찾아 누른다. 없거나 비활성이면 그때 보이는 단추를 담아 실패한다. */
     press: (text) => clickAt(buttonExpr(text), `[${text}] 단추(눌리는 것)`),
 
+    /** 페이지 안의 식(elementExpr)이 가리키는 요소를 press와 같은 방법으로 누른다. 같은 글의 단추가 여럿일 때 자리를 좁혀 누른다. */
+    click: (elementExpr, what) => clickAt(elementExpr, what),
+
     /** 단추가 있는가. enabled면 눌리는 것만 센다. */
     hasButton: (text, { enabled = false } = {}) =>
       evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(text)}${enabled ? ' && !b.disabled' : ''})`),

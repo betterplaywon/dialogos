@@ -1,6 +1,6 @@
 ---
 name: verify
-description: "dialogos 판정 실험의 명령(eval:run → eval:label → eval:score → eval:sample → eval:agreement)과 화면(app/의 글 한 판, 음성 한 판)을 모의 모델로 사람이 쓰는 순서대로 돌려 증거를 runs/verify/에 남기는 검증 스킬. 화면은 사용자의 개발 서버와 겹치지 않는 빈 포트에 앱을 띄우고 창 없는 Chrome으로 누른다. 음성은 브라우저의 인식기와 합성기만 가짜로 바꾸고 실제 마이크와 소리는 쓰지 않는다. 실제 모델은 부르지 않는다(.env를 읽지 않고, 연결 정보와 APP_*를 지운 환경, --confirm 없음). 변경이 실제 명령 흐름이나 화면에서 동작하는지 증명하거나, 버그를 재현하거나, 대화·판정·라벨을 사람이 읽는 대화록으로 보여 줄 때 쓴다. /verify"
+description: "dialogos 판정 실험의 명령(eval:run → eval:label → eval:score → eval:sample → eval:agreement)과 화면(app/의 글 한 판, 음성 한 판, 같은 주제로 두 판 하며 기억 고치고 지우기)을 모의 모델로 사람이 쓰는 순서대로 돌려 증거를 runs/verify/에 남기는 검증 스킬. 화면은 사용자의 개발 서버와 겹치지 않는 빈 포트에 앱을 띄우고 창 없는 Chrome으로 누른다. 음성은 브라우저의 인식기와 합성기만 가짜로 바꾸고 실제 마이크와 소리는 쓰지 않는다. 실제 모델은 부르지 않는다(.env를 읽지 않고, 연결 정보와 APP_*를 지운 환경, --confirm 없음). 변경이 실제 명령 흐름이나 화면에서 동작하는지 증명하거나, 버그를 재현하거나, 대화·판정·라벨을 사람이 읽는 대화록으로 보여 줄 때 쓴다. /verify"
 ---
 
 # verify
@@ -42,7 +42,7 @@ dialogos의 실행 표면은 판정 실험(`eval/`)의 명령 다섯 개와 화�
 node .claude/skills/verify/scripts/verify.mjs <기능> [--questions q01,q02] [--reps 2] [--turns 30]
 ```
 
-`<기능>`은 [feature map](features/README.md)의 id 하나다: `flow` | `plan-gate` | `screen` | `voice-screen`. 옵션은 이 셋뿐이고 `flow`만 쓴다. 기본값은 모든 질문, 조건 셋, 2번, 30턴이다(본 실행과 같은 모양).
+`<기능>`은 [feature map](features/README.md)의 id 하나다: `flow` | `memory` | `plan-gate` | `screen` | `voice-screen`. 옵션은 이 셋뿐이고 `flow`만 쓴다. 기본값은 모든 질문, 조건 셋, 2번, 30턴이다(본 실행과 같은 모양).
 
 성공 출력 예:
 
@@ -61,6 +61,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `plan-gate`: `--provider api`의 대화와 채점이 `--confirm` 없이는 계획만 출력하고, 실행 폴더·라벨·채점기 기록을 만들지 않는지. [features/plan-gate.md](features/plan-gate.md)
 - `screen`: 앱을 빈 포트에 띄워 글로 한 판을 한다. 주제 목록 → 주제와 생각 고르기 → 글로 두 턴 → 새로 고친 뒤 이어 하기 → 끝내기 → 사후 입장과 훈계 문항 → 목록의 기록 → 판 파일의 턴과 끝 기록. 이 Mac에서 단계 합계 약 6초. [features/screen.md](features/screen.md)
 - `voice-screen`: 페이지보다 먼저 도는 스크립트로 브라우저의 음성 인식과 음성 합성을 가짜로 바꾸고 한 판을 한다. 음성 켜기 → 말하기 → 다시 말하기(바꿈) → 손댄 뒤 말하기(붙임) → 보내기(판 파일의 input, redone과 상대의 답 읽기) → 듣는 중에 끄기(붙임) → 보내기 → VS Code 꼴 User-Agent의 안내. 이 Mac에서 단계 합계 약 9초. [features/voice-screen.md](features/voice-screen.md)
+- `memory`: 같은 주제로 두 판을 한다. 첫 판(세 턴) → 기록 남기기(판 파일에 기억) → 목록의 내 기억 → 시작 화면의 지난 기록 → 둘째 판 첫 턴의 답 아래 넘긴 기록 3개(판 파일의 턴 `memory_ids`) → 그 자리에서 고치기 → 지우기 → 다음 턴에 넘긴 기록(지운 기억 없음, 고친 글) → 새로 고쳐 이어 열기 → 목록의 내 기억 → 판 파일의 기억 표와 턴. 이 Mac에서 단계 합계 약 10초. [features/memory.md](features/memory.md)
 
 화면 여정은 실패하거나 Ctrl+C(두 번 눌러도), Ctrl+\, 종료 신호, 터미널 닫기, 잡히지 않은 오류로 멈춰도 띄운 앱과 Chrome을 닫고 임시 사용자 폴더를 지운 뒤에 끝난다. 출력을 받는 쪽이 먼저 끝나도(`| head`) 여정은 끝까지 돌고 결과는 `steps.md`에 남는다. 닫는 데 앱과 Chrome마다 많아야 5초 걸린다. 결과를 적기 전에 신호로 멈추면 결과는 FAIL, 종료 코드는 130이고, 적은 뒤에 온 신호는 결과를 바꾸지 않는다. 잡히지 않은 오류는 결과를 적은 뒤에 와도 `steps.md`를 FAIL로 고쳐 적고 종료 코드 1로 끝난다.
 
@@ -71,7 +72,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - `h.jsonl`, `h.json`, `h.read`, `h.exists`, `h.save`: 증거 폴더(= 이 검증의 실행 폴더)의 파일을 읽고 쓴다.
 - `h.runId`, `h.dir`, `h.runsDir`, `h.options`. 프로젝트 코드는 `evalModule('util')`처럼 불러 쓴다.
 - `h.app()`: 앱을 빈 포트 둘에 모의 모델로 띄우고, 화면을 거친 `/api/topics`가 답할 때까지 기다린다. `{ url, api, web, dbPath, db, log }`를 돌려준다. 판 파일은 증거 폴더의 `app-NN.sqlite`, 출력은 닫을 때 `cmd-NN-app.txt`에 남는다.
-- `h.browser()`: 창 없는 Chrome을 띄워 페이지 하나를 돌려준다(`scripts/browser.mjs`). `goto`, `reload`, `press(단추 글)`, `choose(라디오 name, 몇째)`, `type(selector, 글)`(끝에 이어 친다), `text`, `texts`, `value`, `hasButton`, `waitFor(식, 설명)`, `shot(이름)`, `beforeLoad(스크립트)`, `send(CDP 메서드)`, `errors`(페이지의 예외와 console.error). 누르기는 요소가 나타나기를 5초까지 기다린 뒤 그 자리를 마우스로 누르고, 쓰기는 글자 입력으로 보낸다.
+- `h.browser()`: 창 없는 Chrome을 띄워 페이지 하나를 돌려준다(`scripts/browser.mjs`). `goto`, `reload`, `press(단추 글)`, `click(요소 식, 설명)`(같은 글의 단추가 여럿일 때 자리를 좁혀 누른다), `choose(라디오 name, 몇째)`, `type(selector, 글)`(끝에 이어 친다), `text`, `texts`, `value`, `hasButton`, `waitFor(식, 설명)`, `shot(이름)`, `beforeLoad(스크립트)`, `send(CDP 메서드)`, `errors`(페이지의 예외와 console.error). 누르기는 요소가 나타나기를 5초까지 기다린 뒤 그 자리를 마우스로 누르고, 쓰기는 글자 입력으로 보낸다.
 - 여정이 띄운 앱과 Chrome은 입구 스크립트가 여정 뒤에 닫는다(`h.close()`). 여정이 따로 닫을 필요는 없다.
 
 여정을 추가하면 `features/`에 기능 파일을 같이 추가한다.
@@ -103,7 +104,7 @@ VERIFY PASS flow — runs/verify/20261118-083638-flow/steps.md
 - 실제 인식기(정확도, 쉼에서 끊기는 때), 실제 목소리(고르기, 속도, 기기 밖 목소리), 실제 마이크와 권한 창, 인식 팩 내려받기는 증명하지 않는다. 여전히 사람이 Chrome에서 직접 본다. `voice-screen`은 그 위의 화면 규칙만 본다.
 - 앱 안 브라우저는 User-Agent만 바꾼 Chrome으로 흉내 낸다. 실제 VS Code 안에서 페이지가 닫히는지는 보지 않는다.
 - SIGKILL처럼 잡을 수 없는 신호로 입구 스크립트가 끝나면 여정의 앱과 Chrome, 임시 사용자 폴더(`dialogos-verify-chrome-*`)가 남는다. 앱은 `--import tsx app/dev.ts`, Chrome은 `--user-data-dir`에 그 폴더가 있는 프로세스다.
-- 기억은 아직 없다. 생기면 여정을 더한다.
+- 기억이 상대의 지시문에 실제로 들어가는지는 화면에서 보이지 않는다. `memory`는 판 파일의 턴 `memory_ids`와 기억 표로 무엇을 넘겼는지 보고, 지시문의 기억 칸은 `app/tests/memory.test.ts`가 호출을 기록하는 가짜 모델로 검사한다. 기억이 꺼진 눈가림 비교(`APP_MODE=random`)는 여정이 띄우지 않는다.
 
 ## 유지보수
 

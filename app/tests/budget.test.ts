@@ -88,6 +88,7 @@ function storeWith(inner: GameStore, overrides: Partial<GameStore>): GameStore {
     addSpend: (entry) => inner.addSpend(entry),
     totalSpendMicroUsd: () => inner.totalSpendMicroUsd(),
     listMemories: (userId, query) => inner.listMemories(userId, query),
+    findMemories: (userId, ids) => inner.findMemories(userId, ids),
     editMemory: (userId, id, text, at) => inner.editMemory(userId, id, text, at),
     deleteMemory: (userId, id) => inner.deleteMemory(userId, id),
     ...overrides,

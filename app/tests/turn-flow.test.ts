@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { GameView, TurnEntry, TurnResponse } from '../server/contract.ts';
+import type { GameView, PassedMemoryView, TurnEntry, TurnResponse } from '../server/contract.ts';
 import { ApiError } from '../web/src/api.ts';
 import { RECOVERED_MESSAGE, sendTurn, type TurnApi } from '../web/src/turn-flow.ts';
 
@@ -27,6 +27,7 @@ const before: GameView = {
   endReason: null,
   record: null,
   voice: { turns: 0, edited: 0, redone: 0 },
+  passed: [],
 };
 
 const TYPED: TurnEntry = { input: 'text', redone: 0 };
@@ -58,14 +59,28 @@ function fakeApi(turn: () => Promise<TurnResponse>, get: () => Promise<GameView>
 const lost = () => Promise.reject(new ApiError('서버에 닿지 못했습니다.'));
 
 test('답이 오면 보낸 말과 답을 덧붙이고, 판을 다시 부르지 않는다', async () => {
-  const { api, calls } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: false, endReason: null }), async () => serverGame(9));
+  const { api, calls } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: false, endReason: null, memories: [] }), async () => serverGame(9));
   const settled = await sendTurn(api, before, '반론입니다.', TYPED);
   assert.deepEqual(settled, { game: serverGame(1), draft: '', error: null });
   assert.equal(calls.get, 0);
 });
 
+test('답과 함께 넘긴 기억이 오면 그 턴의 넘긴 기록으로 덧붙이고, 넘긴 기억이 없으면 덧붙이지 않는다', async () => {
+  const passed: PassedMemoryView[] = [
+    { id: 'm2', state: 'kept', kind: 'claim', text: '지킨 입장: 내 입장. 첫 말: "첫 말"', edited: true },
+    { id: 'm3', state: 'kept', kind: 'shift', text: '생각이 바뀜: 반반 → 대체로 "내 입장"', edited: false },
+  ];
+  const earlier: GameView = { ...serverGame(1), passed: [{ turn: 1, memories: [{ id: 'm1', state: 'deleted' }] }] };
+  const withMemories = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false, endReason: null, memories: passed }), async () => serverGame(9));
+  const settled = await sendTurn(withMemories.api, earlier, '반론입니다.', TYPED);
+  assert.deepEqual(settled.game.passed, [...earlier.passed, { turn: 2, memories: passed }]);
+
+  const without = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false, endReason: null, memories: [] }), async () => serverGame(9));
+  assert.deepEqual((await sendTurn(without.api, earlier, '반론입니다.', TYPED)).game.passed, earlier.passed);
+});
+
 test('말을 넣은 방식과 다시 말한 횟수를 서버에 그대로 보내고, 화면의 판에도 말로 넣은 턴, 고쳐 보낸 턴, 다시 말한 턴을 더한다', async () => {
-  const reply = async (): Promise<TurnResponse> => ({ turn: 1, reply: '답 1', ended: false, endReason: null });
+  const reply = async (): Promise<TurnResponse> => ({ turn: 1, reply: '답 1', ended: false, endReason: null, memories: [] });
   const cases: [TurnEntry, GameView['voice']][] = [
     [TYPED, { turns: 0, edited: 0, redone: 0 }],
     [{ input: 'voice', redone: 0 }, { turns: 1, edited: 0, redone: 0 }],
@@ -97,7 +112,7 @@ test('저장되지 않아 보낸 말을 되돌릴 때는 말로 넣은 턴을 �
 });
 
 test('턴을 모두 써서 판이 끝나면 끝난 방식도 화면의 판에 싣는다', async () => {
-  const { api } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: true, endReason: 'max-turns' }), async () => serverGame(9));
+  const { api } = fakeApi(async () => ({ turn: 1, reply: '답 1', ended: true, endReason: 'max-turns', memories: [] }), async () => serverGame(9));
   const settled = await sendTurn(api, before, '반론입니다.', TYPED);
   assert.deepEqual([settled.game.ended, settled.game.endReason], [true, 'max-turns']);
 });
@@ -116,7 +131,7 @@ test('서버가 아직 답을 만드는 중에 응답을 잃어도, 다음 턴�
   assert.equal(rolledBack.draft, '반론입니다.');
 
   // 그 사이 서버가 첫 턴을 저장했고, 다시 보낸 말이 두 번째 턴이 된다. 턴 번호가 건너뛰므로 판을 다시 불러 맞춘다.
-  const second = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false, endReason: null }), async () => serverGame(2));
+  const second = fakeApi(async () => ({ turn: 2, reply: '답 2', ended: false, endReason: null, memories: [] }), async () => serverGame(2));
   const settled = await sendTurn(second.api, rolledBack.game, rolledBack.draft, TYPED);
   assert.deepEqual(settled, { game: serverGame(2), draft: '', error: null });
   assert.equal(second.calls.get, 1);
