@@ -57,6 +57,26 @@ export function stamp(now = new Date()) {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
+/**
+ * 이번 실행만의 증거 폴더를 만들고 그 이름(실행 id)을 돌려준다. 시각은 초 단위라, 같은 작업 트리에서 같은 기능을 같은 초에
+ * 또 띄우면 이름이 같아진다. recursive로 만들면 이미 있어도 실패하지 않아 두 실행이 한 폴더와 판 파일을 같이 쓰고,
+ * 이름이 비었는지 먼저 보고 만들면 그 사이에 다른 실행이 같은 이름을 가질 수 있다. 그래서 recursive 없이 만든다.
+ * 폴더 만들기는 원자적이라 이미 있으면 EEXIST로 실패하고, 그때 뒤에 -2, -3을 붙여 다시 만든다.
+ */
+function claimRunDir(feature) {
+  mkdirSync(VERIFY_RUNS, { recursive: true });
+  const base = `${stamp()}-${feature}`;
+  for (let n = 1; ; n += 1) {
+    const runId = n === 1 ? base : `${base}-${n}`;
+    try {
+      mkdirSync(path.join(VERIFY_RUNS, runId));
+      return runId;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+}
+
 let tsxRegistered = false;
 
 /** eval/src의 TypeScript 모듈을 불러온다. CSV와 질문 읽기처럼 프로젝트 코드를 그대로 쓴다. */
@@ -81,9 +101,8 @@ export class StepFailed extends Error {}
 export const cell = (text) => String(text ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
 
 export function createHarness(feature, title, options) {
-  const runId = `${stamp()}-${feature}`;
+  const runId = claimRunDir(feature);
   const dir = path.join(VERIFY_RUNS, runId);
-  mkdirSync(dir, { recursive: true });
   const env = safeEnv();
   const steps = [];
   const startedAt = new Date();
